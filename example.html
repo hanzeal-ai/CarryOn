@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>ConnectNow · Codex 本地桥接</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/timeline.js" defer></script>
@@ -25,7 +25,7 @@
   <dialog id="console-code-dialog"><h2>在本机连接此云端</h2><p>配对码有效期为 5 分钟，仅可使用一次。请在自己的电脑上执行下列命令，并输入配对码。</p><pre id="console-pair-command"></pre><p>配对码：<code id="console-pair-code"></code></p><button id="console-close-code">关闭</button></dialog>
   <main>
     <aside>
-      <div class="aside-top"><h1>会话</h1><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
+      <div class="aside-top"><h1>会话</h1><button id="toggle-threads" class="quiet" aria-expanded="false" aria-controls="threads">展开会话列表</button><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
       <button id="create" class="primary new" disabled>＋ 新建会话</button>
       <input id="search" type="search" placeholder="搜索会话或项目…" aria-label="搜索会话或项目" disabled>
       <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
@@ -39,7 +39,7 @@
       </div>
     </aside>
     <section class="conversation">
-      <div class="conversation-head"><div><h2 id="title">继续你的工作</h2><p id="cwd">从左侧选择一个会话</p></div><span id="history-source"></span></div>
+      <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
       <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><button id="expand-events" class="quiet">展开详情</button><button id="collapse-events" class="quiet">收起详情</button><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon">↗</span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
       <section id="operations" aria-label="会话操作" hidden></section>

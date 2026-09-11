@@ -1,5 +1,18 @@
 /* No HTML interpolation of conversation content or external responses. */
 const $ = id => document.getElementById(id);
+const mobileLayout = window.matchMedia('(max-width:760px)');
+function setThreadListOpen(open) {
+  document.body.classList.toggle('threads-open', open);
+  $('toggle-threads').setAttribute('aria-expanded', String(open));
+  $('toggle-threads').textContent = open ? '收起会话列表' : '展开会话列表';
+}
+$('toggle-threads').onclick = () => setThreadListOpen(!document.body.classList.contains('threads-open'));
+mobileLayout.addEventListener('change', () => setThreadListOpen(false));
+document.addEventListener('keydown', event => {
+  if(event.key === 'Escape' && mobileLayout.matches && document.body.classList.contains('threads-open')) {
+    setThreadListOpen(false); $('toggle-threads').focus();
+  }
+});
 let enabled = false, selected = null, controllerId = null, threads = [], offset = 0;
 let refreshBusy = false, lastHistory = '', listVersion = 0, noticeTimer;
 let subscription = null;
@@ -71,7 +84,7 @@ function applyStatus(status) {
     listVersion++; selected = null; lastHistory = ''; threads = [];
     $('threads').replaceChildren(node('div','empty-small','开启桥接后，查看本机会话。'));
     $('messages').replaceChildren(node('div','welcome','桥接已关闭，继续使用 Codex App 即可。'));
-    $('jobs').replaceChildren(); $('title').textContent = '继续你的工作'; $('cwd').textContent = '从左侧选择一个会话';
+    $('jobs').replaceChildren(); $('title').textContent = '继续你的工作'; $('cwd').textContent = '从会话列表选择一个会话';
     $('controller').replaceChildren(new Option('开启桥接后选择控制会话',''));
     $('history-source').textContent = ''; $('more').hidden = true;
     $('create-dialog').close();
@@ -104,6 +117,7 @@ async function loadThreads(more=false) {
   await loadHistory();
 }
 async function selectThread(id) {
+  if(mobileLayout.matches) { setThreadListOpen(false); $('title').focus({preventScroll:true}); }
   Operations.reset();
   closeSide();$('open-side').disabled=!enabled;
   Timeline.reset();
