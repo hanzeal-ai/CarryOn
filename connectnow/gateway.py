@@ -86,7 +86,9 @@ class Handler(BaseHTTPRequestHandler):
     def body(self):
         if self.headers.get('Transfer-Encoding'):raise ValueError('不支持 Transfer-Encoding')
         size=int(self.headers.get('Content-Length','0'))
-        if not 0<size<=100000 or self.headers.get_content_type()!='application/json':raise ValueError('JSON 请求体无效')
+        from .images import MAX_REQUEST_BYTES
+        limit=MAX_REQUEST_BYTES if urlsplit(self.path).path.endswith('/request') else 100000
+        if not 0<size<=limit or self.headers.get_content_type()!='application/json':raise ValueError('JSON 请求体无效')
         body=json.loads(self.rfile.read(size))
         if not isinstance(body,dict):raise ValueError('需要 JSON 对象')
         return body

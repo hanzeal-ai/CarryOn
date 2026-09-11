@@ -59,7 +59,10 @@ def connect(url, dev_local=False):
                 or 'upgrade' not in [part.strip().lower() for part in headers.get('connection','').split(',')]):
             raise ValueError('云端 WebSocket 握手不匹配')
         sock.settimeout(45)
-        return WebSocket(SimpleNamespace(connection=sock,rfile=stream),client=True)
+        ws=WebSocket(SimpleNamespace(connection=sock,rfile=stream),client=True)
+        from .images import MAX_REQUEST_BYTES
+        ws.MAX_MESSAGE=MAX_REQUEST_BYTES+4096
+        return ws
     except BaseException:
         if stream:stream.close()
         sock.close();raise

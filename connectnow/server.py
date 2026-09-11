@@ -65,7 +65,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("不支持 Transfer-Encoding")
         length = int(self.headers.get("Content-Length", "0"))
-        if not 0 < length <= 100000:
+        from .images import MAX_REQUEST_BYTES
+        limit=MAX_REQUEST_BYTES if urlsplit(self.path).path.endswith("/messages") else 100000
+        if not 0 < length <= limit:
             raise ValueError("请求体为空或过大")
         if self.headers.get_content_type() != "application/json":
             raise ValueError("Content-Type 必须为 application/json")

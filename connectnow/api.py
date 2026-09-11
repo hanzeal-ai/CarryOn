@@ -67,7 +67,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
             raise ValueError('无效操作路径')
         respond(202, submit(bridge, path.split('/')[3], data))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/messages"):
-        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3]))
+        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images")))
     elif method == "GET" and path == "/api/jobs":
         jobs = [bridge.refresh_job(j["id"]) for j in bridge.journal.list()[:100]]
         respond(200, {"jobs": jobs})

@@ -155,12 +155,12 @@ class DesktopIPC:
                 self.changed.wait(max(0, deadline - time.monotonic()))
         raise IPCError("未收到完整会话快照，请在 Codex App 打开该会话后重试")
 
-    def start(self, thread_id, text, owner, client_message_id, before_send):
+    def start(self, thread_id, text, owner, client_message_id, before_send, images=None):
         response = self.request("thread-follower-start-turn", {
             "conversationId": thread_id,
             "turnStart": {"request": {"threadId": thread_id,
                 "clientUserMessageId": client_message_id,
-                "input": [{"type": "text", "text": text, "text_elements": []}]},
+                "input": ([{"type": "text", "text": text, "text_elements": []}] if text else [])+[{"type":"image","url":url} for url in (images or [])]},
                 "context": {"inheritThreadSettings": True}}}, 2, owner, before_send)
         return response["result"]["result"]["turn"]
 

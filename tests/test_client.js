@@ -79,3 +79,24 @@ test('an HTTP response from an old pairing is rejected',async()=>{
   f.client.pair('replacement');finish({ok:true,json:async()=>({enabled:true})});
   await assert.rejects(result,/配对已改变/);
 });
+
+test('image retry identity includes image bytes without storing attachments in session storage',async()=>{
+  const f=fixture(),image='data:image/jpeg;base64,/9j/2Q==';
+  f.respond(async()=>{throw Error('offline')});
+  await assert.rejects(f.client.submit('message','thread','look',[image]),/offline/);
+  const first=f.requests.at(-1).body;
+  await assert.rejects(f.client.submit('message','thread','look',[image]),/offline/);
+  assert.equal(f.requests.at(-1).body.requestId,first.requestId);
+  assert.deepEqual(Array.from(f.requests.at(-1).body.images),[image]);
+  assert(!JSON.stringify([...f.storage]).includes(image));
+  await assert.rejects(f.client.submit('message','thread','look',[image+'changed']),/offline/);
+  assert.notEqual(f.requests.at(-1).body.requestId,first.requestId);
+});
+
+test('image hashing cannot submit after device or selected conversation changes',async()=>{
+  const f=fixture();
+  const pending=f.client.submit('message','thread','look',['data:image/jpeg;base64,/9j/2Q==']);
+  f.client.epoch++;
+  await assert.rejects(pending,/当前会话已改变/);assert.equal(f.requests.length,0);
+  await assert.rejects(f.client.submit('message','thread','look',[],()=>false),/当前会话已改变/);assert.equal(f.requests.length,0);
+});

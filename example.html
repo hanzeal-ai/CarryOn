@@ -13,15 +13,16 @@
   <script src="/app.js" defer></script>
   <script src="/standby-ui.js" defer></script>
 </head>
-<body>
+<body class="booting">
   <header>
-    <div class="brand"><span class="mark">C<span>↗</span></span><div><strong>ConnectNow</strong><small>你的 Codex，就在这里继续。</small></div></div>
-    <div class="connection"><select id="console-device" aria-label="云端设备" hidden></select><button id="console-pair-device" hidden>获取配对码</button><button id="console-logout" hidden>退出登录</button><span id="status" class="badge">未桥接</span><button id="bridge" class="primary">开启桥接</button></div>
+    <div class="brand"><span class="mark">C<span>↗</span></span><div><strong>ConnectNow</strong><small>让工作，随处继续。</small></div></div>
+    <span id="environment-label" class="environment-label">本地工作台</span>
+    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><span id="status" class="badge">等待连接</span><button id="bridge" class="primary">开启桥接</button><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-pair-device" hidden>获取备用配对码</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
-  <section id="pairing" class="pairing" hidden>
-    <label for="token">本机配对 Token</label><input id="token" type="password" autocomplete="off" placeholder="粘贴 .runtime/token 文件中的 Token">
-    <button id="pair">配对</button><p>双击 ConnectNow 应用，或运行 connectnow open，自动打开已配对的控制台。</p>
+  <section id="pairing" class="pairing" hidden aria-labelledby="auth-title">
+    <div class="auth-story"><span class="eyebrow">CONNECTNOW / WORKSPACE</span><h1>离开桌面，<br>工作继续。</h1><p>连接你的 Codex 工作空间。<br>查看进度、继续对话，在你习惯的设备上完成工作。</p><div class="auth-visual" aria-hidden="true"><div class="visual-device"><span>你的电脑</span><strong>Codex</strong><i></i><i></i><i></i></div><div class="visual-link">↔</div><div class="visual-phone"><span>随时连接</span><strong>C↗</strong><i></i><i></i></div></div><span class="auth-caption">一个工作空间，无缝继续。</span></div>
+    <form id="pairing-form" class="auth-card"><span class="auth-symbol" aria-hidden="true">↗</span><span class="eyebrow">欢迎回来</span><h2 id="auth-title">连接本机工作台</h2><p id="auth-description">使用本机凭证，继续你的工作。</p><label for="token">本机配对凭证</label><input id="token" type="password" autocomplete="off" required placeholder="输入本机配对凭证"><p id="pairing-error" class="error" role="alert" hidden></p><button id="pair" type="submit" class="primary">连接工作台 <span aria-hidden="true">→</span></button><p id="auth-help" class="auth-help">运行 connectnow open，可自动打开已配对页面。</p><div class="auth-security"><span aria-hidden="true">◇</span> 凭证仅用于验证此次连接</div></form>
   </section>
   <dialog id="console-code-dialog"><h2>在本机连接此云端</h2><p>配对码有效期为 5 分钟，仅可使用一次。请在自己的电脑上执行下列命令，并输入配对码。</p><pre id="console-pair-command"></pre><p>配对码：<code id="console-pair-code"></code></p><button id="console-close-code">关闭</button></dialog>
   <main>
@@ -32,25 +33,26 @@
       <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
       <div id="threads" class="threads"><div class="empty-small">开启桥接后，查看本机会话。</div></div>
       <button id="more" class="quiet" hidden>加载更多</button>
-      <div class="controller-box">
+      <details class="controller-box"><summary>新建会话设置 <span aria-hidden="true">⌄</span></summary>
         <label for="controller">创建新任务的控制会话</label>
         <select id="controller" disabled><option value="">选择一个已加载的空闲会话</option></select>
         <button id="set-controller" disabled>设为控制会话</button>
         <small id="controller-note">首次请在 Codex App 中打开专用控制会话。</small>
-      </div>
+      </details>
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><button id="expand-events" class="quiet">展开详情</button><button id="collapse-events" class="quiet">收起详情</button><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon">↗</span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
 
       <section id="requests" aria-label="待处理请求" hidden></section>
       <details class="jobs-panel"><summary>桥接请求记录</summary><div id="jobs" class="jobs" aria-live="polite"></div></details>
       <form id="composer" class="composer">
+        <div id="image-previews" class="image-previews" hidden></div>
         <label class="sr-only" for="prompt">新的任务</label><textarea id="prompt" rows="3" maxlength="16000" placeholder="发送新的任务…" disabled></textarea>
-        <div class="composer-footer"><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small><button id="send" class="primary" disabled>发送任务 ↑</button></div>
+        <div class="composer-footer"><div class="composer-tools"><button id="attach-images" type="button" class="quiet" disabled aria-label="添加图片" title="添加图片（最多 3 张，自动压缩）">＋ 图片</button><input id="image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small></div><button id="send" class="primary" disabled>发送任务 ↑</button></div>
       </form>
-      <p class="footnote">WebSocket 实时同步原生记录 · 思考仅展示摘要 · 附件保留引用</p>
+      <p class="footnote">与你的 Codex 工作空间保持同步</p>
     </section>
   </main>
   <section id="side-drawer" class="side-drawer" aria-label="临时聊天抽屉" hidden>
@@ -65,7 +67,7 @@
   <dialog id="question-dialog" aria-labelledby="question-heading"><div class="dialog-head"><h2 id="question-heading">Codex 需要你的回答</h2><button id="question-later" type="button">稍后回答</button></div><div id="question-content"></div></dialog>
   <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对本机页面显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>选中的云端设备将绑定到发起连接的电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
   <details class="cloud-settings">
-    <summary>云端接入与本地服务</summary>
+    <summary>连接与本机设置</summary>
     <section id="standby-settings" aria-label="远程待机">
       <label><input id="standby-enabled" type="checkbox" disabled>远程待机（接电时保持后台运行）</label>
       <p id="standby-state" role="status">正在读取待机状态…</p>

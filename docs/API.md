@@ -1,6 +1,6 @@
 # HTTP API
 
-Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，请求体最多 100,000 字节。
+Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,000 字节；会话消息及云端转发消息请求最多 900,000 字节。
 
 每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/ConnectNow/token`）；普通启动日志不输出 Token，`connectnow open` 自动配对页面。所有调用方共享一个桥接开关、控制会话选择和请求日志；当前不是多租户 API。
 
@@ -292,3 +292,11 @@ WS update 新增 `catalogRevision` 和 `threadFlags`（仅当前订阅目录）�
 | POST | `/cloud` | `{enabled:false}`；断开并清除已保存的连接凭证 |
 
 生产地址必须为 `wss://`。只有显式 `devLocal:true` 才接受 loopback `ws://`。`control:true` 允许全部已支持的远程写操作，包括审批；本地桥接开关仍是前置条件。
+
+## 随消息发送图片
+
+`POST /threads/{id}/messages` 可带 `images` 数组，元素为 `data:image/jpeg;base64,...`（也支持 PNG、WebP）。最多 3 张，每张解码后最多 200 KiB；有图片时 `prompt` 可以是空字符串。HTTP JSON 总体积仍须不超过 900,000 字节。本地和云端使用相同字段，云端必须已获远程控制权限。
+
+example 支持选择或粘贴图片、预览与移除，浏览器将图片转成 JPEG，长边最多 1600 像素并压缩至传输限制以内。透明区域以白色填充；需要保留原始细节时可先裁剪关注区域。图片可单独发送，也可附带文字。新建会话暂不附图，先进入会话后发送。
+
+图片按原生 `UserInput {type: "image", url: dataURL}` 交给 Codex，不接收外部 URL 或本地文件路径，不建立公开图片链接。图片内容参与幂等指纹计算；相同 requestId 对应的文字或图片改变都会被拒绝。浏览器会话存储和 ConnectNow 请求日志不存图片内容，原生会话仍按 Codex 的历史规则保存消息。

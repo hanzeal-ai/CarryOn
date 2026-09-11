@@ -266,10 +266,13 @@ class Bridge:
         if not self.enabled or self.ipc is not ipc or self.generation != generation:
             raise BridgeError("桥接已取消，此请求未获准继续", 403)
 
-    def submit(self, kind, request_id, prompt, thread_id=None):
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None):
+        from .images import validate_images
+        images=validate_images(images)
+        if images and kind!="message":raise ValueError("请先创建会话，再发送图片")
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", request_id):
             raise ValueError("requestId 必须为 8–100 位字母、数字、横线或下划线")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+        if not isinstance(prompt, str) or (not prompt.strip() and not images) or len(prompt) > 16000:
             raise ValueError("请输入 1–16000 字符的消息")
         prompt = prompt.strip()
         ipc, generation = self.require()
@@ -278,7 +281,7 @@ class Bridge:
             if not thread_id:
                 raise BridgeError("请先选择一个已加载、空闲的控制会话")
             valid_id(thread_id)
-            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt], ensure_ascii=False).encode()).hexdigest()
+            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else []), ensure_ascii=False).encode()).hexdigest()
             previous = self.journal.get(request_id)
             if previous:
                 if previous["fingerprint"] != fingerprint:
@@ -294,10 +297,10 @@ class Bridge:
             if kind == "create":
                 job["expectedTitle"] = "ConnectNow · " + prompt[:28] + " [" + request_id[:8] + "]"
             self.journal.insert(job)
-        threading.Thread(target=self._dispatch, args=(job, prompt, ipc, generation), daemon=True).start()
+        threading.Thread(target=self._dispatch, args=(job, prompt, ipc, generation, images), daemon=True).start()
         return job
 
-    def _dispatch(self, job, prompt, ipc, generation):
+    def _dispatch(self, job, prompt, ipc, generation, images=None):
         dispatched = False
         try:
             owner, state = ipc.snapshot(job["threadId"])
@@ -321,7 +324,7 @@ class Bridge:
                     dispatched = True
                     write()
 
-            turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send)
+            turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send, **({"images":images} if images else {}))
             self.journal.update(job["id"], state="accepted", turnId=turn["id"])
         except Exception as exc:
             uncertain = dispatched and not (isinstance(exc, IPCError) and not exc.uncertain)

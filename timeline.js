@@ -58,7 +58,9 @@ const Timeline = (() => {
       const head=el('div','message-head');head.append(el('span','role',user?'你':item.phase==='commentary'?'Codex · 进度':'Codex'),copyButton(item.text||''));
       article.append(head,el('div','text',item.text||''));
       for(const part of item.data?.content||item.data?.input||[]){
-        if(part.type!=='text')article.append(block('附件 / 引用 · '+part.type,part));
+        if(part.type==='image'&&typeof part.url==='string'&&part.url.length<300000&&/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(part.url)){
+          const img=el('img','message-image');img.src=part.url;img.alt='会话图片';img.loading='lazy';article.append(img);
+        }else if(part.type!=='text')article.append(block('附件 / 引用 · '+part.type,part.type==='image'?{type:part.type,description:'图片引用'}:part));
       }
       const extra={...item.data};delete extra.text;delete extra.content;delete extra.input;delete extra.phase;
       if(Object.values(extra).some(v=>v!==null && v!==undefined)){

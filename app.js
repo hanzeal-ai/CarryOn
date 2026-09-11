@@ -58,26 +58,33 @@ const cloudMode = window.CONNECTNOW_CLOUD === true;
 const client = new (cloudMode ? CloudConsoleClient : ConnectNowClient)({
   onUpdate: receiveUpdate,
   onDisconnect: event => {streamDisconnected(event);if(cloudMode)applyStatus({enabled:false,controllerId:null});},
-  onAuthError: () => { $('pairing').hidden = false;if(cloudMode)applyStatus({enabled:false,controllerId:null}); },
+  onAuthError: () => { $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('console-code-dialog').close();$('console-pair-code').textContent='';$('link-dialog').close();$('account-menu').open=false;} },
   onError: error => notice('实时同步失败：' + error.message)
 });
 const api = (path, body) => client.request(path, body);
+function welcomeState(connected){
+  const welcome=node('div','welcome');
+  welcome.append(node('span','welcome-icon','↗'),node('span','eyebrow',connected?'工作空间已就绪':'等待工作空间连接'),node('h2','',connected?'从一段对话开始':'连接后，继续你的工作'),node('p','',connected?'从会话列表选择一个任务，查看进度或继续对话。':cloudMode?'请确认电脑在线，并在本机开启桥接。':'在上方开启桥接，连接正在运行的 Codex。'));
+  $('messages').replaceChildren(welcome);
+}
 function canWrite(){return enabled&&(!cloudMode||client.control===true);}
 function applyStatus(status) {
   if(cloudMode){if(client.control!==(status.remoteControl===true))lastHistory='';client.control=status.remoteControl===true;}
   enabled = status.enabled; controllerId = status.controllerId;
-  $('status').textContent = enabled ? (cloudMode&&!client.control?'已连接 · 只读':'桥接已开启') : '未桥接'; $('status').classList.toggle('on', enabled);
+  $('status').textContent = enabled ? (cloudMode?(client.control?'可远程操作':'只读连接'):'已连接') : '等待连接'; $('status').classList.toggle('on', enabled);
   $('bridge').textContent = cloudMode ? '请在本机管理桥接' : enabled ? '取消桥接' : '开启桥接';
   if(cloudMode)$('bridge').disabled=true;
   $('create').disabled = !canWrite() || !controllerId;
+  $('create').title=!controllerId?'先在「新建会话设置」中选择控制会话':'';
   for (const id of ['search','refresh','controller','set-controller']) $(id).disabled = !enabled;
   if(cloudMode)$('set-controller').disabled=!canWrite();
-  $('prompt').disabled = !canWrite() || !selected; $('send').disabled = !canWrite() || !selected;
+  $('attach-images').disabled=!canWrite()||!selected; $('prompt').disabled = !canWrite() || !selected; $('send').disabled = !canWrite() || !selected;
   $('open-side').disabled=!enabled||!selected;
   $('controller-note').textContent = controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
-  if(enabled&&!selected)$('messages').replaceChildren(node('div','welcome','请从会话列表选择要继续的会话。'));
+  if(enabled&&!selected)welcomeState(true);
   $('prompt').placeholder=enabled?(selected?'发送新的任务…':'请先选择会话'): '请先开启本机桥接';
   if (!enabled) {
+    clearImages();
     threadFlags={};catalogRevision=null;
     Operations.reset();
     closeSide();
@@ -85,7 +92,7 @@ function applyStatus(status) {
     Timeline.reset();
     listVersion++; selected = null; lastHistory = ''; threads = [];
     $('threads').replaceChildren(node('div','empty-small','开启桥接后，查看本机会话。'));
-    $('messages').replaceChildren(node('div','welcome','桥接已关闭，继续使用 Codex App 即可。'));
+    welcomeState(false);
     $('jobs').replaceChildren(); $('title').textContent = '继续你的工作'; $('cwd').textContent = '从会话列表选择一个会话';
     $('controller').replaceChildren(new Option('开启桥接后选择控制会话',''));
     $('history-source').textContent = ''; $('more').hidden = true;
@@ -119,11 +126,12 @@ async function loadThreads(more=false) {
   await loadHistory();
 }
 async function selectThread(id) {
+  clearImages();
   if(mobileLayout.matches) { setThreadListOpen(false); $('title').focus({preventScroll:true}); }
   Operations.reset();
   closeSide();$('open-side').disabled=!enabled;
   Timeline.reset();
-  selected=id; lastHistory=''; delete $('messages').dataset.loaded; renderThreads(); $('prompt').disabled=!canWrite(); $('send').disabled=!canWrite();
+  selected=id; lastHistory=''; delete $('messages').dataset.loaded; renderThreads(); $('attach-images').disabled=!canWrite();$('prompt').disabled=!canWrite(); $('send').disabled=!canWrite();
   const thread=threads.find(t=>t.id===id); $('title').textContent=thread?.title || id; $('cwd').textContent=thread?.cwd || '';
   $('messages').replaceChildren(node('div','empty-small','读取历史中…'));
   try { await loadHistory(); } catch(e) { if(selected===id) $('messages').replaceChildren(node('div','empty-small',e.message)); }
@@ -144,7 +152,7 @@ async function receiveUpdate(data, current) {
       if(selected&&threadFlags[selected]?.archived){
         closeSide();Operations.reset();selected=null;lastHistory='';
         $('messages').replaceChildren(node('div','empty-small','此会话已归档。'));
-        $('send').disabled=true;$('prompt').disabled=true;$('open-side').disabled=true;
+        clearImages();$('attach-images').disabled=true;$('send').disabled=true;$('prompt').disabled=true;$('open-side').disabled=true;
       }
       renderThreads();
     }
@@ -203,21 +211,61 @@ $('bridge').onclick=async()=>{
     else if(wasEnabled) notice('已取消桥接。Codex 已接收的任务仍会继续执行。');
   } catch(e){notice(e.message);} finally{$('bridge').disabled=false;}
 };
-$('pair').onclick=async()=>{
+$('pairing-form').onsubmit=async event=>{
+  event.preventDefault();$('pairing-error').hidden=true;
   $('pair').disabled=true;
   try {
     await client.pair($('token').value);
     if(cloudMode){$('pairing').hidden=true;$('token').value='';await offerLink();}
     applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
     client.connect();if(!cloudMode)await CloudSettings.refresh();if(enabled)await loadThreads();
-  } catch(e){notice(e.message);}
+  } catch(e){if(!client.token){$('pairing-error').textContent=e.message;$('pairing-error').hidden=false;}else notice(e.message);}
   finally{$('pair').disabled=false;if(cloudMode)client.connect();}
 };
 $('set-controller').onclick=async()=>{if(!$('controller').value)return notice('请选择控制会话');$('set-controller').disabled=true;try{applyStatus(await api('/controller',{threadId:$('controller').value}));notice('控制会话已就绪');}catch(e){notice('设置失败：'+e.message);}finally{$('set-controller').disabled=!canWrite();}};
 $('create').onclick=()=>{$('create-error').textContent='';$('create-dialog').showModal();$('new-prompt').focus();};
 for(const id of ['close-dialog','cancel-create']) $(id).onclick=()=>$('create-dialog').close();
 $('create-form').onsubmit=async e=>{e.preventDefault();$('submit-create').disabled=true;try{await submit('create',$('new-prompt').value.trim());$('create-dialog').close();$('new-prompt').value='';notice('已提交创建请求，等待控制会话处理');await tick();}catch(e){$('create-error').textContent=e.message+'；重试会沿用原请求 ID。';}finally{$('submit-create').disabled=false;}};
-$('composer').onsubmit=async e=>{e.preventDefault();const prompt=$('prompt').value.trim();if(!prompt)return;$('send').disabled=true;try{await submit('message',prompt);$('prompt').value='';notice('请求已登记，正在交给 Codex');await tick();}catch(e){notice(e.message+'；重试会沿用原请求 ID。');}finally{$('send').disabled=!canWrite()||!selected;}};
+let attachedImages=[],imageGeneration=0,imageBusy=false;
+function clearImages(){imageGeneration++;attachedImages=[];renderImages();}
+function renderImages(){
+  const root=$('image-previews');root.replaceChildren();root.hidden=!attachedImages.length;
+  for(const item of attachedImages){const card=node('div','image-preview'),img=document.createElement('img');img.src=item.url;img.alt=item.name;
+    const remove=node('button','','×');remove.type='button';remove.setAttribute('aria-label','移除图片 '+item.name);remove.disabled=imageBusy;
+    remove.onclick=()=>{attachedImages=attachedImages.filter(i=>i!==item);renderImages();};card.append(img,remove);root.append(card);}
+}
+async function prepareImage(file){
+  if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>20*1024*1024)throw Error('请选择 20 MB 以内的 PNG、JPEG 或 WebP 图片');
+  const bitmap=await createImageBitmap(file);
+  try{if(bitmap.width*bitmap.height>40000000)throw Error('图片尺寸过大，请缩小后上传');
+    const canvas=document.createElement('canvas'),scale=Math.min(1,1600/Math.max(bitmap.width,bitmap.height));
+    canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+    let url;for(const quality of [.9,.75,.55,.35]){url=canvas.toDataURL('image/jpeg',quality);if(url.length<270000)return{name:file.name,url};}
+    throw Error('图片压缩后仍过大，请裁剪后重试');
+  }finally{bitmap.close();}
+}
+async function addImages(files){
+  if(!canWrite()||!selected||imageBusy)return;
+  const generation=imageGeneration;imageBusy=true;$('attach-images').disabled=true;$('send').disabled=true;
+  try{const batch=[...files];if(attachedImages.length+batch.length>3)throw Error('每次最多添加 3 张图片');
+    const ready=[];for(const file of batch)ready.push(await prepareImage(file));
+    if(generation===imageGeneration)attachedImages.push(...ready);
+  }catch(e){notice(e.message);}finally{imageBusy=false;renderImages();$('attach-images').disabled=!canWrite()||!selected;$('send').disabled=!canWrite()||!selected;}
+}
+$('attach-images').onclick=()=>$('image-files').click();
+$('image-files').onchange=()=>{addImages($('image-files').files);$('image-files').value='';};
+$('prompt').addEventListener('paste',event=>{const files=[...event.clipboardData.items].filter(i=>i.kind==='file'&&i.type.startsWith('image/')).map(i=>i.getAsFile()).filter(Boolean);if(files.length){event.preventDefault();addImages(files);}});
+$('composer').onsubmit=async e=>{
+  e.preventDefault();if(imageBusy||!canWrite()||!selected)return;
+  const prompt=$('prompt').value.trim();if(!prompt&&!attachedImages.length)return;
+  const target=selected,generation=imageGeneration;imageBusy=true;renderImages();$('send').disabled=true;$('attach-images').disabled=true;
+  try{await client.submit('message',target,prompt,attachedImages.map(i=>i.url),()=>selected===target&&generation===imageGeneration);
+    if(selected===target&&generation===imageGeneration){$('prompt').value='';clearImages();}
+    notice('请求已登记，正在交给 Codex');await tick();
+  }catch(e){notice(e.message+'；重试会沿用原请求 ID。');}
+  finally{imageBusy=false;renderImages();$('attach-images').disabled=!canWrite()||!selected;$('send').disabled=!canWrite()||!selected;}
+};
 $('prompt').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
 $('refresh').onclick=()=>loadThreads().catch(e=>notice(e.message));
 $('more').onclick=()=>loadThreads(true).catch(e=>notice(e.message));
@@ -246,12 +294,13 @@ async function init(){
   if(location.protocol==='file:'){ $('pairing').hidden=false; notice('请通过本地服务打开页面，不能直接双击 HTML 启动后台进程。');return; }
   if(cloudMode){
     document.body.classList.add('cloud-console');
-    document.querySelector('.footnote').textContent='云端同步本机会话 · 思考仅展示摘要 · 附件保留引用';
+    document.querySelector('.footnote').textContent='与你的 Codex 工作空间保持同步';
+    $('environment-label').textContent='云端工作台';$('auth-title').textContent='登录你的工作空间';$('auth-description').textContent='安全连接，接着上次的进度继续。';$('account-menu').hidden=false;
     document.querySelector('.cloud-settings').hidden=true;
     $('bridge').disabled=true;$('bridge').textContent='请在本机管理桥接';
     document.querySelector('label[for="token"]').textContent='云端控制台登录凭证';
-    $('token').placeholder='输入独立的控制台登录凭证';$('pair').textContent='登录';
-    document.querySelector('#pairing p').textContent='登录后选择设备；在本机使用配对码连接，并开启桥接。';
+    $('token').placeholder='输入控制台登录凭证';$('pair').textContent='登录工作空间 →';
+    $('auth-help').textContent='使用部署时生成的控制台登录凭证。它与设备配对码不同。';
     for(const id of ['console-device','console-pair-device','console-logout'])$(id).hidden=false;
     $('console-device').onchange=async()=>{
       client.close();client.epoch++;client.selection=null;client.device=$('console-device').value;client.setStorage();
@@ -266,13 +315,18 @@ async function init(){
     };
     $('console-close-code').onclick=()=>{$('console-code-dialog').close();$('console-pair-code').textContent='';};
     $('console-logout').onclick=async()=>{
+      $('console-logout').disabled=true;
       client.close();client.epoch++;client.selection=null;
-      try{await client.consoleRequest('logout',{});client.token='';applyStatus({enabled:false,controllerId:null});$('pairing').hidden=false;}catch(e){notice(e.message);}
+      try{await client.consoleRequest('logout',{});client.token='';applyStatus({enabled:false,controllerId:null});$('pairing').hidden=false;$('pairing-error').hidden=true;$('account-menu').open=false;$('token').value='';$('token').focus();}catch(e){notice(e.message);client.connect();}finally{$('console-logout').disabled=false;}
     };
-    try{await client.initialize();await offerLink();}catch(e){notice(e.message);}
+    try{await client.initialize();await offerLink();}catch(e){if(e.message!=='请先登录云端控制台'){$('pairing-error').textContent=e.message;$('pairing-error').hidden=false;}}
   }
   $('pairing').hidden=!!client.token;
   if(client.token)try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}
   client.connect();
 }
-init().then(()=>{if(!cloudMode)CloudSettings.init(api,notice);});
+document.addEventListener('click',event=>{
+  for(const menu of document.querySelectorAll('.account-menu,.display-menu,.session-info,.session-actions'))if(!menu.contains(event.target))menu.open=false;
+});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const menu of document.querySelectorAll('.account-menu,.display-menu,.session-info,.session-actions'))if(menu.open){menu.open=false;menu.querySelector('summary').focus();}});
+init().then(()=>{if(!cloudMode)CloudSettings.init(api,notice);}).finally(()=>document.body.classList.remove('booting'));

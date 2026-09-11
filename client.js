@@ -54,9 +54,16 @@ class ConnectNowClient {
     return job;
   }
 
-  submit(kind, target, prompt) {
+  async submit(kind, target, prompt, images=[], isCurrent=()=>true) {
+    const epoch=this.epoch;
+    let key=kind+':'+target+':'+prompt;
+    if(images.length){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images])));
+      key=kind+':'+target+':images:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+    }
+    if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob(kind === 'create' ? '/threads' : '/threads/' + target + '/messages',
-      {prompt}, kind + ':' + target + ':' + prompt, this.pending, 'connectnow-pending');
+      {prompt,...(images.length?{images}:{})}, key, this.pending, 'connectnow-pending');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
