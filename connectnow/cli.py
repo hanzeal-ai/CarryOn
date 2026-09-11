@@ -67,6 +67,10 @@ def start(args):
                 time.sleep(.15)
             if not info:
                 raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
+            if call(directory,'/cloud').get('enabled'):
+                try:call(directory,'/bridge',{'enabled':True})
+                except (urllib.error.HTTPError,OSError):
+                    print('本地服务已启动，但未能自动开启桥接；请打开 Codex 后在页面开启桥接。')
     print(f"ConnectNow {info['version']} 已启动：http://127.0.0.1:{info['port']}/")
     if not args.no_open: open_console(directory, info)
     return 0

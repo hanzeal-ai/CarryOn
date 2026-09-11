@@ -37,6 +37,8 @@ class ConsoleServer(Gateway):
         parsed=urlsplit(self.public_url)
         self.origin=parsed.scheme+'://'+parsed.netloc
         self.prefix=parsed.path.rstrip('/')
+        from .linking import LinkRequests
+        self.links=LinkRequests()
         self.sessions={};self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
         super().__init__(address,config,ConsoleHandler)
 
@@ -138,6 +140,13 @@ class ConsoleHandler(Handler):
                 if entry is None:raise PermissionError('配对码无效或已过期')
                 device=entry[0]
                 self.reply(200,{'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
+            if path in ('/console/link/start','/console/link/poll') and method=='POST':
+                if self.headers.get('Origin'):raise PermissionError('请在本机发起连接')
+                data=self.body()
+                if path.endswith('/start'):
+                    self.reply(200,self.server.links.start());return
+                device=self.server.links.poll(data.get('id'),data.get('secret'))
+                self.reply(200,{'pending':True} if device is None else {'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
             self.check_origin(method)
             if path=='/console/login' and method=='POST':
                 token=self.body().get('token','')
@@ -152,6 +161,16 @@ class ConsoleHandler(Handler):
                 self.reply(200,{'authenticated':True});return
             key=self.session_key()
             if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path=='/console/link/inspect' and method=='POST':
+                with self.server.links.lock:
+                    entry=self.server.links.get(self.body().get('id'))
+                    self.reply(200,{'verification':entry['verification']})
+                return
+            if path=='/console/link/approve' and method=='POST':
+                data=self.body();device=data.get('deviceId')
+                if not isinstance(device,str) or device not in self.server.config['devices']:raise PermissionError('设备未授权')
+                self.server.links.approve(data.get('id'),device)
+                self.reply(200,{'approved':True});return
             if path=='/console/logout' and method=='POST':
                 with self.server.auth_lock:
                     self.server.sessions.pop(key,None)

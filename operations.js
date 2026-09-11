@@ -1,21 +1,23 @@
 'use strict';
 const Operations = (() => {
-  let selected = null, signature = '', transport, notify;
+  let selected = null, signature = '', transport, notify, writable=false;
+  const seenQuestions=new Set();
   const labels = {'interrupt':'停止任务','steer':'补充指令','compact':'压缩上下文','settings':'会话设置',
     'queue-add':'添加排队任务','queue-edit':'编辑排队任务','queue-delete':'删除排队任务','queue-reorder':'调整排队顺序','queue-resume':'恢复排队任务','edit':'编辑最后一轮','clear-queue':'清空排队消息','command-approval':'命令审批',
     'file-approval':'文件审批','permissions-approval':'权限申请','user-input':'回答问题','mcp-response':'MCP 交互'};
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
-  function reset() {selected=null;signature='';for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  box('question-later').onclick=()=>box('question-dialog').close();
+  function reset() {selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
   async function send(target, action, fields, button) {
-    if(target!==selected)return;
+    if(target!==selected||!writable)return;
     button.disabled=true;
     try {
       const job=await transport.operation(target,action,fields,()=>target===selected);
       if(job.state==='failed')throw Error(job.error||'操作失败');
       if(job.state==='uncertain')throw Error((job.error||'结果待确认')+'；请在 App 核对，不会自动重发');
-      notify('操作已登记，请查看桥接请求记录和会话状态');
-    } catch(e){notify(e.message);} finally{button.disabled=false;}
+      notify('操作已登记，请查看桥接请求记录和会话状态');return true;
+    } catch(e){notify(e.message);} finally{button.disabled=!writable;}
   }
   function button(parent, label, run) {const b=el('button',label);b.type='button';b.onclick=()=>run(b);parent.append(b);return b;}
   function field(parent, label, value='', multiline=false) {
@@ -23,18 +25,23 @@ const Operations = (() => {
     n.dataset.draftKey=label;
     n.maxLength=16000;if(multiline)n.rows=3;l.append(n);parent.append(l);return n;
   }
-  function render(history, threadId, api, notice) {
+  function render(history, threadId, api, notice, canWrite=true) {
+    writable=canWrite;
     transport=api;notify=notice;
     const c=history.controls;
     if(!c){reset();return;}
-    const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue]);
+    const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite]);
     if(next===signature)return;
     const same=selected===threadId;
     const opened=same?new Set([...box('operations').querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent)):new Set();
+    const allDrafts=same?new Map([...box('operations').querySelectorAll('[data-draft-key]'),...box('requests').querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')].map(n=>[n.dataset.draftKey,n.value])):new Map();
     const focused=document.activeElement;
+    const dialogWasOpen=same&&box('question-dialog').open;
+    box('question-dialog').close();
+    box('question-content').replaceChildren();
     const draft=same&&focused?.dataset.draftKey?{key:focused.dataset.draftKey,value:focused.value,start:focused.selectionStart,end:focused.selectionEnd}:null;
     selected=threadId;signature=next;
-    const root=box('operations'), requests=box('requests');root.hidden=false;root.replaceChildren();requests.replaceChildren();
+    const root=box('operations'), requests=box('requests');root.hidden=false;root.closest('.session-actions').hidden=false;root.replaceChildren();requests.replaceChildren();
     const active=history.runtime?.type==='active'&&c.activeTurnId;
     const idle=history.status?.state==='idle';
     if(active){
@@ -119,10 +126,10 @@ const Operations = (() => {
         const inputs=(r.params.questions||[]).map(q=>{
           const n=field(card,q.question||q.header||q.id,'',!q.isSecret);
           if(q.isSecret){n.type='password';n.setAttribute('autocomplete','off');}
-          if(q.options?.length){const choices=el('div');for(const o of q.options)button(choices,o.label,()=>{n.value=o.label;});card.append(choices);}
+          if(q.options?.length){const choices=el('div');for(const o of q.options){const choice=button(choices,o.label,()=>{n.value=o.label;});if(o.description)choice.append(el('small',o.description));}card.append(choices);}
           return [q.id,n];
         });
-        button(card,'提交回答',b=>respond({answers:Object.fromEntries(inputs.map(([id,n])=>[id,[n.value]]))},b));
+        button(card,'提交回答',async b=>{if(inputs.some(([,n])=>!n.value.trim())){notice('请回答全部问题');return;}if(await respond({answers:Object.fromEntries(inputs.map(([id,n])=>[id,[n.value]]))},b))box('question-dialog').close();});
       }else{
         const input=field(card,'回应内容（JSON 对象；无内容时留空）','',true);
         button(card,'允许并提交',b=>{try{const content=input.value.trim()?JSON.parse(input.value):null;if(confirm('确认已查看请求并提交此回应？'))respond({response:{action:'accept',content}},b);}catch(e){notice('JSON 格式错误：'+e.message);}});
@@ -130,9 +137,18 @@ const Operations = (() => {
         button(card,'取消',b=>respond({response:{action:'cancel'}},b));
       }
       for(const n of card.querySelectorAll('[data-draft-key]'))n.dataset.draftKey='request:'+r.id+':'+r.fingerprint+':'+n.dataset.draftKey;
-      requests.append(card);
+      if(r.action==='user-input'){
+        const key=threadId+':'+r.id+':'+r.fingerprint;
+        box('question-content').append(card);
+        const open=()=>{if(!box('question-dialog').open)box('question-dialog').showModal();};
+        button(requests,'回答 Codex 的问题',open);
+        if(dialogWasOpen||!seenQuestions.has(key)){seenQuestions.add(key);open();}
+      }else requests.append(card);
     }
     for(const d of root.querySelectorAll('details'))if(opened.has(d.querySelector('summary')?.textContent))d.open=true;
+    const fields=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')];
+    for(const input of fields)if(allDrafts.has(input.dataset.draftKey))input.value=allDrafts.get(input.dataset.draftKey);
+    if(!canWrite)for(const container of [root,requests,box('question-content')])for(const control of container.querySelectorAll('button,input,select,textarea'))control.disabled=true;
     if(draft){
       const input=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]')].find(n=>n.dataset.draftKey===draft.key);
       if(input){input.value=draft.value;input.focus();if(input.setSelectionRange&&draft.start!==null)input.setSelectionRange(draft.start,draft.end);}

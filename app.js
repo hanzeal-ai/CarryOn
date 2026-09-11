@@ -75,6 +75,8 @@ function applyStatus(status) {
   $('prompt').disabled = !canWrite() || !selected; $('send').disabled = !canWrite() || !selected;
   $('open-side').disabled=!enabled||!selected;
   $('controller-note').textContent = controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
+  if(enabled&&!selected)$('messages').replaceChildren(node('div','welcome','请从会话列表选择要继续的会话。'));
+  $('prompt').placeholder=enabled?(selected?'发送新的任务…':'请先选择会话'): '请先开启本机桥接';
   if (!enabled) {
     threadFlags={};catalogRevision=null;
     Operations.reset();
@@ -162,7 +164,7 @@ async function receiveUpdate(data, current) {
   if(data.error) { Operations.reset();lastHistory='';notice(data.error); $('history-source').textContent='同步暂不可用'; return; }
   if(data.history) {
     const signature = JSON.stringify(data.history);
-    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'));Operations.render(data.history,selected,client,notice);if(!canWrite())for(const control of $('operations').querySelectorAll('button,input,select,textarea'))control.disabled=true;}
+    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'));Operations.render(data.history,selected,client,notice,canWrite());}
   }
 }
 function streamDisconnected(event) {
@@ -205,7 +207,7 @@ $('pair').onclick=async()=>{
   $('pair').disabled=true;
   try {
     await client.pair($('token').value);
-    if(cloudMode){$('pairing').hidden=true;$('token').value='';}
+    if(cloudMode){$('pairing').hidden=true;$('token').value='';await offerLink();}
     applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
     client.connect();if(!cloudMode)await CloudSettings.refresh();if(enabled)await loadThreads();
   } catch(e){notice(e.message);}
@@ -228,6 +230,18 @@ async function tick(){
     if(enabled){const {jobs}=await api('/jobs');if(enabled)renderJobs(jobs);await loadHistory();}}
   catch(e){if(enabled)notice(e.message);}finally{refreshBusy=false;}
 }
+const linkRequest=new URLSearchParams(location.hash.slice(1)).get('connect');
+async function offerLink(){
+  if(!cloudMode||!linkRequest)return;
+  try{const result=await client.consoleRequest('link/inspect',{id:linkRequest});$('link-verification').textContent=result.verification;$('link-dialog').showModal();}
+  catch(e){notice(e.message);}
+}
+$('link-cancel').onclick=()=>$('link-dialog').close();
+$('link-approve').onclick=async()=>{
+  $('link-approve').disabled=true;
+  try{await client.consoleRequest('link/approve',{id:linkRequest,deviceId:client.device});$('link-dialog').close();history.replaceState(null,'',location.pathname);notice('已确认连接，请回到本机查看状态');}
+  catch(e){notice(e.message);}finally{$('link-approve').disabled=false;}
+};
 async function init(){
   if(location.protocol==='file:'){ $('pairing').hidden=false; notice('请通过本地服务打开页面，不能直接双击 HTML 启动后台进程。');return; }
   if(cloudMode){
@@ -255,7 +269,7 @@ async function init(){
       client.close();client.epoch++;client.selection=null;
       try{await client.consoleRequest('logout',{});client.token='';applyStatus({enabled:false,controllerId:null});$('pairing').hidden=false;}catch(e){notice(e.message);}
     };
-    try{await client.initialize();}catch(e){notice(e.message);}
+    try{await client.initialize();await offerLink();}catch(e){notice(e.message);}
   }
   $('pairing').hidden=!!client.token;
   if(client.token)try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}

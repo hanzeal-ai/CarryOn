@@ -85,3 +85,13 @@ dialog{max-height:90vh;max-height:90dvh;overflow:auto}
   .cloud-settings[open]{max-height:60dvh}.cloud-settings>summary{display:flex;align-items:center}
   #notice{top:12px;overflow-wrap:anywhere}
 }
+
+.session-actions{position:relative}
+.session-actions>summary{cursor:pointer;padding:6px 8px;white-space:nowrap}
+.session-actions[open]>#operations{position:absolute;right:0;top:32px;width:min(540px,calc(100vw - 32px));max-height:65vh;max-height:65dvh;overflow:auto;background:white;z-index:5;padding:16px;border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 40px #0002;flex-direction:column;align-items:stretch}
+#question-dialog .request-card{margin:12px 0 0}
+#question-dialog .request-card>details{display:none}
+#question-dialog button{white-space:normal;text-align:left}
+#link-verification{display:block;font:600 28px ui-monospace,monospace;letter-spacing:4px}
+@media(max-width:760px){.session-actions>summary{display:flex;align-items:center}.session-actions[open]>#operations{position:fixed;left:12px;right:12px;top:22dvh;width:auto;max-height:65dvh}.timeline-toolbar button{padding:6px}.timeline-toolbar>div{justify-content:flex-end}}
+#question-dialog button small{display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.5}

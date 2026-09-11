@@ -18,6 +18,7 @@ def pick(value, keys):
 FIELDS = {
     "userMessage": "content",
     "steeringUserMessage": "input",
+    "steered": "",
     "agentMessage": "text phase memoryCitation questions delivery",
     "reasoning": "summary",  # Same display source as desktop; exclude content/encryptedContent.
     "commandExecution": "command cwd commandActions status aggregatedOutput exitCode durationMs processId",
@@ -57,6 +58,7 @@ LABELS = {
     "mcpServerElicitation": "工具请求输入", "automaticApprovalReview": "审批检查",
     "error": "执行错误", "modelChanged": "模型变更", "modelRerouted": "模型切换",
     "enteredReviewMode": "进入审查", "exitedReviewMode": "审查结果", "sleep": "等待",
+    "steered": "补充指令已接收",
     "worktreeInit": "准备工作目录", "steeringUserMessage": "补充任务",
 }
 

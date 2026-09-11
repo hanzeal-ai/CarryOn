@@ -47,6 +47,14 @@ class CloudConnector:
         with self.configure_lock:
             return self._configure(data)
 
+    def set_control(self, control):
+        if type(control) is not bool:raise ValueError('control 必须为布尔值')
+        with self.configure_lock:
+            with self.lock:
+                if not self.config.get('enabled'):raise ValueError('请先连接云端')
+                config={**self.config,'control':control}
+            return self._configure(config)
+
     def _configure(self,data):
         self.validate(data)
         self.stop()

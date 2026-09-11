@@ -33,3 +33,49 @@ def redeem(url,code,control=False,dev_local=False):
             'control':control,'devLocal':dev_local}
     CloudConnector.validate(result)
     return result
+
+
+class LocalLink:
+    """One in-flight authorization per local service; binding stays server-side."""
+    def __init__(self, cloud, bridge):
+        import threading
+        self.lock=threading.Lock();self.pending=None;self.cloud=cloud;self.bridge=bridge
+
+    @staticmethod
+    def request(url, action, body):
+        parsed=urlsplit(url)
+        if parsed.scheme!='https' or parsed.query or parsed.fragment:
+            raise ValueError('控制台地址必须为 HTTPS，不能包含查询或片段')
+        endpoint('wss://'+parsed.netloc+parsed.path.rstrip('/')+'/device',False)
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect(),urllib.request.HTTPSHandler(context=tls_context()))
+        request=urllib.request.Request(url.rstrip('/')+'/console/link/'+action,data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+        try:
+            with opener.open(request,timeout=15) as response:return json.loads(response.read(16000))
+        except urllib.error.HTTPError as exc:
+            exc.close();raise ValueError('云端连接授权失败或已过期，请重新发起连接') from None
+
+    def start(self, url, control):
+        import time
+        if not isinstance(url,str) or type(control) is not bool:raise ValueError('连接参数无效')
+        with self.lock:
+            result=self.request(url,'start',{})
+            if not all(isinstance(result.get(k),str) and 6<=len(result[k])<=200 for k in ('id','secret','verification')):
+                raise ValueError('云端连接响应无效')
+            self.pending={**result,'url':url.rstrip('/'),'control':control,'expires':time.monotonic()+300}
+            from urllib.parse import quote
+            return {'id':result['id'],'verification':result['verification'],
+                    'url':url.rstrip('/')+'/#connect='+quote(result['id'],safe='')}
+
+    def poll(self, key):
+        import time
+        with self.lock:
+            p=self.pending
+            if p is None or key!=p['id'] or time.monotonic()>=p['expires']:raise ValueError('连接请求已过期或已替换')
+            data=self.request(p['url'],'poll',{'id':p['id'],'secret':p['secret']})
+            if data.get('pending') is True:return {'pending':True}
+            config={'enabled':True,'url':'wss'+p['url'][5:]+'/device','deviceId':data.get('deviceId'),
+                    'token':data.get('token'),'control':p['control']}
+            self.cloud.validate(config)
+            self.pending=None
+            result=self.cloud.configure(config);self.bridge.enable()
+            return {'pending':False,'cloud':result}

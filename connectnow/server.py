@@ -108,10 +108,18 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/cloud' and method == 'GET':
                 self.reply(200, self.server.cloud.status())
                 return
+            if path == '/api/cloud/control' and method == 'POST':
+                self.reply(200,self.server.cloud.set_control(data.get('control')));return
+            if path == '/api/cloud/link/start' and method == 'POST':
+                self.reply(200,self.server.local_link.start(data.get('url'),data.get('control',False)));return
+            if path == '/api/cloud/link/poll' and method == 'POST':
+                self.reply(200,self.server.local_link.poll(data.get('id')));return
             if path == '/api/cloud/pair' and method == 'POST':
                 from .pairing import redeem
                 config = redeem(data.get('url'),data.get('code'),data.get('control',False))
-                self.reply(200,self.server.cloud.configure(config))
+                result=self.server.cloud.configure(config)
+                bridge.enable()
+                self.reply(200,result)
                 return
             if path == '/api/cloud' and method == 'POST':
                 self.reply(200, self.server.cloud.configure(data))
@@ -169,6 +177,8 @@ def run(port, codex_home, directory):
     server.service_info = {'instanceId':str(uuid.uuid4()), 'pid':os.getpid(), 'port':server.server_port,
                            'version':__version__, 'codexHome':str(codex_home)}
     server.cloud = CloudConnector(bridge, directory)
+    from .pairing import LocalLink
+    server.local_link = LocalLink(server.cloud, bridge)
     save_json(directory/'service.json', server.service_info)
     print(f"ConnectNow ready: http://127.0.0.1:{server.server_port}/", flush=True)
 

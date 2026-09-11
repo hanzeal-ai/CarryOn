@@ -40,9 +40,9 @@
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><button id="expand-events" class="quiet">展开详情</button><button id="collapse-events" class="quiet">收起详情</button><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><button id="expand-events" class="quiet">展开详情</button><button id="collapse-events" class="quiet">收起详情</button><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon">↗</span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
-      <section id="operations" aria-label="会话操作" hidden></section>
+
       <section id="requests" aria-label="待处理请求" hidden></section>
       <details class="jobs-panel"><summary>桥接请求记录</summary><div id="jobs" class="jobs" aria-live="polite"></div></details>
       <form id="composer" class="composer">
@@ -61,15 +61,21 @@
     <details class="side-info"><summary>临时聊天信息</summary><div id="side-info"></div></details>
     <p class="footnote">只读同步已存在的临时聊天；发送任务请在 Codex App 中操作。</p>
   </section>
+  <dialog id="question-dialog" aria-labelledby="question-heading"><div class="dialog-head"><h2 id="question-heading">Codex 需要你的回答</h2><button id="question-later" type="button">稍后回答</button></div><div id="question-content"></div></dialog>
+  <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对本机页面显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>选中的云端设备将绑定到发起连接的电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
   <details class="cloud-settings">
     <summary>云端接入与本地服务</summary>
     <p id="cloud-state">读取云端配置…</p>
-    <form id="cloud-pair-form">
+    <div id="cloud-permission" hidden><label><input id="cloud-current-control" type="checkbox">允许远程控制</label><button id="cloud-save-control">保存权限</button></div>
+    <form id="cloud-link-form"><label>云端控制台地址<input id="cloud-link-url" type="url" placeholder="https://console.example.com/connectnow/" required></label><label><input id="cloud-link-control" type="checkbox">允许远程控制；默认只读</label><button id="cloud-link-start">连接云端</button></form>
+    <p id="cloud-link-status" role="status"></p><a id="cloud-link-open" target="_blank" rel="noopener noreferrer" hidden>打开云端确认连接</a>
+    <details><summary>使用一次性配对码</summary><form id="cloud-pair-form">
       <label>云端控制台地址<input id="cloud-console-url" type="url" placeholder="https://console.example.com" required></label>
       <label>一次性配对码<input id="cloud-pair-code" type="password" autocomplete="off" required></label>
       <label><input id="cloud-pair-control" type="checkbox">允许远程控制（包括投递、编辑、设置与审批）；默认只读</label>
       <button id="cloud-pair-submit">配对并连接</button>
     </form>
+    </details>
     <details><summary>高级连接配置</summary>
     <form id="cloud-form">
       <label>网关地址<input id="cloud-url" type="url" placeholder="wss://gateway.example.com/device" required></label>
