@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "connectnow-local"
+version = "0.2.0"
+description = "Local Codex desktop bridge, CLI and outbound cloud connector"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = []
+
+[project.scripts]
+connectnow = "connectnow.cli:main"
+connectnow-gateway = "connectnow.gateway:main"
+
+[tool.setuptools]
+packages = ["connectnow"]
+
+[tool.setuptools.package-data]
+connectnow = ["native_contracts.json", "web/*"]

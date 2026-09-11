@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ConnectNow · Codex 本地桥接</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/timeline.js" defer></script>
+  <script src="/operations.js" defer></script>
+  <script src="/client.js" defer></script>
+  <script src="/cloud-ui.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="mark">C<span>↗</span></span><div><strong>ConnectNow</strong><small>你的 Codex，就在这里继续。</small></div></div>
+    <div class="connection"><span id="status" class="badge">未桥接</span><button id="bridge" class="primary">开启桥接</button></div>
+  </header>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <section id="pairing" class="pairing" hidden>
+    <label for="token">本机配对 Token</label><input id="token" type="password" autocomplete="off" placeholder="粘贴 .runtime/token 文件中的 Token">
+    <button id="pair">配对</button><p>双击 ConnectNow 应用，或运行 connectnow open，自动打开已配对的控制台。</p>
+  </section>
+  <main>
+    <aside>
+      <div class="aside-top"><h1>会话</h1><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
+      <button id="create" class="primary new" disabled>＋ 新建会话</button>
+      <input id="search" type="search" placeholder="搜索会话或项目…" aria-label="搜索会话或项目" disabled>
+      <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
+      <div id="threads" class="threads"><div class="empty-small">开启桥接后，查看本机会话。</div></div>
+      <button id="more" class="quiet" hidden>加载更多</button>
+      <div class="controller-box">
+        <label for="controller">创建新任务的控制会话</label>
+        <select id="controller" disabled><option value="">选择一个已加载的空闲会话</option></select>
+        <button id="set-controller" disabled>设为控制会话</button>
+        <small id="controller-note">首次请在 Codex App 中打开专用控制会话。</small>
+      </div>
+    </aside>
+    <section class="conversation">
+      <div class="conversation-head"><div><h2 id="title">继续你的工作</h2><p id="cwd">从左侧选择一个会话</p></div><span id="history-source"></span></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><button id="expand-events" class="quiet">展开详情</button><button id="collapse-events" class="quiet">收起详情</button><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon">↗</span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
+      <section id="operations" aria-label="会话操作" hidden></section>
+      <section id="requests" aria-label="待处理请求" hidden></section>
+      <details class="jobs-panel"><summary>桥接请求记录</summary><div id="jobs" class="jobs" aria-live="polite"></div></details>
+      <form id="composer" class="composer">
+        <label class="sr-only" for="prompt">新的任务</label><textarea id="prompt" rows="3" maxlength="16000" placeholder="发送新的任务…" disabled></textarea>
+        <div class="composer-footer"><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small><button id="send" class="primary" disabled>发送任务 ↑</button></div>
+      </form>
+      <p class="footnote">WebSocket 实时同步原生记录 · 思考仅展示摘要 · 附件保留引用</p>
+    </section>
+  </main>
+  <section id="side-drawer" class="side-drawer" aria-label="临时聊天抽屉" hidden>
+    <div class="side-drawer-head"><h2>临时聊天</h2><button id="close-side" class="quiet" aria-label="关闭临时聊天">✕</button></div>
+    <label class="sr-only" for="side-select">选择临时聊天</label><select id="side-select"><option value="">正在查找…</option></select>
+    <p id="side-discovery" class="side-discovery" role="status"></p>
+    <div class="timeline-toolbar"><span id="side-runtime"></span><span id="side-source"></span></div>
+    <div id="side-messages" class="messages"><div class="empty-small">选择一个临时聊天，查看状态和内容。</div></div>
+    <details class="side-info"><summary>临时聊天信息</summary><div id="side-info"></div></details>
+    <p class="footnote">只读同步已存在的临时聊天；发送任务请在 Codex App 中操作。</p>
+  </section>
+  <details class="cloud-settings">
+    <summary>云端接入与本地服务</summary>
+    <p id="cloud-state">读取云端配置…</p>
+    <form id="cloud-form">
+      <label>网关地址<input id="cloud-url" type="url" placeholder="wss://gateway.example.com/device" required></label>
+      <label>设备 ID<input id="cloud-device" required maxlength="100" pattern="[A-Za-z0-9_-]+"></label>
+      <label>设备 Token<input id="cloud-token" type="password" required minlength="32" autocomplete="off"></label>
+      <label><input id="cloud-control" type="checkbox">允许此网关远程控制，包括投递、编辑、设置与审批；默认仅允许读取</label>
+      <button id="cloud-connect">保存并连接</button>
+      <button id="cloud-refresh" type="button">刷新状态</button>
+      <button id="cloud-disconnect" type="button">断开云端</button>
+    </form>
+    <p>云端无法开启已关闭的桥接。关闭浏览器后 API 仍可用；停止服务会断开所有连接。</p>
+    <button id="service-stop" type="button">停止本地服务</button>
+  </details>
+  <dialog id="create-dialog">
+    <form id="create-form">
+      <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>
+      <p>控制会话将创建一个独立任务，并交给 Codex 执行。</p>
+      <label for="new-prompt">交互文案</label><textarea id="new-prompt" rows="7" required maxlength="16000" placeholder="描述你希望新会话完成的任务…"></textarea>
+      <p id="create-error" class="error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" id="cancel-create">取消</button><button id="submit-create" class="primary">提交并创建</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

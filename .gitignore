@@ -1,0 +1,15 @@
+.runtime/
+__pycache__/
+*.pyc
+.DS_Store
+build/
+dist/
+*.egg-info/
+connectnow/web/
+
+.env
+.env.*
+*.pem
+*.key
+*token.txt
+gateway.json
