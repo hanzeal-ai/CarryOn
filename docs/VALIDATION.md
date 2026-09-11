@@ -162,3 +162,21 @@ node --check timeline.js
 ### 恢复
 
 本次源码基线：`.runtime/source-backups/product-20260911-155331/`。最终源码差异清单存放 `.runtime/product-evidence/changes.json`。停止本次服务后，仅恢复本次变更，并先合并后续用户改动；移除新增文件前核对清单。安装升级使用新目录，保留原用户状态目录；不删除 Journal、不改写原生 Codex 数据，也不通过空目录重新尝试 uncertain 任务。关闭云端绑定可清除设备本地凭证，已传输给自有云端的数据由云端的留存策略管理。
+
+## 2026-09-11 GitHub 与阿里云内部部署验收
+
+本节更新前述“独立审查/公网部署未完成”的状态：用户已授权 GPT-5.5 独立审查，审查者基于代码、GitHub 运行、远端只读检查和独立复跑的公网测试，接受本次受控测试部署验收；不等同于对外发布或真实 Codex 用户验收。
+
+- 私有仓库：https://github.com/hanzeal-ai/ConnectNow 。首次源码版本 `62c46ff77f71f65c1dc108f181bcea1d76c90d1e`。
+- 首次 CI：https://github.com/hanzeal-ai/ConnectNow/actions/runs/34579924767 ，成功。
+- 首次部署：https://github.com/hanzeal-ai/ConnectNow/actions/runs/34579999633 ，成功。
+- 目标：杭州轻量服务器 `Docker-kjka`；公网入口 `https://121.40.211.86/connectnow/healthz`。网关进程运行于专用非 root 账户，loopback 8780，systemd 只读文件系统与权限限制生效。
+- 公网 WSS、错误凭证、设备隔离、Origin 拒绝、默认只读、本地撤销、订阅创建/删除、假 IPC 写入幂等和离线拒绝均通过。实施者与独立审查者各自执行了一次。没有连接真实 Codex、上传用户历史或创建真实任务。
+- 原有 MarkFix 443 保持 HTTP 200，DoTasks 8443 保持 HTTP 401；Nginx 配置检查通过。
+- IP 证书有效期截至 2026-09-17；已有 `certbot-ip-renew.timer` 正常计划下次续期，但本次未模拟续期。
+
+部署凭证与业务凭证分离：GitHub 仅保存专用 SSH key 和通过阿里云认证通道核对的 host key。远端生成的设备/API Token 通过 RSA-OAEP 加密后交付本机 0600 私有文件，不进入仓库或明文执行日志。部署 key 只允许安装 ConnectNow wheel 并重启/停止该服务，不提供 root shell。
+
+工作流在首次 CI 和部署后复核期间关闭部署开关，受控验收通过后可设置 `DEPLOY_ENABLED=true`，随后 main 推送自动测试并部署。对 privileged receiver、systemd 或 Nginx 的修改仍需单独检查安装，不由普通源码流水线覆盖。完整流程、失败恢复及关闭部署开关的方法见 [部署说明](../deployment/README.md)。本次新服务首次部署成功，真实故障回滚尚未演练；回滚逻辑经过源码独立审查，历史 release 会保留。
+
+继续验证真实产品时，在本机打开控制台并显式开启桥接。参考网关本身不提供云端 SaaS 控制台，自己的云端后端应按 [CLOUD.md](CLOUD.md) 接入。长期稳定性、多用户账号授权、凭证轮换、macOS 签名/公证仍在本次验收范围之外。

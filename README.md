@@ -6,6 +6,7 @@
 
 当前版本 0.2.0。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。
 
+- [GitHub Actions 与阿里云部署](deployment/README.md)：隔离网关、部署开关和回滚。
 - [安装与首次使用](docs/INSTALL.md)：应用、CLI、Python 包、升级、旧数据目录与排错。
 - [接入自定义云端控制台](docs/CLOUD.md)：出站 WSS、参考网关、设备凭证、后端示例和协议。
 - [本地 HTTP / WebSocket API](docs/API.md)：已有能力、请求状态与幂等契约。
