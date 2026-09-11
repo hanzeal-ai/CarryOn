@@ -65,8 +65,8 @@ class Device:
 
 class Gateway(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,address,config):
-        super().__init__(address,Handler)
+    def __init__(self,address,config,handler=None):
+        super().__init__(address,handler or Handler)
         self.config=config;self.devices={};self.lock=threading.RLock()
         self.release=os.environ.get("CONNECTNOW_RELEASE","development")
         self.slots=threading.BoundedSemaphore(64)
@@ -76,8 +76,11 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
     def log_message(self,*_):pass
     def reply(self,status,data):
+        # Some authorization/offline failures precede body parsing. Never reuse
+        # a connection whose unread request body could become the next request.
+        self.close_connection=True
         payload=json.dumps(data,ensure_ascii=False).encode()
-        self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_response(status);self.send_header('Connection','close');self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(payload)));self.send_header('Cache-Control','no-store')
         self.end_headers();self.wfile.write(payload)
     def body(self):

@@ -3,7 +3,7 @@ from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
 
-ASSETS=('example.html','app.js','client.js','timeline.js','operations.js','cloud-ui.js','style.css')
+ASSETS=('example.html','app.js','client.js','timeline.js','operations.js','cloud-ui.js','cloud-console-client.js','style.css')
 class Build(build_py):
     def run(self):
         super().run()

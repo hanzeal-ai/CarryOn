@@ -2,6 +2,8 @@
 
 连接你电脑上的 Codex App：通过本地浏览器控制台或自己的云端控制台查看会话、发送任务和使用 HTTP/WebSocket API。
 
+云端 example 已提供同进程控制台后端与设备连接模块，使用方法见 [云端控制台指南](docs/CONSOLE.md)。
+
 **普通用户：安装 ConnectNow.app，双击后自动打开本地控制台。开发者：`connectnow start`。** 安装包自带 Python，运行不需要 npm/pip 依赖。当前支持 macOS 路径，已记录的 Codex 内部 IPC 验证版本为 26.901.51231。
 
 当前版本 0.2.0。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。

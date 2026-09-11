@@ -1,0 +1,226 @@
+"""Single-owner example console embedding the device gateway in its backend."""
+import argparse
+import hashlib
+import hmac
+from http.cookies import SimpleCookie, CookieError
+import json
+import mimetypes
+import os
+from pathlib import Path
+import secrets
+import re
+import threading
+import time
+from urllib.parse import urlsplit
+
+from .gateway import Gateway, Handler, ID
+from .paths import assets, save_json
+
+
+def public_url(value):
+    if not isinstance(value,str) or any(c.isspace() for c in value):raise ValueError('public-url 无效')
+    parsed=urlsplit(value)
+    if (parsed.username or parsed.password or parsed.query or parsed.fragment or not parsed.hostname
+        or parsed.scheme not in ('http','https')
+        or parsed.scheme=='http' and parsed.hostname not in ('localhost','127.0.0.1','::1')):
+        raise ValueError('public-url 必须为 HTTPS；HTTP 仅用于本机测试')
+    if not re.fullmatch(r'(?:/[A-Za-z0-9_-]+)*/?',parsed.path):raise ValueError('public-url 路径无效')
+    return value.rstrip('/')
+
+
+class ConsoleServer(Gateway):
+    """Embeddable transport host; replace console auth with your account backend."""
+    def __init__(self,address,config):
+        self.public_url=public_url(config['publicUrl'])
+        if not isinstance(config.get('consoleToken'),str) or len(config['consoleToken'])<32:
+            raise ValueError('需要独立的 consoleToken（至少32字符）')
+        parsed=urlsplit(self.public_url)
+        self.origin=parsed.scheme+'://'+parsed.netloc
+        self.prefix=parsed.path.rstrip('/')
+        self.sessions={};self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
+        super().__init__(address,config,ConsoleHandler)
+
+    def prune(self):
+        now=time.monotonic()
+        self.sessions={k:v for k,v in self.sessions.items() if v>now}
+        self.codes={k:v for k,v in self.codes.items() if v[1]>now}
+
+
+    def release_stream(self,sid):
+        with self.auth_lock:entry=self.console_streams.pop(sid,None)
+        if entry is None:return
+        with self.lock:device=self.devices.get(entry['device'])
+        if device is None:return
+        with device.lock:device.streams.pop(sid,None);device.lock.notify_all()
+        def unsubscribe():
+            try:device.call({'type':'unsubscribe','streamId':sid},timeout=5)
+            except Exception:pass
+        threading.Thread(target=unsubscribe,daemon=True).start()
+
+    def service_actions(self):
+        with self.auth_lock:
+            self.prune()
+            stale=[sid for sid,entry in self.console_streams.items()
+                   if entry['session'] not in self.sessions or time.monotonic()-entry['last']>60]
+        for sid in stale:self.release_stream(sid)
+
+
+class ConsoleHandler(Handler):
+    def reply(self,status,data):
+        # Some authorization/offline failures precede body parsing. Never reuse
+        # a connection whose unread request body could become the next request.
+        self.close_connection=True
+        # Cookie is intentionally scoped to this console prefix, never the shared host root.
+        context=getattr(self,'stream_context',None)
+        if status==200 and context and isinstance(data,dict) and data.get('streamId'):
+            with self.server.auth_lock:
+                self.server.console_streams[data['streamId']]={'device':context[0],'session':context[1],'last':time.monotonic()}
+        payload=json.dumps(data,ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header('Connection','close')
+        self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Content-Length',str(len(payload)))
+        self.send_header('Cache-Control','no-store')
+        if getattr(self,'cookie',None):self.send_header('Set-Cookie',self.cookie)
+        self.end_headers();self.wfile.write(payload)
+
+    def session_key(self):
+        try:
+            cookies=SimpleCookie();cookies.load(self.headers.get('Cookie',''))
+            token=cookies['connectnow-console'].value
+        except (KeyError,ValueError,CookieError):return None
+        key=hashlib.sha256(token.encode()).hexdigest()
+        with self.server.auth_lock:
+            self.server.prune()
+            return key if key in self.server.sessions else None
+
+    def check_origin(self,method):
+        origin=self.headers.get('Origin')
+        if (origin is not None and origin!=self.server.origin
+            or method!='GET' and origin!=self.server.origin):
+            raise PermissionError('控制台请求来源不匹配')
+
+    def static(self,path):
+        name=path.lstrip('/') or 'example.html'
+        allowed={'example.html','style.css','app.js','client.js','cloud-ui.js',
+                 'cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
+        if name not in allowed:return False
+        payload=b'window.CONNECTNOW_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
+        if name=='example.html':
+            text=payload.decode().replace('href="/','href="'+self.server.prefix+'/').replace('src="/','src="'+self.server.prefix+'/')
+            text=text.replace('</head>','<script src="'+self.server.prefix+'/console-mode.js"></script></head>')
+            text=text.replace('ConnectNow · Codex 本地桥接','ConnectNow · 云端控制台')
+            payload=text.encode()
+        self.send_response(200)
+        self.send_header('Content-Type',mimetypes.guess_type(name)[0] or 'application/octet-stream')
+        self.send_header('Content-Length',str(len(payload)))
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.send_header('Referrer-Policy','no-referrer')
+        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.end_headers();self.wfile.write(payload);return True
+
+    def handle_api(self,method):
+        self.cookie=None;self.stream_context=None
+        self.connection.settimeout(30)
+        path=urlsplit(self.path).path
+        try:
+            if method=='GET' and self.static(path):return
+            if not path.startswith('/console/'):
+                return super().handle_api(method)
+            # Redemption is a CLI exchange protected by a high-entropy single-use code.
+            if path=='/console/redeem' and method=='POST':
+                if self.headers.get('Origin'):raise PermissionError('请在本机 ConnectNow 完成配对')
+                code=self.body().get('code','')
+                if not isinstance(code,str):raise ValueError('无效配对码')
+                with self.server.auth_lock:
+                    self.server.prune();entry=self.server.codes.pop(hashlib.sha256(code.encode()).hexdigest(),None)
+                if entry is None:raise PermissionError('配对码无效或已过期')
+                device=entry[0]
+                self.reply(200,{'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
+            self.check_origin(method)
+            if path=='/console/login' and method=='POST':
+                token=self.body().get('token','')
+                if not isinstance(token,str) or not hmac.compare_digest(token.encode(),self.server.config['consoleToken'].encode()):
+                    raise PermissionError('控制台登录凭证无效')
+                with self.server.auth_lock:
+                    self.server.prune()
+                    if len(self.server.sessions)>=64:raise ValueError('登录会话过多，请稍后重试')
+                    token=secrets.token_urlsafe(32)
+                    self.server.sessions[hashlib.sha256(token.encode()).hexdigest()]=time.monotonic()+12*3600
+                self.cookie='connectnow-console='+token+'; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=43200'+('; Secure' if self.server.origin.startswith('https:') else '')
+                self.reply(200,{'authenticated':True});return
+            key=self.session_key()
+            if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path=='/console/logout' and method=='POST':
+                with self.server.auth_lock:
+                    self.server.sessions.pop(key,None)
+                    owned=[sid for sid,entry in self.server.console_streams.items() if entry['session']==key]
+                for sid in owned:self.server.release_stream(sid)
+                self.cookie='connectnow-console=; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=0'
+                self.reply(200,{'authenticated':False});return
+            if path=='/console/session' and method=='GET':
+                with self.server.lock:
+                    devices=[{'id':d,'online':d in self.server.devices and not self.server.devices[d].closed} for d in self.server.config['devices']]
+                self.reply(200,{'devices':devices,'publicUrl':self.server.public_url});return
+            if path=='/console/pairing' and method=='POST':
+                device=self.body().get('deviceId')
+                if not isinstance(device,str) or device not in self.server.config['devices']:raise ValueError('设备不存在')
+                code=secrets.token_urlsafe(24)
+                with self.server.auth_lock:
+                    self.server.prune()
+                    if len(self.server.codes)>=64:raise ValueError('配对码过多')
+                    self.server.codes[hashlib.sha256(code.encode()).hexdigest()]=(device,time.monotonic()+300)
+                self.reply(200,{'code':code,'expiresIn':300,'publicUrl':self.server.public_url});return
+            if path.startswith('/console/devices/'):
+                parts=path.split('/')
+                if len(parts)<4 or not ID.fullmatch(parts[3]) or parts[3] not in self.server.config['devices']:
+                    raise PermissionError('设备未授权')
+                if len(parts)==5 and parts[4]=='streams' and method=='POST':self.stream_context=(parts[3],key)
+                if len(parts)==6 and parts[4]=='streams':
+                    with self.server.auth_lock:
+                        entry=self.server.console_streams.get(parts[5])
+                        if entry is None:self.reply(404,{'error':'订阅已过期，请重新连接'});return
+                        if entry['session']!=key or entry['device']!=parts[3]:raise PermissionError('订阅不属于当前登录会话')
+                        entry['last']=time.monotonic()
+                    if method=='DELETE':
+                        self.server.release_stream(parts[5]);self.reply(200,{'closed':True});return
+                # Delegate to the same authoritative gateway routes after console auth.
+                original=self.path;headers=self.headers
+                from email.message import Message
+                forwarded=Message()
+                for k,v in headers.items():
+                    if k.lower() not in ('authorization','origin'):forwarded[k]=v
+                forwarded['Authorization']='Bearer '+self.server.config['devices'][parts[3]]['apiToken']
+                self.headers=forwarded;self.path=self.path.replace('/console/devices/','/v1/devices/',1)
+                try:return super().handle_api(method)
+                finally:self.path=original;self.headers=headers
+            self.reply(404,{'error':'接口不存在'})
+        except PermissionError as exc:self.reply(403,{'error':str(exc)})
+        except (ValueError,KeyError,TypeError):self.reply(400,{'error':'控制台参数无效'})
+        except (OSError,EOFError):pass
+
+
+def main():
+    parser=argparse.ArgumentParser(description='example 云端控制台，内置 ConnectNow 设备连接')
+    parser.add_argument('action',choices=['configure','serve'])
+    parser.add_argument('--config',type=Path,required=True)
+    parser.add_argument('--public-url')
+    parser.add_argument('--port',type=int,default=8780)
+    args=parser.parse_args();config=json.loads(args.config.read_text())
+    if args.action=='configure':
+        if not args.public_url:parser.error('需要 --public-url')
+        config['publicUrl']=public_url(args.public_url)
+        if 'consoleToken' not in config:config['consoleToken']=secrets.token_urlsafe(32)
+        metadata=args.config.stat()
+        if os.geteuid() not in (0,metadata.st_uid):raise ValueError('请以配置文件所有者身份运行 configure')
+        save_json(args.config,config)
+        if os.geteuid()==0:os.chown(args.config,metadata.st_uid,metadata.st_gid)
+        print('云端控制台已配置；consoleToken 保存在配置文件中，不在终端输出。');return
+    server=ConsoleServer(('127.0.0.1',args.port),config)
+    print('ConnectNow example console: '+server.public_url+'/',flush=True)
+    try:server.serve_forever()
+    except KeyboardInterrupt:pass
+    finally:server.server_close()
+
+if __name__=='__main__':main()

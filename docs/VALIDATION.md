@@ -180,3 +180,13 @@ node --check timeline.js
 工作流在首次 CI 和部署后复核期间关闭部署开关，受控验收通过后可设置 `DEPLOY_ENABLED=true`，随后 main 推送自动测试并部署。对 privileged receiver、systemd 或 Nginx 的修改仍需单独检查安装，不由普通源码流水线覆盖。完整流程、失败恢复及关闭部署开关的方法见 [部署说明](../deployment/README.md)。本次新服务首次部署成功，真实故障回滚尚未演练；回滚逻辑经过源码独立审查，历史 release 会保留。
 
 继续验证真实产品时，在本机打开控制台并显式开启桥接。参考网关本身不提供云端 SaaS 控制台，自己的云端后端应按 [CLOUD.md](CLOUD.md) 接入。长期稳定性、多用户账号授权、凭证轮换、macOS 签名/公证仍在本次验收范围之外。
+
+## 2026-09-11 云端 example 侧会话改造（未部署）
+
+本次在侧会话的明确代码修改授权下，实现 example 云端模式：ConsoleServer 同进程嵌入设备 Gateway；独立控制台登录凭证换取 HttpOnly/SameSite Cookie；按设备转发请求；5 分钟单次配对码；本机 CLI 与页面兑换配对；只读授权投影；浏览器订阅会话隔离及空闲回收。原 Gateway 命令保留为协议示例，本地服务继续独立工作。
+
+验证：106 项 Python 测试、8 项 Node 测试通过。新增覆盖来源校验、登录/退出、Cookie 与代理前缀、配对码单次使用/过期、真实 HTTP/WS 与假 IPC 的只读/订阅/离线链路、订阅所属会话及回收、浏览器设备隔离和过期响应。Python 编译、JS 语法、git diff whitespace 检查通过。日志在 `.runtime/side-console-tests.log`。wheel 构建在 `.runtime/side-console-dist/`，包含新 console/pairing 模块、cloud-console-client.js 和 connectnow-console 入口；未覆盖主任务 dist 中的原安装包。
+
+浏览器使用隔离临时配置和假 IPC，观察了登录、列表、会话同步、只读按钮禁用、配对码弹窗、刷新恢复登录、退出清空会话、切换离线设备清空旧内容以及工具栏布局。测试服务只在 loopback 运行，未接触真实 Codex 会话或公网网关。
+
+本次未提交、推送、改变 GitHub 变量、部署或调用主任务的 Agent。变更仍在当前工作区，新增认证/配对属于 R2，尚无针对本次变更的独立审查结论；侧会话禁止使用 Agent，不能继承旧版本审查通过结论。实际 HTTPS、代理和服务器切换仍待主任务在适用授权与审查后执行。可用 `deployment/console.service.conf` 模板切换同一个服务入口，无需另运行一个 Gateway 进程。恢复时仅撤销本次列出的工作区修改，保留用户与主任务的后续修改以及既有运行数据。

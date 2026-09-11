@@ -83,6 +83,8 @@ class CloudConnector:
         except (ValueError,TypeError,KeyError):status,body=400,{'error':'请求参数无效'}
         except Exception:
             status,body=500,{'error':'本机处理失败；查询原 requestId 核对，勿自动重发','uncertain':True}
+        if status==200 and message.get('method')=='GET' and message.get('path')=='/api/status':
+            body={**body,'remoteControl':control}
         return {'type':'response','id':message['id'],'status':status,'body':body}
 
     def session(self,ws,config,cancel):
@@ -94,7 +96,7 @@ class CloudConnector:
                     revision=subscription.wait(revision)
                     if cancel.is_set() or closed.is_set():break
                     subscription.deliver(subscription.update(),lambda packet:ws.send(
-                        {'type':'event','streamId':stream_id,'body':packet}))
+                        {'type':'event','streamId':stream_id,'body':{**packet,'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}}))
             except (OSError,ValueError,BridgeError,IPCError):pass
             finally:subscription.close()
         try:

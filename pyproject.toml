@@ -13,6 +13,7 @@ dependencies = []
 [project.scripts]
 connectnow = "connectnow.cli:main"
 connectnow-gateway = "connectnow.gateway:main"
+connectnow-console = "connectnow.console:main"
 
 [tool.setuptools]
 packages = ["connectnow"]

@@ -9,18 +9,20 @@
   <script src="/operations.js" defer></script>
   <script src="/client.js" defer></script>
   <script src="/cloud-ui.js" defer></script>
+  <script src="/cloud-console-client.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header>
     <div class="brand"><span class="mark">C<span>↗</span></span><div><strong>ConnectNow</strong><small>你的 Codex，就在这里继续。</small></div></div>
-    <div class="connection"><span id="status" class="badge">未桥接</span><button id="bridge" class="primary">开启桥接</button></div>
+    <div class="connection"><select id="console-device" aria-label="云端设备" hidden></select><button id="console-pair-device" hidden>获取配对码</button><button id="console-logout" hidden>退出登录</button><span id="status" class="badge">未桥接</span><button id="bridge" class="primary">开启桥接</button></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <section id="pairing" class="pairing" hidden>
     <label for="token">本机配对 Token</label><input id="token" type="password" autocomplete="off" placeholder="粘贴 .runtime/token 文件中的 Token">
     <button id="pair">配对</button><p>双击 ConnectNow 应用，或运行 connectnow open，自动打开已配对的控制台。</p>
   </section>
+  <dialog id="console-code-dialog"><h2>在本机连接此云端</h2><p>配对码有效期为 5 分钟，仅可使用一次。请在自己的电脑上执行下列命令，并输入配对码。</p><pre id="console-pair-command"></pre><p>配对码：<code id="console-pair-code"></code></p><button id="console-close-code">关闭</button></dialog>
   <main>
     <aside>
       <div class="aside-top"><h1>会话</h1><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
@@ -62,6 +64,13 @@
   <details class="cloud-settings">
     <summary>云端接入与本地服务</summary>
     <p id="cloud-state">读取云端配置…</p>
+    <form id="cloud-pair-form">
+      <label>云端控制台地址<input id="cloud-console-url" type="url" placeholder="https://console.example.com" required></label>
+      <label>一次性配对码<input id="cloud-pair-code" type="password" autocomplete="off" required></label>
+      <label><input id="cloud-pair-control" type="checkbox">允许远程控制（包括投递、编辑、设置与审批）；默认只读</label>
+      <button id="cloud-pair-submit">配对并连接</button>
+    </form>
+    <details><summary>高级连接配置</summary>
     <form id="cloud-form">
       <label>网关地址<input id="cloud-url" type="url" placeholder="wss://gateway.example.com/device" required></label>
       <label>设备 ID<input id="cloud-device" required maxlength="100" pattern="[A-Za-z0-9_-]+"></label>
@@ -71,6 +80,7 @@
       <button id="cloud-refresh" type="button">刷新状态</button>
       <button id="cloud-disconnect" type="button">断开云端</button>
     </form>
+    </details>
     <p>云端无法开启已关闭的桥接。关闭浏览器后 API 仍可用；停止服务会断开所有连接。</p>
     <button id="service-stop" type="button">停止本地服务</button>
   </details>

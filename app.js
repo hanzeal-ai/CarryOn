@@ -41,20 +41,25 @@ function notice(text) {
   $('notice').textContent = text; $('notice').hidden = false;
   clearTimeout(noticeTimer); noticeTimer = setTimeout(() => $('notice').hidden = true, 6500);
 }
-const client = new ConnectNowClient({
+const cloudMode = window.CONNECTNOW_CLOUD === true;
+const client = new (cloudMode ? CloudConsoleClient : ConnectNowClient)({
   onUpdate: receiveUpdate,
-  onDisconnect: streamDisconnected,
-  onAuthError: () => { $('pairing').hidden = false; },
+  onDisconnect: event => {streamDisconnected(event);if(cloudMode)applyStatus({enabled:false,controllerId:null});},
+  onAuthError: () => { $('pairing').hidden = false;if(cloudMode)applyStatus({enabled:false,controllerId:null}); },
   onError: error => notice('实时同步失败：' + error.message)
 });
 const api = (path, body) => client.request(path, body);
+function canWrite(){return enabled&&(!cloudMode||client.control===true);}
 function applyStatus(status) {
+  if(cloudMode){if(client.control!==(status.remoteControl===true))lastHistory='';client.control=status.remoteControl===true;}
   enabled = status.enabled; controllerId = status.controllerId;
-  $('status').textContent = enabled ? '桥接已开启' : '未桥接'; $('status').classList.toggle('on', enabled);
-  $('bridge').textContent = enabled ? '取消桥接' : '开启桥接';
-  $('create').disabled = !enabled || !controllerId;
+  $('status').textContent = enabled ? (cloudMode&&!client.control?'已连接 · 只读':'桥接已开启') : '未桥接'; $('status').classList.toggle('on', enabled);
+  $('bridge').textContent = cloudMode ? '请在本机管理桥接' : enabled ? '取消桥接' : '开启桥接';
+  if(cloudMode)$('bridge').disabled=true;
+  $('create').disabled = !canWrite() || !controllerId;
   for (const id of ['search','refresh','controller','set-controller']) $(id).disabled = !enabled;
-  $('prompt').disabled = !enabled || !selected; $('send').disabled = !enabled || !selected;
+  if(cloudMode)$('set-controller').disabled=!canWrite();
+  $('prompt').disabled = !canWrite() || !selected; $('send').disabled = !canWrite() || !selected;
   $('open-side').disabled=!enabled||!selected;
   $('controller-note').textContent = controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
   if (!enabled) {
@@ -102,7 +107,7 @@ async function selectThread(id) {
   Operations.reset();
   closeSide();$('open-side').disabled=!enabled;
   Timeline.reset();
-  selected=id; lastHistory=''; delete $('messages').dataset.loaded; renderThreads(); $('prompt').disabled=!enabled; $('send').disabled=!enabled;
+  selected=id; lastHistory=''; delete $('messages').dataset.loaded; renderThreads(); $('prompt').disabled=!canWrite(); $('send').disabled=!canWrite();
   const thread=threads.find(t=>t.id===id); $('title').textContent=thread?.title || id; $('cwd').textContent=thread?.cwd || '';
   $('messages').replaceChildren(node('div','empty-small','读取历史中…'));
   try { await loadHistory(); } catch(e) { if(selected===id) $('messages').replaceChildren(node('div','empty-small',e.message)); }
@@ -114,7 +119,7 @@ async function loadHistory() {
 }
 async function receiveUpdate(data, current) {
   const wasEnabled = enabled;
-  if(enabled !== data.status.enabled || controllerId !== data.status.controllerId) applyStatus(data.status);
+  if(enabled !== data.status.enabled || controllerId !== data.status.controllerId || cloudMode&&client.control!==(data.status.remoteControl===true)) applyStatus(data.status);
   if(enabled && !wasEnabled) { await loadThreads(); if(!current())return; await loadHistory(); }
   if(!enabled)return;
   if(data.subscription===subscription&&data.threadFlags){
@@ -143,7 +148,7 @@ async function receiveUpdate(data, current) {
   if(data.error) { Operations.reset();lastHistory='';notice(data.error); $('history-source').textContent='同步暂不可用'; return; }
   if(data.history) {
     const signature = JSON.stringify(data.history);
-    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'));Operations.render(data.history,selected,client,notice);}
+    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'));Operations.render(data.history,selected,client,notice);if(!canWrite())for(const control of $('operations').querySelectorAll('button,input,select,textarea'))control.disabled=true;}
   }
 }
 function streamDisconnected(event) {
@@ -168,7 +173,7 @@ function renderJobs(jobs) {
     const label=node('div','',name+' · '+state);
     label.append(node('small','',job.error || job.result?.goalPauseError || job.id)); row.append(label);
     if(job.createdThreadId){ const open=node('button','quiet','打开会话');open.onclick=async()=>{await loadThreads();await selectThread(job.createdThreadId);};row.append(open); }
-    if(job.state==='uncertain'){ const ack=node('button','quiet','已在 App 核对');ack.onclick=async()=>{if(confirm('确认已在 Codex App 核对这个请求？这只解除阻塞，不会重发。')){try{await api('/jobs/'+job.id+'/acknowledge',{confirmed:true});await tick();}catch(e){notice(e.message);}}};row.append(ack); }
+    if(job.state==='uncertain'){ const ack=node('button','quiet','已在 App 核对');ack.disabled=!canWrite();ack.onclick=async()=>{if(confirm('确认已在 Codex App 核对这个请求？这只解除阻塞，不会重发。')){try{await api('/jobs/'+job.id+'/acknowledge',{confirmed:true});await tick();}catch(e){notice(e.message);}}};row.append(ack); }
     return row;
   }));
 }
@@ -183,16 +188,20 @@ $('bridge').onclick=async()=>{
   } catch(e){notice(e.message);} finally{$('bridge').disabled=false;}
 };
 $('pair').onclick=async()=>{
-  client.pair($('token').value);
-  try {applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
-    client.connect();await CloudSettings.refresh();if(enabled)await loadThreads();
+  $('pair').disabled=true;
+  try {
+    await client.pair($('token').value);
+    if(cloudMode){$('pairing').hidden=true;$('token').value='';}
+    applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
+    client.connect();if(!cloudMode)await CloudSettings.refresh();if(enabled)await loadThreads();
   } catch(e){notice(e.message);}
+  finally{$('pair').disabled=false;if(cloudMode)client.connect();}
 };
-$('set-controller').onclick=async()=>{if(!$('controller').value)return notice('请选择控制会话');$('set-controller').disabled=true;try{applyStatus(await api('/controller',{threadId:$('controller').value}));notice('控制会话已就绪');}catch(e){notice('设置失败：'+e.message);}finally{$('set-controller').disabled=!enabled;}};
+$('set-controller').onclick=async()=>{if(!$('controller').value)return notice('请选择控制会话');$('set-controller').disabled=true;try{applyStatus(await api('/controller',{threadId:$('controller').value}));notice('控制会话已就绪');}catch(e){notice('设置失败：'+e.message);}finally{$('set-controller').disabled=!canWrite();}};
 $('create').onclick=()=>{$('create-error').textContent='';$('create-dialog').showModal();$('new-prompt').focus();};
 for(const id of ['close-dialog','cancel-create']) $(id).onclick=()=>$('create-dialog').close();
 $('create-form').onsubmit=async e=>{e.preventDefault();$('submit-create').disabled=true;try{await submit('create',$('new-prompt').value.trim());$('create-dialog').close();$('new-prompt').value='';notice('已提交创建请求，等待控制会话处理');await tick();}catch(e){$('create-error').textContent=e.message+'；重试会沿用原请求 ID。';}finally{$('submit-create').disabled=false;}};
-$('composer').onsubmit=async e=>{e.preventDefault();const prompt=$('prompt').value.trim();if(!prompt)return;$('send').disabled=true;try{await submit('message',prompt);$('prompt').value='';notice('请求已登记，正在交给 Codex');await tick();}catch(e){notice(e.message+'；重试会沿用原请求 ID。');}finally{$('send').disabled=!enabled||!selected;}};
+$('composer').onsubmit=async e=>{e.preventDefault();const prompt=$('prompt').value.trim();if(!prompt)return;$('send').disabled=true;try{await submit('message',prompt);$('prompt').value='';notice('请求已登记，正在交给 Codex');await tick();}catch(e){notice(e.message+'；重试会沿用原请求 ID。');}finally{$('send').disabled=!canWrite()||!selected;}};
 $('prompt').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};
 $('refresh').onclick=()=>loadThreads().catch(e=>notice(e.message));
 $('more').onclick=()=>loadThreads(true).catch(e=>notice(e.message));
@@ -200,15 +209,42 @@ let searchTimer;$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=s
 async function tick(){
   if(refreshBusy || !client.token)return;refreshBusy=true;
   try{const status=await api('/status');const justEnabled=status.enabled&&!enabled;
-    if(status.enabled!==enabled || status.controllerId!==controllerId){applyStatus(status);if(enabled)renderThreads();}
+    if(status.enabled!==enabled || status.controllerId!==controllerId || cloudMode&&client.control!==(status.remoteControl===true)){applyStatus(status);if(enabled)renderThreads();}
     if(justEnabled)await loadThreads();
     if(enabled){const {jobs}=await api('/jobs');if(enabled)renderJobs(jobs);await loadHistory();}}
   catch(e){if(enabled)notice(e.message);}finally{refreshBusy=false;}
 }
 async function init(){
   if(location.protocol==='file:'){ $('pairing').hidden=false; notice('请通过本地服务打开页面，不能直接双击 HTML 启动后台进程。');return; }
+  if(cloudMode){
+    document.body.classList.add('cloud-console');
+    document.querySelector('.footnote').textContent='云端同步本机会话 · 思考仅展示摘要 · 附件保留引用';
+    document.querySelector('.cloud-settings').hidden=true;
+    $('bridge').disabled=true;$('bridge').textContent='请在本机管理桥接';
+    document.querySelector('label[for="token"]').textContent='云端控制台登录凭证';
+    $('token').placeholder='输入独立的控制台登录凭证';$('pair').textContent='登录';
+    document.querySelector('#pairing p').textContent='登录后选择设备；在本机使用配对码连接，并开启桥接。';
+    for(const id of ['console-device','console-pair-device','console-logout'])$(id).hidden=false;
+    $('console-device').onchange=async()=>{
+      client.close();client.epoch++;client.selection=null;client.device=$('console-device').value;client.setStorage();
+      selected=null;threads=[];applyStatus({enabled:false,controllerId:null});
+      try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}finally{client.connect();}
+    };
+    $('console-pair-device').onclick=async()=>{
+      try{const p=await client.consoleRequest('pairing',{deviceId:client.device});
+        $('console-pair-command').textContent='connectnow start\nconnectnow cloud pair --url '+p.publicUrl+(p.publicUrl.startsWith('http:')?' --dev-local':'');
+        $('console-pair-code').textContent=p.code;$('console-code-dialog').showModal();
+      }catch(e){notice(e.message);}
+    };
+    $('console-close-code').onclick=()=>{$('console-code-dialog').close();$('console-pair-code').textContent='';};
+    $('console-logout').onclick=async()=>{
+      client.close();client.epoch++;client.selection=null;
+      try{await client.consoleRequest('logout',{});client.token='';applyStatus({enabled:false,controllerId:null});$('pairing').hidden=false;}catch(e){notice(e.message);}
+    };
+    try{await client.initialize();}catch(e){notice(e.message);}
+  }
   $('pairing').hidden=!!client.token;
   if(client.token)try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}
   client.connect();
 }
-init().then(()=>CloudSettings.init(api,notice));
+init().then(()=>{if(!cloudMode)CloudSettings.init(api,notice);});

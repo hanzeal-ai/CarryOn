@@ -9,6 +9,12 @@ const CloudSettings = (() => {
   function init(transport,notify){
     api=transport;notice=notify;
     refresh().catch(()=>{box('cloud-state').textContent='请先完成本机配对';});
+    box('cloud-pair-form').onsubmit=async event=>{
+      event.preventDefault();box('cloud-pair-submit').disabled=true;
+      try{await api('/cloud/pair',{url:box('cloud-console-url').value.trim(),code:box('cloud-pair-code').value.trim(),control:box('cloud-pair-control').checked});
+        box('cloud-pair-code').value='';await refresh();notice('配对完成；请在本机开启桥接。');
+      }catch(e){notice(e.message);}finally{box('cloud-pair-submit').disabled=false;}
+    };
     box('cloud-refresh').onclick=()=>refresh().catch(e=>notice(e.message));
     box('cloud-form').onsubmit=async event=>{
       event.preventDefault();box('cloud-connect').disabled=true;

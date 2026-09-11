@@ -99,7 +99,7 @@ def main(argv=None):
         if name in ('start','serve'): p.add_argument('--port', type=int, default=8769)
         if name == 'start': p.add_argument('--no-open', action='store_true')
         if name == 'cloud':
-            p.add_argument('action', choices=['connect','disconnect','status'])
+            p.add_argument('action', choices=['connect','pair','disconnect','status'])
             p.add_argument('--url')
             p.add_argument('--device-id')
             p.add_argument('--token-file', type=Path)
@@ -130,6 +130,11 @@ def main(argv=None):
         if args.command == 'cloud':
             if args.action=='status': result=call(args.state_dir,'/cloud')
             elif args.action=='disconnect':result=call(args.state_dir,'/cloud',{'enabled':False})
+            elif args.action=='pair':
+                from .pairing import redeem
+                code=args.token_file.read_text().strip() if args.token_file else getpass.getpass('一次性配对码（不回显）：')
+                config=redeem(args.url,code,args.allow_control,args.dev_local)
+                result=call(args.state_dir,'/cloud',config,timeout=20)
             else:
                 if not args.url or not args.device_id:raise ValueError('需要 --url 和 --device-id')
                 token=args.token_file.read_text().strip() if args.token_file else getpass.getpass('设备 Token（不回显）：')

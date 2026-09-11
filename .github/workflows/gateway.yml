@@ -21,9 +21,10 @@ jobs:
       - name: Test
         run: |
           python -m unittest discover -s tests -v
-          node --test tests/test_client.js
+          node --test tests/test_client.js tests/test_console_client.js
           python -m compileall -q connectnow deployment
           node --check cloud-ui.js
+          node --check cloud-console-client.js
           sh -n scripts/install.sh
       - name: Build wheel
         run: |

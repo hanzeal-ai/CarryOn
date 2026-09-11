@@ -1,5 +1,7 @@
 # 接入自定义云端控制台
 
+直接使用 example 作为云端控制台，优先阅读 [CONSOLE.md](CONSOLE.md)。以下独立网关是协议联调与外部后端集成示例，不是必需的单独部署组件。
+
 ConnectNow 主动通过 WSS 连接你的网关，不需要用户配置公网 IP、端口映射或 SSH。本机 HTTP 与云端命令复用 `connectnow.api.dispatch`；原生状态与本地投递日志仍是业务权威。网关不会替代本地权限检查和幂等记录。
 
 ```text

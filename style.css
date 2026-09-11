@@ -30,3 +30,10 @@
 .cloud-settings p { font-size: 12px; color: #666; }
 
 .cloud-settings input[type=checkbox] { width: auto; margin: 0 8px 0 0; vertical-align: middle; }
+
+.cloud-console header { height:auto; min-height:88px; gap:16px; flex-wrap:wrap; padding-top:16px; padding-bottom:16px; }
+.cloud-console .connection { flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.cloud-console .connection button,.cloud-console .badge { white-space:nowrap; }
+#console-device { width:auto; max-width:220px; }
+#console-pair-command { white-space:pre-wrap; overflow-wrap:anywhere; }
+#console-pair-code { overflow-wrap:anywhere; }

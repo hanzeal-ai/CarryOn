@@ -80,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/client.js", "/cloud-ui.js", "/timeline.js", "/operations.js", "/style.css"):
+            if method == "GET" and path in ("/", "/example.html", "/app.js", "/client.js", "/cloud-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -107,6 +107,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/api/cloud' and method == 'GET':
                 self.reply(200, self.server.cloud.status())
+                return
+            if path == '/api/cloud/pair' and method == 'POST':
+                from .pairing import redeem
+                config = redeem(data.get('url'),data.get('code'),data.get('control',False))
+                self.reply(200,self.server.cloud.configure(config))
                 return
             if path == '/api/cloud' and method == 'POST':
                 self.reply(200, self.server.cloud.configure(data))
