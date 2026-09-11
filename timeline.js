@@ -1,7 +1,32 @@
 /* Render only with DOM text nodes: tool output and Markdown are untrusted text. */
 const Timeline = (() => {
  function create(ids={runtime:'runtime',info:'conversation-info',source:'history-source'}) {
-  let visible = 120, current = null, expanded = false;
+  let visible = 120, current = null, expanded = false, imageObserver = null;
+  const imageCache = new Map();
+  const safeImage = url => typeof url==='string' && url.length<12000000 && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(url);
+  function picture(article, part) {
+    const frame=el('div','message-picture'),img=el('img','message-image'),status=el('span','image-status','正在加载图片…');
+    img.alt='会话图片';img.loading='eager';img.hidden=true;
+    img.onload=()=>{status.remove();img.hidden=false;};
+    img.onerror=()=>{img.remove();status.textContent='图片无法显示';};
+    frame.append(img,status);article.append(frame);
+    if(safeImage(part.url)){img.src=part.url;return;}
+    if(part.type!=='localImage'||!part.imageId||!current.loadImage){status.textContent='图片暂不可用';return;}
+    const loader=current.loadImage;
+    frame.loadImage=async()=>{
+      try {
+        if(!imageCache.has(part.imageId)){
+          if(imageCache.size>=8)imageCache.delete(imageCache.keys().next().value);
+          const pending=loader(part.imageId);imageCache.set(part.imageId,pending);
+          pending.catch(()=>{if(imageCache.get(part.imageId)===pending)imageCache.delete(part.imageId);});
+        }
+        const result=await imageCache.get(part.imageId);
+        if(!frame.isConnected)return;
+        if(!safeImage(result.url))throw Error('图片格式不受支持');
+        img.src=result.url;
+      } catch(error){if(frame.isConnected)status.textContent=error.message||'图片暂不可用';}
+    };
+  }
   const labels = {inProgress:'进行中',completed:'已完成',failed:'失败',interrupted:'已中断',declined:'已拒绝',
     idle:'空闲',active:'正在处理',notLoaded:'未加载',systemError:'运行异常',unknown:'状态未知'};
   const el = (tag, cls, text) => {const n=document.createElement(tag);n.className=cls||'';if(text!==undefined)n.textContent=text;return n;};
@@ -58,9 +83,8 @@ const Timeline = (() => {
       const head=el('div','message-head');head.append(el('span','role',user?'你':item.phase==='commentary'?'Codex · 进度':'Codex'),copyButton(item.text||''));
       article.append(head,el('div','text',item.text||''));
       for(const part of item.data?.content||item.data?.input||[]){
-        if(part.type==='image'&&typeof part.url==='string'&&part.url.length<300000&&/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(part.url)){
-          const img=el('img','message-image');img.src=part.url;img.alt='会话图片';img.loading='lazy';article.append(img);
-        }else if(part.type!=='text')article.append(block('附件 / 引用 · '+part.type,part.type==='image'?{type:part.type,description:'图片引用'}:part));
+        if(part.type==='image'||part.type==='localImage')picture(article,part);
+        else if(part.type!=='text')article.append(block('附件 / 引用 · '+part.type,part));
       }
       const extra={...item.data};delete extra.text;delete extra.content;delete extra.input;delete extra.phase;
       if(Object.values(extra).some(v=>v!==null && v!==undefined)){
@@ -77,18 +101,21 @@ const Timeline = (() => {
     summary.append(icon,title,el('span','activity-state',[labels[item.status]||item.status,duration(item.durationMs)].filter(Boolean).join(' · ')));
     card.append(summary,details(item));return card;
   }
-  function render(data, container) {
-    current={data,container};
+  function render(data, container, loadImage) {
+    imageObserver?.disconnect();
+    current={data,container,loadImage};
     const open=new Map([...container.querySelectorAll('details[data-key]')].map(n=>[n.dataset.key,n.open]));
     const atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<100, scroll=container.scrollTop;
     const all=data.timeline||data.messages.map(m=>({id:m.id,type:m.role==='user'?'userMessage':'agentMessage',text:m.text,phase:m.phase,data:{}}));
     const fragment=document.createDocumentFragment();
     if(all.length>visible){const more=el('button','history-more','显示更早记录（还有 '+(all.length-visible)+' 条）');more.onclick=()=>{
-      const oldHeight=container.scrollHeight;visible+=120;render(data,container);container.scrollTop=scroll+container.scrollHeight-oldHeight;
+      const oldHeight=container.scrollHeight;visible+=120;render(data,container,loadImage);container.scrollTop=scroll+container.scrollHeight-oldHeight;
     };fragment.append(more);}
     for(const item of all.slice(-visible))fragment.append(entry(item));
     if(!all.length)fragment.append(el('div','empty-small','暂无会话记录。'));
     container.replaceChildren(fragment);
+    imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:container,rootMargin:'300px'});
+    for(const frame of container.querySelectorAll('.message-picture'))if(frame.loadImage)imageObserver.observe(frame);
     for(const n of container.querySelectorAll('details[data-key]'))if(open.has(n.dataset.key))n.open=open.get(n.dataset.key);
     container.scrollTop=atBottom||!container.dataset.loaded?container.scrollHeight:scroll;container.dataset.loaded='true';
     const runtime=data.runtime||{type:'unknown'}, meta=data.metadata||{};
@@ -106,7 +133,7 @@ const Timeline = (() => {
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }
   function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity'))d.open=value;}}
-  function reset(){visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
+  function reset(){imageObserver?.disconnect();imageCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
   return {render,reset,setExpanded};
  }
  return {...create(),create};

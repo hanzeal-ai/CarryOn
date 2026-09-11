@@ -300,3 +300,11 @@ WS update 新增 `catalogRevision` 和 `threadFlags`（仅当前订阅目录）�
 example 支持选择或粘贴图片、预览与移除，浏览器将图片转成 JPEG，长边最多 1600 像素并压缩至传输限制以内。透明区域以白色填充；需要保留原始细节时可先裁剪关注区域。图片可单独发送，也可附带文字。新建会话暂不附图，先进入会话后发送。
 
 图片按原生 `UserInput {type: "image", url: dataURL}` 交给 Codex，不接收外部 URL 或本地文件路径，不建立公开图片链接。图片内容参与幂等指纹计算；相同 requestId 对应的文字或图片改变都会被拒绝。浏览器会话存储和 ConnectNow 请求日志不存图片内容，原生会话仍按 Codex 的历史规则保存消息。
+
+
+### 会话图片回显
+
+原生 `image` 输入保持图片类型，example 直接渲染图片；`localImage` 投影增加 `imageId`。
+`GET /api/threads/{id}/images/{imageId}`（临时会话对应 `/api/side-chats/{id}/images/{imageId}?parentId=...`）返回 `{url: "data:image/..."}`。
+接口沿用会话读取认证、桥接开关和云端只读权限，只解析该会话原生用户消息中的图片附件，不接受任意文件路径。
+本地图片读取限普通文件、8 MB 以内的 PNG/JPEG/WebP/GIF，拒绝符号链接；文件已删除或不可读时页面明确提示，不展示 Base64 或以路径代替图片。图片按可见区域加载，不写入浏览器持久存储。

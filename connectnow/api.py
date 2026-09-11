@@ -18,7 +18,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages)|side-chats/[^/]+/history|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|images/[0-9a-f]{64})|side-chats/[^/]+/(history|images/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -54,6 +54,10 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
     elif method == "GET" and path.startswith('/api/side-chats/') and path.endswith('/history'):
         history = bridge.side_history(parse_qs(parsed.query).get('parentId', [''])[0], path.split('/')[3])
         respond(200, {k:v for k,v in history.items() if k != 'turns'})
+    elif method == 'GET' and '/images/' in path:
+        parts = path.split('/')
+        parent = parse_qs(parsed.query).get('parentId', [''])[0] if parts[2] == 'side-chats' else None
+        respond(200, bridge.image(parts[3], parts[5], parent))
     elif method == "GET" and path.startswith("/api/threads/") and path.endswith("/history"):
         history = bridge.history(path.split("/")[3])
         respond(200, {k: v for k, v in history.items() if k != "turns"})

@@ -1,6 +1,7 @@
 """Public conversation projection. Never expose full turn params or raw reasoning."""
 import json
 import re
+from .images import image_id
 
 
 def text(value):
@@ -66,6 +67,11 @@ LABELS = {
 def project_item(item, turn, index):
     kind = item.get("type", "unknown")
     data = pick(item, FIELDS.get(kind, "status completed"))
+    for key in ('content', 'input'):
+        if key in data:
+            data[key] = [{**p, 'imageId': image_id(p['path'])}
+                         if p.get('type') == 'localImage' and isinstance(p.get('path'), str) else p
+                         for p in data[key]]
     # The reasoning item has no lifecycle field in this version. Only the last
     # native item of an active turn can be displayed as currently thinking.
     active = turn.get("status") == "inProgress"

@@ -49,3 +49,42 @@ class ImageCloudTests(unittest.TestCase):
         self.assertEqual(self.request('POST',route,body)[0],202);self.assertEqual(len(sent),1)
         self.assertNotEqual(self.request('POST',route,{**body,'images':[PNG]})[0],202)
         self.assertNotIn(large,str(self.journal.list()))
+
+    def test_cloud_readonly_can_view_only_known_images_and_bridge_off_revokes(self):
+        import tempfile
+        from pathlib import Path
+        from connectnow.images import image_id
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
+            self.bridge.history=lambda tid:{'timeline':[{'type':'userMessage','data':{'content':[{'type':'localImage','path':str(path)}]}}]}
+            self.bridge.enable();self.connect()
+            route='/api/threads/'+test_cloud.T+'/images/'
+            self.assertEqual(self.request('GET',route+image_id(str(path))),(200,{'url':PNG}))
+            self.assertEqual(self.request('GET',route+'0'*64)[0],404)
+            self.assertEqual(self.request('POST',route+image_id(str(path)),{})[0],403)
+            self.bridge.disable()
+            self.assertEqual(self.request('GET',route+image_id(str(path)))[0],403)
+
+
+class HistoryImageTests(unittest.TestCase):
+    def test_history_scoped_file_reads_and_no_native_mutation(self):
+        import tempfile
+        from pathlib import Path
+        from connectnow.images import read_history_image, image_id
+        from connectnow.bridge import snapshot_history
+        from connectnow.errors import BridgeError
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
+            native={'id':'thread','turns':[{'turnId':'t','items':[{'type':'userMessage','content':[{'type':'localImage','path':str(path)}]}]}]}
+            history=snapshot_history(native);identifier=image_id(str(path))
+            self.assertEqual(history['timeline'][1]['data']['content'][0]['imageId'],identifier)
+            self.assertNotIn('imageId',native['turns'][0]['items'][0]['content'][0])
+            self.assertEqual(read_history_image(history,identifier),{'url':PNG})
+            with self.assertRaises(BridgeError):read_history_image(history,image_id('/etc/passwd'))
+            with self.assertRaises(BridgeError):read_history_image({'timeline':[]},identifier)
+            path.unlink();path.symlink_to(Path(tmp)/'missing')
+            with self.assertRaises(BridgeError):read_history_image(history,identifier)
+            path.unlink();path.write_bytes(b'not an image')
+            with self.assertRaises(ValueError):read_history_image(history,identifier)
+            path.write_bytes(b'x'*(8*1024*1024+1))
+            with self.assertRaises(ValueError):read_history_image(history,identifier)

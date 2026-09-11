@@ -17,6 +17,7 @@ let enabled = false, selected = null, controllerId = null, threads = [], offset 
 let refreshBusy = false, lastHistory = '', listVersion = 0, noticeTimer;
 let subscription = null;
 let sideOpen=false, sideSelected=null, sideSignature='';
+const historyImageLoader=(thread,parent)=>id=>api(parent?'/side-chats/'+encodeURIComponent(thread)+'/images/'+id+'?parentId='+encodeURIComponent(parent):'/threads/'+encodeURIComponent(thread)+'/images/'+id);
 const SideTimeline=Timeline.create({runtime:'side-runtime',info:'side-info',source:'side-source'});
 function closeSide(){
   sideOpen=false;sideSelected=null;sideSignature='';SideTimeline.reset();
@@ -167,12 +168,12 @@ async function receiveUpdate(data, current) {
   if(sideOpen&&data.sideChats)renderSides(data.sideChats);
   if(sideOpen&&data.sideThreadId===sideSelected){
     if(data.sideError){$('side-source').textContent='同步暂不可用';$('side-runtime').textContent='状态未知';$('side-discovery').textContent=data.sideError;}
-    else if(data.sideHistory){const signature=JSON.stringify(data.sideHistory);if(signature!==sideSignature){sideSignature=signature;SideTimeline.render(data.sideHistory,$('side-messages'));}}
+    else if(data.sideHistory){const signature=JSON.stringify(data.sideHistory);if(signature!==sideSignature){sideSignature=signature;SideTimeline.render(data.sideHistory,$('side-messages'),historyImageLoader(sideSelected,selected)); }}
   }
   if(data.error) { Operations.reset();lastHistory='';notice(data.error); $('history-source').textContent='同步暂不可用'; return; }
   if(data.history) {
     const signature = JSON.stringify(data.history);
-    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'));Operations.render(data.history,selected,client,notice,canWrite());}
+    if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'),historyImageLoader(data.history.thread.id));Operations.render(data.history,selected,client,notice,canWrite());}
   }
 }
 function streamDisconnected(event) {

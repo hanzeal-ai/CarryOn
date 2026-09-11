@@ -143,3 +143,5 @@ body:has(#pairing:not([hidden])) header{background:transparent;border-color:tran
 @media(max-width:760px){.composer-footer{justify-content:space-between}.composer-tools>button{min-height:44px;font-size:12px}.image-preview{width:64px;height:64px}.image-preview button{width:28px;height:28px;min-height:28px}}
 .message-image{display:block;max-width:min(100%,420px);max-height:360px;object-fit:contain;border-radius:12px;margin:10px 0;border:1px solid var(--border)}.message.user .message-image{margin-left:auto}
 .auth-card .auth-help,.auth-security,.auth-card #auth-description,.auth-story>p{color:#7c7189}.welcome p{color:#867b94}.controller-box>summary{color:#756b80}
+
+.message-picture{margin:12px 0;min-height:44px}.image-status{display:block;padding:12px;color:var(--muted);font-size:13px}.message-picture .message-image{margin:0}

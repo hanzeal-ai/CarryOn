@@ -226,6 +226,15 @@ class Bridge:
         result['parentId'] = parent_id
         return result
 
+    def image(self, thread_id, identifier, parent_id=None):
+        from .images import read_history_image
+        ipc, generation = self.require()
+        history = self.side_history(parent_id, thread_id) if parent_id is not None else self.history(thread_id)
+        result = read_history_image(history, identifier)
+        with self.lock:
+            self.check_generation(ipc, generation)
+        return result
+
     def history(self, thread_id):
         self.catalog.get(thread_id)
         ipc, generation = self.require()
