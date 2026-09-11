@@ -74,7 +74,7 @@ class ConsoleTests(unittest.TestCase):
         sid=stream['streamId'];self.assertEqual(self.call('GET',f'/console/devices/my-mac/streams/{sid}?after=-1')[0],200)
         self.assertEqual(self.call('DELETE',f'/console/devices/my-mac/streams/{sid}')[0],200)
         _,stale,_=self.call('POST','/console/devices/my-mac/streams',{'threadId':T})
-        with self.server.auth_lock:self.server.console_streams[stale['streamId']]['last']=0
+        with self.server.auth_lock:self.server.console_streams[stale['streamId']]['last']=time.monotonic()-61
         self.server.service_actions()
         self.assertEqual(self.call('GET','/console/devices/my-mac/streams/'+stale['streamId'])[0],404)
         self.connector.stop()
