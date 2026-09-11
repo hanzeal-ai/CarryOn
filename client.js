@@ -1,5 +1,12 @@
 /* HTTP authentication, durable retry IDs and the live connection lifecycle. */
 'use strict';
+async function readApiResponse(response) {
+  try { return await response.json(); }
+  catch {
+    if (response.status === 413) throw Error('图片请求超过服务器大小限制，请减少图片或压缩后重试');
+    throw Error(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试');
+  }
+}
 class ConnectNowClient {
   constructor({onUpdate, onDisconnect, onAuthError, onError}) {
     this.onUpdate = onUpdate;
@@ -32,7 +39,7 @@ class ConnectNowClient {
         ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
       ...(body === undefined ? {} : {body: JSON.stringify(body)})
     });
-    const result = await response.json();
+    const result = await readApiResponse(response);
     if (epoch !== this.epoch) throw Error('配对已改变，请重新读取状态');
     if (!response.ok) {
       if (response.status === 401) this.onAuthError();

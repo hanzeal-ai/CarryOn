@@ -14,7 +14,7 @@ class CloudConsoleClient extends ConnectNowClient {
       headers:body===undefined?{}:{'Content-Type':'application/json'},
       ...(body===undefined?{}:{body:JSON.stringify(body)})
     });
-    const result=await response.json();
+    const result=await readApiResponse(response);
     if(epoch!==this.epoch)throw Error('设备已改变，请重新读取状态');
     if(!response.ok){
       if(response.status===401){this.token='';this.close();this.onAuthError();}

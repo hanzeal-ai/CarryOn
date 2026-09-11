@@ -100,3 +100,14 @@ test('image hashing cannot submit after device or selected conversation changes'
   await assert.rejects(pending,/当前会话已改变/);assert.equal(f.requests.length,0);
   await assert.rejects(f.client.submit('message','thread','look',[],()=>false),/当前会话已改变/);assert.equal(f.requests.length,0);
 });
+
+
+test('proxy HTML failures are actionable and retain the retry ID', async()=>{
+  const f=fixture();
+  f.respond(async()=>({ok:false,status:413,json:async()=>{throw new SyntaxError('The string did not match the expected pattern.')}}));
+  await assert.rejects(f.client.submit('message','thread','hello'),/图片请求超过服务器大小限制/);
+  const id=f.requests.at(-1).body.requestId;
+  f.respond(async()=>({ok:false,status:502,json:async()=>{throw new SyntaxError('invalid JSON')}}));
+  await assert.rejects(f.client.submit('message','thread','hello'),/HTTP 502/);
+  assert.equal(f.requests.at(-1).body.requestId,id);
+});

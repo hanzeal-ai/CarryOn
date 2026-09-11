@@ -24,7 +24,7 @@ location ^~ /connectnow/ {
     proxy_set_header Connection "upgrade";
     proxy_buffering off;
     proxy_read_timeout 90s;
-    client_max_body_size 100k;
+    client_max_body_size 1m;
 }
 ```
 
