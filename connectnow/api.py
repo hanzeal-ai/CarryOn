@@ -4,7 +4,7 @@ import re
 from .errors import BridgeError
 
 
-def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
+def dispatch(bridge, method, target, data=None, *, remote=False, control=False, source=None, authorize=None):
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith('/api/'):
         raise ValueError('Invalid API path')
@@ -13,12 +13,19 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
         raise ValueError('Only GET and POST are supported')
     if data is None: data = {}
     if not isinstance(data, dict): raise ValueError('请求体必须是 JSON 对象')
+    if path=='/api/standby' and method=='GET':
+        bridge.require()
+        if not hasattr(bridge,'standby'):return 200,{'supported':False,'enabled':False,'effective':False}
+        return 200,bridge.standby.status()
+    if not remote and (path in ('/api/projects','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',path)):
+        if not hasattr(bridge,'workspace'):raise BridgeError('工作区功能尚未启用，请升级本机服务',503)
+        return bridge.workspace.dispatch('local',method,path,data,parse_qs(parsed.query))
     if remote:
         if path in ('/api/bridge', '/api/cloud', '/api/service') or path.startswith('/api/service/'):
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|images/[0-9a-f]{64})|side-chats/[^/]+/(history|images/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|images/[0-9a-f]{64})|side-chats/[^/]+/(history|images/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -64,14 +71,16 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False):
     elif method == "GET" and path.startswith('/api/threads/') and path.endswith('/queue'):
         respond(200, bridge.queue(path.split('/')[3]))
     elif method == "POST" and path == "/api/threads":
-        respond(202, bridge.submit("create", data.get("requestId"), data.get("prompt")))
+        respond(202, bridge.submit("create", data.get("requestId"), data.get("prompt"), **({"source":source,"authorize":authorize} if source else {})))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/operations"):
         from .operations import submit
         if len(path.split('/')) != 5:
             raise ValueError('无效操作路径')
-        respond(202, submit(bridge, path.split('/')[3], data))
+        respond(202, submit(bridge, path.split('/')[3], data, **({'source':source,'authorize':authorize} if source else {})))
+    elif method == "POST" and path.startswith('/api/threads/') and path.endswith('/compose'):
+        respond(202,bridge.compose(path.split('/')[3],data.get('requestId'),data.get('prompt'),data.get('images'),source,authorize))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/messages"):
-        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images")))
+        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images"), **({"source":source,"authorize":authorize} if source else {})))
     elif method == "GET" and path == "/api/jobs":
         jobs = [bridge.refresh_job(j["id"]) for j in bridge.journal.list()[:100]]
         respond(200, {"jobs": jobs})

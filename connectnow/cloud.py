@@ -18,12 +18,14 @@ ID=re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 
 
 class CloudConnector:
-    def __init__(self,bridge,directory):
-        self.bridge=bridge;self.path=Path(directory)/'cloud.json'
+    def __init__(self,bridge,directory, *, config=None, binding_id=None):
+        self.bridge=bridge;self.path=Path(directory)/'cloud.json';self.binding_id=binding_id
         self.lock=threading.RLock();self.config={};self.worker=None;self.ws=None
         self.configure_lock=threading.Lock()
         self.cancel=threading.Event();self.connected=False;self.error=None
-        if self.path.exists():
+        if config is not None:
+            self.config=dict(config);self.validate(self.config)
+        elif self.path.exists():
             self.config=json.loads(self.path.read_text())
             self.validate(self.config)
 
@@ -60,7 +62,7 @@ class CloudConnector:
         self.stop()
         with self.lock:
             self.config={k:data[k] for k in ('enabled','url','deviceId','token','control','devLocal') if k in data}
-            save_json(self.path,self.config)
+            if self.binding_id is None:save_json(self.path,self.config)
             self.error=None
         self.start();return self.status()
 
@@ -73,7 +75,8 @@ class CloudConnector:
 
     def stop(self):
         with self.lock:
-            cancel=self.cancel;cancel.set();ws=self.ws;worker=self.worker
+            cancel=self.cancel;ws=self.ws;worker=self.worker
+            with self.bridge.lock:cancel.set()
             self.connected=False
         if ws:
             try:close(ws)
@@ -82,10 +85,14 @@ class CloudConnector:
         if worker and worker.is_alive():raise ValueError('旧云端连接尚未退出，请稍后重试')
         self.bridge.notify()
 
-    def execute(self,message,control):
+    def execute(self,message,control,connection_cancel=None):
         if not isinstance(message.get('id'),str) or not ID.fullmatch(message['id']):raise ValueError('无效消息 ID')
         try:
-            status,body=dispatch(self.bridge,message.get('method'),message.get('path'),message.get('body'),remote=True,control=control)
+            from .remote_scope import scoped_dispatch
+            cancel=self.cancel
+            def authorize():
+                if cancel.is_set() or connection_cancel is not None and connection_cancel.is_set():raise BridgeError('此云端连接已撤销、断线或权限已改变',403)
+            status,body=scoped_dispatch(self.bridge,message.get('method'),message.get('path'),message.get('body'),control,self.binding_id,authorize)
         except BridgeError as exc:status,body=exc.status,{'error':str(exc)}
         except IPCError as exc:status,body=409,{'error':str(exc),'uncertain':exc.uncertain}
         except (ValueError,TypeError,KeyError):status,body=400,{'error':'请求参数无效'}
@@ -95,7 +102,7 @@ class CloudConnector:
             body={**body,'remoteControl':control}
         return {'type':'response','id':message['id'],'status':status,'body':body}
 
-    def session(self,ws,config,cancel):
+    def session(self,ws,config,cancel,connection_cancel=None):
         streams={}
         def stream_writer(stream_id,subscription,closed):
             revision=-1
@@ -103,8 +110,9 @@ class CloudConnector:
                 while not cancel.is_set() and not closed.is_set():
                     revision=subscription.wait(revision)
                     if cancel.is_set() or closed.is_set():break
+                    from .remote_scope import project_packet
                     subscription.deliver(subscription.update(),lambda packet:ws.send(
-                        {'type':'event','streamId':stream_id,'body':{**packet,'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}}))
+                        {'type':'event','streamId':stream_id,'body':{**project_packet(packet,self.binding_id),'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}}))
             except (OSError,ValueError,BridgeError,IPCError):pass
             finally:subscription.close()
         try:
@@ -115,7 +123,7 @@ class CloudConnector:
                 if not isinstance(mid,str) or not ID.fullmatch(mid):raise ValueError('消息 ID 无效')
                 if kind=='ping':ws.send({'type':'pong','id':mid});continue
                 if kind=='request':
-                    ws.send(self.execute(message,config.get('control',False)));continue
+                    ws.send(self.execute(message,config.get('control',False),connection_cancel));continue
                 if kind not in ('subscribe','unsubscribe'):raise ValueError('未知云端消息')
                 sid=message.get('streamId')
                 if not isinstance(sid,str) or not ID.fullmatch(sid):raise ValueError('streamId 无效')
@@ -150,7 +158,7 @@ class CloudConnector:
     def run(self,config,cancel):
         delay=1
         while not cancel.is_set():
-            ws=None
+            ws=None;connection_cancel=threading.Event()
             try:
                 ws=connect(config['url'],config.get('devLocal',False))
                 with self.lock:
@@ -162,10 +170,11 @@ class CloudConnector:
                     raise ValueError('云端设备认证或协议不匹配')
                 with self.lock:self.connected=True;self.error=None
                 delay=1
-                self.session(ws,config,cancel)
+                self.session(ws,config,cancel,connection_cancel)
             except (OSError,EOFError,ValueError,TypeError,KeyError,BridgeError,IPCError,subprocess.SubprocessError) as exc:
                 with self.lock:self.error='云端连接中断或协议校验失败：'+type(exc).__name__
             finally:
+                with self.bridge.lock:connection_cancel.set()
                 with self.lock:self.connected=False;self.ws=None
                 if ws:
                     try:close(ws)

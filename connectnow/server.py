@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
+            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -115,7 +115,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.server.cloud.status())
                 return
             if path == '/api/cloud/control' and method == 'POST':
-                self.reply(200,self.server.cloud.set_control(data.get('control')));return
+                self.reply(200,self.server.cloud.set_control(data.get('control'),data.get('id')));return
             if path == '/api/cloud/link/start' and method == 'POST':
                 self.reply(200,self.server.local_link.start(data.get('url'),data.get('control',False)));return
             if path == '/api/cloud/link/poll' and method == 'POST':
@@ -155,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(port, codex_home, directory):
-    from .cloud import CloudConnector
+    from .cloud_manager import CloudManager
     import fcntl
     import uuid
     from .paths import private_dir
@@ -184,9 +184,12 @@ def run(port, codex_home, directory):
                            'version':__version__, 'codexHome':str(codex_home)}
     from .standby import RemoteStandby
     server.standby = RemoteStandby(directory)
-    server.cloud = CloudConnector(bridge, directory)
+    bridge.standby=server.standby
+    from .workspace import Workspace
+    bridge.workspace=Workspace(bridge)
+    server.cloud = CloudManager(bridge, directory)
     from .pairing import LocalLink
-    server.local_link = LocalLink(server.cloud, bridge)
+    server.local_link = LocalLink(server.cloud, bridge, background=True)
     save_json(directory/'service.json', server.service_info)
     print(f"ConnectNow ready: http://127.0.0.1:{server.server_port}/", flush=True)
 
@@ -195,11 +198,14 @@ def run(port, codex_home, directory):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        bridge.workspace.start()
         server.standby.start()
         server.cloud.start()
         server.serve_forever()
     finally:
+        bridge.workspace.close()
         server.standby.close()
+        server.local_link.close()
         server.cloud.stop()
         bridge.disable()
         if bridge.realtime:

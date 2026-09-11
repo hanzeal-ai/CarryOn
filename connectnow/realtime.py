@@ -42,6 +42,7 @@ class Realtime:
                     if selection['threadId']:
                         desired.add(selection['threadId'])
                     desired.update(session.side_ids)
+                if hasattr(self.bridge,'workspace'):desired.update(self.bridge.workspace.thread_ids())
                 desired.update(j['threadId'] for j in self.bridge.journal.list()[:100]
                                if j['state'] in ('accepted', 'uncertain') and j.get('turnId'))
             for tid, source in list(self.watched.items()):
@@ -81,6 +82,7 @@ class Realtime:
                 self.sync_watches()
                 with self.bridge.lock:
                     ids = {tid for s in self.sessions for tid in s.selection['threadIds']}
+                    if hasattr(self.bridge,'workspace'):ids.update(self.bridge.workspace.thread_ids())
                 list(pool.map(self._load, ids))
 
     def _reconcile(self):
@@ -165,6 +167,7 @@ class Subscription:
                   'subscription': selection['subscription']}
         if ipc:
             self.owner.sync_watches()
+            if hasattr(self.bridge,'workspace'):packet['workspaceRevision']=self.bridge.workspace.revision
             packet['jobs'] = self.bridge.journal.list()[:100]
             with self.bridge.lock:
                 missing = dict(self.owner.unavailable)
@@ -193,6 +196,7 @@ class Subscription:
                         self.owner.sync_watches()
             if target:
                 try:
+                    if hasattr(self.bridge,'workspace'):packet['readSequence']=self.bridge.workspace.latest_sequence(target)
                     history = self.bridge.history(target)
                     packet['history'] = {k: v for k, v in history.items() if k != 'turns'}
                 except (ValueError, IPCError) as exc:

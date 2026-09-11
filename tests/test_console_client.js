@@ -37,3 +37,13 @@ test('old device responses are rejected after switching',async()=>{
  const result=client.request('/status');client.epoch++;client.device='two';release(ok({enabled:true}));
  await assert.rejects(result,/设备已改变/);
 });
+
+test('device-list refresh preserves in-flight request maps for the same device',async()=>{
+ const {client}=fixture(async()=>ok({devices:[{id:'one',name:'Laptop',online:true}]}));
+ client.device='one';client.setStorage();
+ const pending=client.pending,operations=client.operations;
+ pending.set('test','request-before-refresh');
+ await client.initialize();
+ assert.equal(client.pending,pending);assert.equal(client.operations,operations);
+ assert.equal(client.pending.get('test'),'request-before-refresh');
+});

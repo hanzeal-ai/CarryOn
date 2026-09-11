@@ -4,33 +4,37 @@ const CloudSettings = (() => {
   let api,notice,linkTimer;
   async function refresh(){
     const s=await api('/cloud');
-    box('cloud-permission').hidden=!s.enabled;box('cloud-current-control').checked=s.control===true;
-    box('cloud-state').textContent=!s.enabled?'未绑定云端':(s.connected?'已连接':'等待连接')+' · '+s.deviceId+' · '+(s.control?'允许远程控制':'只读')+(s.error?' · '+s.error:'');
+    const list=box('cloud-bindings');list.replaceChildren();
+    box('cloud-state').textContent=s.bindings.length?'已绑定 '+s.bindings.length+' 个云端':'未绑定云端';
+    for(const binding of s.bindings){
+      const row=document.createElement('section'),title=document.createElement('p'),label=document.createElement('label');
+      title.textContent=binding.url+' · '+(binding.connected?'已连接':'等待连接')+(binding.error?' · '+binding.error:'');
+      const permission=document.createElement('input');permission.type='checkbox';permission.checked=binding.control===true;
+      label.append(permission,document.createTextNode('允许此云端远程控制'));
+      const save=document.createElement('button');save.type='button';save.textContent='保存权限';
+      save.onclick=async()=>{save.disabled=true;try{await api('/cloud/control',{id:binding.id,control:permission.checked});await refresh();notice('权限已保存');}catch(e){notice(e.message);}finally{save.disabled=false;}};
+      const remove=document.createElement('button');remove.type='button';remove.textContent='解除绑定';
+      remove.onclick=async()=>{remove.disabled=true;try{await api('/cloud',{id:binding.id,enabled:false});await refresh();box('cloud-link-status').textContent='';notice('已解除此云端绑定');}catch(e){notice(e.message);}finally{remove.disabled=false;}};
+      row.append(title,label,save,remove);list.append(row);
+    }
   }
   function init(transport,notify){
     api=transport;notice=notify;
     refresh().catch(()=>{box('cloud-state').textContent='请先完成本机配对';});
-    box('cloud-save-control').onclick=async()=>{
-      box('cloud-save-control').disabled=true;
-      try{await api('/cloud/control',{control:box('cloud-current-control').checked});await refresh();notice('远程控制权限已更新');}
-      catch(e){notice(e.message);}finally{box('cloud-save-control').disabled=false;}
-    };
     box('cloud-link-form').onsubmit=async event=>{
       event.preventDefault();clearTimeout(linkTimer);box('cloud-link-start').disabled=true;
-      const popup=window.open('about:blank','_blank');if(popup)popup.opener=null;
       try{
         const link=await api('/cloud/link/start',{url:box('cloud-link-url').value.trim(),control:box('cloud-link-control').checked});
-        box('cloud-link-status').textContent='确认码：'+link.verification+' · 请打开云端确认连接（5 分钟内有效）';
+        box('cloud-link-status').textContent='确认码：'+link.verification+' · 等待云端管理员确认连接（5 分钟内有效）';
         box('cloud-link-open').href=link.url;box('cloud-link-open').hidden=false;
-        if(popup)popup.location.href=link.url;
         const poll=async()=>{
           try{const result=await api('/cloud/link/poll',{id:link.id});
             if(result.pending){linkTimer=setTimeout(poll,2000);return;}
-            box('cloud-link-open').hidden=true;box('cloud-link-status').textContent='连接完成，桥接已开启';await refresh();
+            box('cloud-link-open').hidden=true;box('cloud-link-status').textContent=result.bridgeEnabled?'连接完成，桥接已开启':'绑定已保存，请打开 Codex 并开启桥接';await refresh();
           }catch(e){box('cloud-link-status').textContent=e.message;}
         };
         linkTimer=setTimeout(poll,2000);
-      }catch(e){if(popup)popup.close();notice(e.message);}finally{box('cloud-link-start').disabled=false;}
+      }catch(e){notice(e.message);}finally{box('cloud-link-start').disabled=false;}
     };
     box('cloud-pair-form').onsubmit=async event=>{
       event.preventDefault();box('cloud-pair-submit').disabled=true;
@@ -46,9 +50,6 @@ const CloudSettings = (() => {
           token:box('cloud-token').value.trim(),control:box('cloud-control').checked});
         box('cloud-token').value='';await refresh();notice('云端配置已保存；请在本机开启桥接后使用云端控制台。');
       }catch(e){notice(e.message);}finally{box('cloud-connect').disabled=false;}
-    };
-    box('cloud-disconnect').onclick=async()=>{
-      try{await api('/cloud',{enabled:false});await refresh();notice('已断开云端并清除设备凭证。');}catch(e){notice(e.message);}
     };
     box('service-stop').onclick=async()=>{
       if(!confirm('停止 ConnectNow 本地服务？已被 Codex 接收的任务会继续执行。'))return;

@@ -69,8 +69,8 @@ class ConnectNowClient {
       key=kind+':'+target+':images:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
-    return this.requestJob(kind === 'create' ? '/threads' : '/threads/' + target + '/messages',
-      {prompt,...(images.length?{images}:{})}, key, this.pending, 'connectnow-pending');
+    return this.requestJob(kind === 'create' ? '/threads' : '/threads/' + target + (kind==='compose'?'/compose':'/messages'),
+      {prompt,...(images.length?{images}:{})}, key, this.pending, 'connectnow-pending',kind==='compose');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {

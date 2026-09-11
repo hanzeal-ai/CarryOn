@@ -37,3 +37,12 @@ Check systemd active state and `https://HOST/connectnow/healthz`, matching the w
 Each successful deployment records `/opt/connectnow/previous`; releases and credentials are retained. To roll back, an authorized operator reads and verifies that path, switches `/opt/connectnow/current` atomically to it, restarts only `connectnow-gateway.service`, and checks the reported release. Do not re-run an old commit through the receiver: duplicate release directories are rejected to avoid ambiguous overwritten releases. Disable the workflow with `DEPLOY_ENABLED=false` to halt further deployments. On a failed first deployment, the receiver stops only ConnectNow and removes its current symlink; it does not delete credentials or releases. No database migration is required.
 
 GitHub workflows do not overwrite the receiver, sudoers, service unit or nginx configuration. Changes to these privileged files require separate operator installation after review. The repository contains no deployment private key, host gateway credentials or local runtime data.
+
+## Console device registry
+
+The multi-device console needs a persistent writable state directory for `devices.json`. Configure `--state-dir /var/lib/connectnow-console` and a service-owned `StateDirectory=connectnow-console` when switching to the console. Keep the gateway configuration read-only. Apply privileged service changes only through the separately authorized deployment workflow; changing source does not provision or restart the live service. See [multi-cloud bindings](../docs/MULTI_CLOUD.md) for migration, limits and rollback.
+
+
+When upgrading an existing console without `--state-dir`, deploy the reviewed wheel first, then back up the current drop-in and gateway configuration privately and install `console.service.conf`. Reload systemd and restart only ConnectNow. Verify the service user can write its StateDirectory and that the existing device identities remain unchanged. Never replace existing devices.json with a fresh registry.
+
+Rollback across this CLI change must restore the old drop-in before switching to the older release, since older versions do not accept `--state-dir`. Preserve the new state directory for recovery; older code does not consume its dynamic registrations. A rollback therefore temporarily makes newly registered devices unavailable and can restore original configuration entries previously revoked in the new registry; inspect identities and revocations before any rollback after user activity.

@@ -157,7 +157,7 @@ def permission_subset(granted, requested):
     return type(granted) is type(requested) and granted == requested
 
 
-def submit(bridge, thread_id, data):
+def submit(bridge, thread_id, data, source=None, authorize=None):
     from .errors import BridgeError
     from .catalog import valid_id
     valid_id(thread_id)
@@ -183,13 +183,14 @@ def submit(bridge, thread_id, data):
             raise BridgeError('此会话有正在投递或结果待确认的操作，请先核对')
         job = {'id': request_id, 'fingerprint': fingerprint, 'kind': 'operation:' + action,
                'threadId': thread_id, 'created': time.time(), 'state': 'preparing'}
+        if source:job.update(source)
         bridge.journal.insert(job)
     import threading
-    threading.Thread(target=dispatch, args=(bridge, ipc, generation, job, data), daemon=True).start()
+    threading.Thread(target=dispatch, args=(bridge, ipc, generation, job, data, authorize), daemon=True).start()
     return job
 
 
-def dispatch(bridge, ipc, generation, job, data):
+def dispatch(bridge, ipc, generation, job, data, authorize=None):
     sent = False
     try:
         owner, state = ipc.snapshot(job['threadId'])
@@ -200,6 +201,7 @@ def dispatch(bridge, ipc, generation, job, data):
             nonlocal sent
             with bridge.lock:
                 bridge.check_generation(ipc, generation)
+                if authorize:authorize()
                 # Recheck streamed state immediately before writing, when available.
                 current = ipc.current(job['threadId']) if hasattr(ipc, 'current') else None
                 if data['action'] in QUEUE_ACTIONS:

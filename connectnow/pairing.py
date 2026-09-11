@@ -37,9 +37,10 @@ def redeem(url,code,control=False,dev_local=False):
 
 class LocalLink:
     """One in-flight authorization per local service; binding stays server-side."""
-    def __init__(self, cloud, bridge):
+    def __init__(self, cloud, bridge, background=False):
         import threading
         self.lock=threading.Lock();self.pending=None;self.cloud=cloud;self.bridge=bridge
+        self.background=background;self.closed=threading.Event();self.completed={};self.workers=[]
 
     @staticmethod
     def request(url, action, body):
@@ -58,10 +59,16 @@ class LocalLink:
         import time
         if not isinstance(url,str) or type(control) is not bool:raise ValueError('连接参数无效')
         with self.lock:
-            result=self.request(url,'start',{})
+            if hasattr(self.cloud,'check_available'):self.cloud.check_available('wss'+url.rstrip('/')[5:]+'/device')
+            import socket
+            result=self.request(url,'start',{'name':socket.gethostname()[:100]})
             if not all(isinstance(result.get(k),str) and 6<=len(result[k])<=200 for k in ('id','secret','verification')):
                 raise ValueError('云端连接响应无效')
             self.pending={**result,'url':url.rstrip('/'),'control':control,'expires':time.monotonic()+300}
+            if self.background:
+                import threading
+                worker=threading.Thread(target=self._wait,args=(result['id'],),daemon=True)
+                self.workers=[w for w in self.workers if w.is_alive()]+[worker];worker.start()
             from urllib.parse import quote
             return {'id':result['id'],'verification':result['verification'],
                     'url':url.rstrip('/')+'/#connect='+quote(result['id'],safe='')}
@@ -69,6 +76,7 @@ class LocalLink:
     def poll(self, key):
         import time
         with self.lock:
+            if key in self.completed:return self.completed[key]
             p=self.pending
             if p is None or key!=p['id'] or time.monotonic()>=p['expires']:raise ValueError('连接请求已过期或已替换')
             data=self.request(p['url'],'poll',{'id':p['id'],'secret':p['secret']})
@@ -76,6 +84,24 @@ class LocalLink:
             config={'enabled':True,'url':'wss'+p['url'][5:]+'/device','deviceId':data.get('deviceId'),
                     'token':data.get('token'),'control':p['control']}
             self.cloud.validate(config)
+            result=self.cloud.configure(config)
             self.pending=None
-            result=self.cloud.configure(config);self.bridge.enable()
-            return {'pending':False,'cloud':result}
+            from .errors import BridgeError
+            from .ipc import IPCError
+            try:
+                self.bridge.enable();bridge_enabled=True
+            except (BridgeError,IPCError,OSError,ValueError):bridge_enabled=False
+            result={'pending':False,'cloud':result,'bridgeEnabled':bridge_enabled}
+            if self.background:self.completed={key:result}
+            return result
+
+    def _wait(self,key):
+        while not self.closed.wait(2):
+            try:
+                if not self.poll(key)['pending']:return
+            except (ValueError,PermissionError):return
+            except (OSError,EOFError):continue
+
+    def close(self):
+        self.closed.set()
+        for worker in self.workers:worker.join(20)

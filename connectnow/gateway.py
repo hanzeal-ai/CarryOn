@@ -185,6 +185,9 @@ class Handler(BaseHTTPRequestHandler):
             ws.MAX_MESSAGE=32*1024*1024
             device=Device(ws)
             with self.server.lock:
+                current=self.server.config['devices'].get(device_id)
+                if current is None or not hmac.compare_digest(hello['token'],current['deviceToken']):
+                    ws.send({'type':'rejected'});return
                 if device_id in self.server.devices:
                     ws.send({'type':'rejected','error':'设备已有连接'});return
                 self.server.devices[device_id]=device

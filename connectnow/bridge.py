@@ -275,7 +275,36 @@ class Bridge:
         if not self.enabled or self.ipc is not ipc or self.generation != generation:
             raise BridgeError("桥接已取消，此请求未获准继续", 403)
 
-    def submit(self, kind, request_id, prompt, thread_id=None, images=None):
+    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None):
+        from .contracts import digest
+        from .operations import controls,submit as operate
+        from .images import validate_images
+        images=validate_images(images)
+        if not isinstance(prompt,str):raise ValueError('消息必须是文本')
+        if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_id):raise ValueError('requestId 无效')
+        valid_id(thread_id)
+        fingerprint=digest([thread_id,prompt,images])
+        ipc,generation=self.require()
+        previous=self.journal.get(request_id)
+        if previous:
+            if previous.get('composeFingerprint')!=fingerprint:raise BridgeError('requestId 已用于不同内容')
+            return previous
+        _,state=ipc.snapshot(thread_id)
+        with self.lock:
+            self.check_generation(ipc,generation)
+            if authorize:authorize()
+            status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
+            if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize)
+            if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
+            if images:raise ValueError('运行中补充和等待队列暂不支持图片，请保留草稿并在空闲后发送')
+            data={'requestId':request_id,'prompt':prompt}
+            if status=='waiting':
+                data.update(action='queue-add',queueFingerprint=self.queue(thread_id)['fingerprint'])
+            else:
+                data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
+            return operate(self,thread_id,data,metadata,authorize)
+
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None):
         from .images import validate_images
         images=validate_images(images)
         if images and kind!="message":raise ValueError("请先创建会话，再发送图片")
@@ -303,13 +332,14 @@ class Bridge:
             job = {"id": request_id, "kind": kind, "threadId": thread_id,
                    "state": "preparing", "created": time.time(), "fingerprint": fingerprint,
                    "clientMessageId": str(uuid.uuid4())}
+            if source:job.update(source)
             if kind == "create":
                 job["expectedTitle"] = "ConnectNow · " + prompt[:28] + " [" + request_id[:8] + "]"
             self.journal.insert(job)
-        threading.Thread(target=self._dispatch, args=(job, prompt, ipc, generation, images), daemon=True).start()
+        threading.Thread(target=self._dispatch, args=(job, prompt, ipc, generation, images, authorize), daemon=True).start()
         return job
 
-    def _dispatch(self, job, prompt, ipc, generation, images=None):
+    def _dispatch(self, job, prompt, ipc, generation, images=None, authorize=None):
         dispatched = False
         try:
             owner, state = ipc.snapshot(job["threadId"])
@@ -329,6 +359,7 @@ class Bridge:
                 nonlocal dispatched
                 with self.lock:
                     self.check_generation(ipc, generation)
+                    if authorize:authorize()
                     self.journal.update(job["id"], state="dispatching")
                     dispatched = True
                     write()

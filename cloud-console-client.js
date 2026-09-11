@@ -27,7 +27,7 @@ class CloudConsoleClient extends ConnectNowClient {
       const session=await this.consoleRequest('session');
       this.token='session';
       const picker=document.getElementById('console-device');
-      picker.replaceChildren(...session.devices.map(d=>new Option(d.id+(d.online?' · 在线':' · 离线'),d.id)));
+      picker.replaceChildren(...session.devices.map(d=>new Option((d.name||d.id)+(d.online?' · 在线':' · 离线'),d.id)));
       if(!session.devices.some(d=>d.id===this.device))this.device=session.devices[0]?.id||'';
       picker.value=this.device;this.setStorage();
       return session;
@@ -35,7 +35,9 @@ class CloudConsoleClient extends ConnectNowClient {
   }
   setStorage() {
     sessionStorage.setItem('connectnow-cloud-device',this.device);
-    this.storageScope='connectnow-cloud:'+this.base.href+':'+this.device+':';
+    const scope='connectnow-cloud:'+this.base.href+':'+this.device+':';
+    if(this.storageScope===scope)return;
+    this.storageScope=scope;
     this.pending=this.restore(this.storageScope+'pending');
     this.operations=this.restore(this.storageScope+'operations');
   }

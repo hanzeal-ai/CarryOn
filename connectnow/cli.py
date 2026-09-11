@@ -106,6 +106,7 @@ def main(argv=None):
             p.add_argument('action', choices=['connect','pair','disconnect','status'])
             p.add_argument('--url')
             p.add_argument('--device-id')
+            p.add_argument('--binding-id',help='要断开的云端绑定 ID；多个绑定时必填')
             p.add_argument('--token-file', type=Path)
             p.add_argument('--allow-control', action='store_true', help='授权此网关投递、编辑、设置与审批等会话操作')
             p.add_argument('--dev-local', action='store_true', help='仅用于本机 ws:// 网关测试')
@@ -133,7 +134,7 @@ def main(argv=None):
             print('ConnectNow 已停止；Codex 已接收的任务不会被撤销。');return 0
         if args.command == 'cloud':
             if args.action=='status': result=call(args.state_dir,'/cloud')
-            elif args.action=='disconnect':result=call(args.state_dir,'/cloud',{'enabled':False})
+            elif args.action=='disconnect':result=call(args.state_dir,'/cloud',{'enabled':False,'id':args.binding_id})
             elif args.action=='pair':
                 from .pairing import redeem
                 code=args.token_file.read_text().strip() if args.token_file else getpass.getpass('一次性配对码（不回显）：')

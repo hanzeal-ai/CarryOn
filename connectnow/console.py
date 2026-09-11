@@ -30,7 +30,7 @@ def public_url(value):
 
 class ConsoleServer(Gateway):
     """Embeddable transport host; replace console auth with your account backend."""
-    def __init__(self,address,config):
+    def __init__(self,address,config,state_dir=None):
         self.public_url=public_url(config['publicUrl'])
         if not isinstance(config.get('consoleToken'),str) or len(config['consoleToken'])<32:
             raise ValueError('需要独立的 consoleToken（至少32字符）')
@@ -40,7 +40,51 @@ class ConsoleServer(Gateway):
         from .linking import LinkRequests
         self.links=LinkRequests()
         self.sessions={};self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
+        import copy
+        config=copy.deepcopy(config)
+        self.registry_path=Path(state_dir)/'devices.json' if state_dir is not None else None
+        if self.registry_path and self.registry_path.exists():
+            records=json.loads(self.registry_path.read_text())
+            if not isinstance(records,dict):raise ValueError('设备登记文件无效')
+            for device,record in records.items():
+                if not ID.fullmatch(device) or not isinstance(record,dict) or any(not isinstance(record.get(k),str) or len(record[k])<32 for k in ('deviceToken','apiToken')):raise ValueError('设备登记文件无效')
+            config['devices']=records
         super().__init__(address,config,ConsoleHandler)
+
+    def save_devices(self,records):
+        if self.registry_path:save_json(self.registry_path,records)
+        self.config['devices']=records
+
+    def approve_link(self,key,device=None):
+        with self.links.lock, self.lock:
+            entry=self.links.get(key)
+            if entry['rejected']:raise ValueError('连接申请已拒绝')
+            if entry['name'] is None:
+                if not isinstance(device,str) or device not in self.config['devices']:raise PermissionError('设备未授权')
+                self.links.approve(key,device)
+                return device
+            if entry['device'] is not None:return entry['device']
+            if len(self.config['devices'])>=256:raise ValueError('最多登记 256 台设备')
+            device=secrets.token_hex(16)
+            record={'name':entry['name'],'deviceToken':secrets.token_urlsafe(32),'apiToken':secrets.token_urlsafe(32)}
+            self.save_devices({**self.config['devices'],device:record})
+            self.links.approve(key,device)
+            return device
+
+    def revoke_device(self,device):
+        import socket
+        with self.lock:
+            if device not in self.config['devices']:raise ValueError('设备不存在')
+            self.save_devices({k:v for k,v in self.config['devices'].items() if k!=device})
+            connection=self.devices.pop(device,None)
+            if connection:
+                connection.close()
+                try:connection.ws.handler.connection.shutdown(socket.SHUT_RDWR)
+                except (AttributeError,OSError):pass
+        with self.auth_lock:
+            streams=[sid for sid,e in self.console_streams.items() if e['device']==device]
+            self.codes={k:v for k,v in self.codes.items() if v[0]!=device}
+        for sid in streams:self.release_stream(sid)
 
     def prune(self):
         now=time.monotonic()
@@ -104,7 +148,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'example.html','style.css','app.js','client.js','cloud-ui.js',
+        allowed={'example.html','style.css','app.js','notification-client.js','client.js','cloud-ui.js',
                  'standby-ui.js','cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
         if name not in allowed:return False
         payload=b'window.CONNECTNOW_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
@@ -144,7 +188,7 @@ class ConsoleHandler(Handler):
                 if self.headers.get('Origin'):raise PermissionError('请在本机发起连接')
                 data=self.body()
                 if path.endswith('/start'):
-                    self.reply(200,self.server.links.start());return
+                    self.reply(200,self.server.links.start(data.get('name')));return
                 device=self.server.links.poll(data.get('id'),data.get('secret'))
                 self.reply(200,{'pending':True} if device is None else {'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
             self.check_origin(method)
@@ -167,10 +211,13 @@ class ConsoleHandler(Handler):
                     self.reply(200,{'verification':entry['verification']})
                 return
             if path=='/console/link/approve' and method=='POST':
-                data=self.body();device=data.get('deviceId')
-                if not isinstance(device,str) or device not in self.server.config['devices']:raise PermissionError('设备未授权')
-                self.server.links.approve(data.get('id'),device)
-                self.reply(200,{'approved':True});return
+                data=self.body()
+                device=self.server.approve_link(data.get('id'),data.get('deviceId'))
+                self.reply(200,{'approved':True,'deviceId':device});return
+            if path=='/console/link/pending' and method=='GET':
+                self.reply(200,{'requests':self.server.links.pending()});return
+            if path=='/console/link/reject' and method=='POST':
+                self.server.links.reject(self.body().get('id'));self.reply(200,{'rejected':True});return
             if path=='/console/logout' and method=='POST':
                 with self.server.auth_lock:
                     self.server.sessions.pop(key,None)
@@ -180,7 +227,7 @@ class ConsoleHandler(Handler):
                 self.reply(200,{'authenticated':False});return
             if path=='/console/session' and method=='GET':
                 with self.server.lock:
-                    devices=[{'id':d,'online':d in self.server.devices and not self.server.devices[d].closed} for d in self.server.config['devices']]
+                    devices=[{'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed} for d in self.server.config['devices']]
                 self.reply(200,{'devices':devices,'publicUrl':self.server.public_url});return
             if path=='/console/pairing' and method=='POST':
                 device=self.body().get('deviceId')
@@ -195,6 +242,8 @@ class ConsoleHandler(Handler):
                 parts=path.split('/')
                 if len(parts)<4 or not ID.fullmatch(parts[3]) or parts[3] not in self.server.config['devices']:
                     raise PermissionError('设备未授权')
+                if len(parts)==4 and method=='DELETE':
+                    self.server.revoke_device(parts[3]);self.reply(200,{'removed':True,'notice':'设备凭证已撤销；在途请求可能已执行，请在本机核对，勿自动重发'});return
                 if len(parts)==5 and parts[4]=='streams' and method=='POST':self.stream_context=(parts[3],key)
                 if len(parts)==6 and parts[4]=='streams':
                     with self.server.auth_lock:
@@ -225,18 +274,21 @@ def main():
     parser.add_argument('action',choices=['configure','serve'])
     parser.add_argument('--config',type=Path,required=True)
     parser.add_argument('--public-url')
+    parser.add_argument('--state-dir',type=Path,help='可写的设备登记目录，默认配置目录下 console-state')
     parser.add_argument('--port',type=int,default=8780)
-    args=parser.parse_args();config=json.loads(args.config.read_text())
+    args=parser.parse_args()
+    config=json.loads(args.config.read_text()) if args.config.exists() else {'devices':{}}
+    if args.action=='serve' and not args.config.exists():parser.error('请先运行 configure 创建控制台配置')
     if args.action=='configure':
         if not args.public_url:parser.error('需要 --public-url')
         config['publicUrl']=public_url(args.public_url)
         if 'consoleToken' not in config:config['consoleToken']=secrets.token_urlsafe(32)
-        metadata=args.config.stat()
-        if os.geteuid() not in (0,metadata.st_uid):raise ValueError('请以配置文件所有者身份运行 configure')
+        metadata=args.config.stat() if args.config.exists() else None
+        if metadata and os.geteuid() not in (0,metadata.st_uid):raise ValueError('请以配置文件所有者身份运行 configure')
         save_json(args.config,config)
-        if os.geteuid()==0:os.chown(args.config,metadata.st_uid,metadata.st_gid)
+        if metadata and os.geteuid()==0:os.chown(args.config,metadata.st_uid,metadata.st_gid)
         print('云端控制台已配置；consoleToken 保存在配置文件中，不在终端输出。');return
-    server=ConsoleServer(('127.0.0.1',args.port),config)
+    server=ConsoleServer(('127.0.0.1',args.port),config,args.state_dir or args.config.parent/'console-state')
     print('ConnectNow example console: '+server.public_url+'/',flush=True)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
