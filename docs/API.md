@@ -308,3 +308,9 @@ example 支持选择或粘贴图片、预览与移除，浏览器将图片转成
 `GET /api/threads/{id}/images/{imageId}`（临时会话对应 `/api/side-chats/{id}/images/{imageId}?parentId=...`）返回 `{url: "data:image/..."}`。
 接口沿用会话读取认证、桥接开关和云端只读权限，只解析该会话原生用户消息中的图片附件，不接受任意文件路径。
 本地图片读取限普通文件、8 MB 以内的 PNG/JPEG/WebP/GIF，拒绝符号链接；文件已删除或不可读时页面明确提示，不展示 Base64 或以路径代替图片。图片按可见区域加载，不写入浏览器持久存储。
+
+## 本机配置入口
+
+本机配置由 CLI 和桌面端共享。`POST /api/bridge`、`/api/controller`、`/api/cloud*`、`/api/service*`、`/api/notifications/preferences` 拒绝包含 Origin 或 Sec-Fetch-* 浏览器标记的请求，即使本机 Bearer Token 有效。网页保留会话交互与读取；云端不能选择本机控制会话。
+
+`GET /api/cloud/link/status` 返回当前服务最新申请的安全投影（idle/pending/bound/expired/failed），包含核对码和状态但不含领取秘密或设备 Token。此接口不触发新申请或凭证领取；后台绑定流程仍为唯一执行者。

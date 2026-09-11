@@ -29,7 +29,7 @@ python3 -m connectnow cloud connect \
 python3 -m connectnow cloud status
 ```
 
-然后在本地页面「开启桥接」。默认云端只读。如确实需要投递、编辑、设置或审批，重新执行 connect 时加入 `--allow-control`，或在本地页面勾选允许远程控制。授权意味着你信任该网关及其账号后端执行这些能力。
+然后执行 `connectnow bridge on`。默认云端只读。修改已有绑定权限使用 `connectnow cloud control --binding-id 绑定ID --allow-control` 或 `--read-only`，也可在桌面端操作。不要重复 connect 来更改权限；同一云端不允许重复绑定。
 
 断开与清除设备凭证：`connectnow cloud disconnect`。仅取消桥接也会拒绝云端任务操作；云端没有重新开启桥接、绑定网关或停止本地服务的权限。
 
@@ -41,7 +41,7 @@ python3 -m connectnow cloud status
 connectnow cloud connect --url wss://你的网关域名/device --device-id my-mac --token-file /本机/device-token.txt
 ```
 
-也可在本地控制台的「云端接入与本地服务」中填写地址、设备 ID 和设备 Token，无需终端。页面不支持明文公网地址。设备会自动重连，但不会自动重发任务或恢复旧的云端订阅。
+独立网关的已有设备凭证通过 CLI 配置；桌面端使用控制台 HTTPS 地址发起连接申请。设备会自动重连，但不会自动重发任务或恢复旧的云端订阅。
 
 参考 Nginx 配置（证书、进程管理与域名由部署方配置）：
 

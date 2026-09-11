@@ -54,6 +54,22 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(self.call('GET','/console/devices/not-owned')[0],403)
         old=self.cookie;self.assertEqual(self.call('POST','/console/logout',{})[0],200)
         self.cookie=old;self.assertEqual(self.call('GET','/console/session')[0],401)
+    def test_link_history_auth_and_clear_preserves_devices_and_pending(self):
+        self.assertEqual(self.call('DELETE','/console/link/history')[0],401)
+        self.login()
+        done=self.server.links.start('Done');pending=self.server.links.start('Pending')
+        self.server.links.reject(done['id'])
+        body=self.call('GET','/console/link/pending')[1]
+        self.assertEqual(body['history'][0]['result'],'rejected')
+        self.assertNotIn('secret',json.dumps(body))
+        self.assertEqual(self.call('DELETE','/console/link/history',origin='https://evil.test')[0],403)
+        devices=dict(self.server.config['devices'])
+        self.assertEqual(self.call('DELETE','/console/link/history')[0],200)
+        body=self.call('GET','/console/link/pending')[1]
+        self.assertEqual(body['history'],[])
+        self.assertEqual(body['requests'][0]['id'],pending['id'])
+        self.assertEqual(self.server.config['devices'],devices)
+
     def test_pairing_once_and_end_to_end_read_only(self):
         self.login();code=self.call('POST','/console/pairing',{'deviceId':'my-mac'})[1]['code']
         config=redeem(self.url,code,dev_local=True)

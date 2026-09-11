@@ -72,5 +72,16 @@ class HTTPTests(unittest.TestCase):
             response=conn.getresponse();response.read();conn.close()
             self.assertEqual(response.status,expected)
 
+    def test_browser_cannot_mutate_local_settings_even_with_valid_token(self):
+        for path in ['/api/bridge','/api/controller','/api/service/stop','/api/service/standby',
+                     '/api/notifications/preferences','/api/cloud','/api/cloud/control','/api/cloud/link/start','/api/cloud/link/poll','/api/cloud/pair']:
+            for browser in [{'Origin':f'http://127.0.0.1:{self.port}'},{'Sec-Fetch-Site':'same-origin'}, {'Sec-Fetch-Mode':'cors'}]:
+                with self.subTest(path=path,browser=browser):
+                    conn=http.client.HTTPConnection('127.0.0.1',self.port)
+                    conn.request('POST',path,'{}',{'Authorization':'Bearer '+self.server.token,'Content-Type':'application/json',**browser})
+                    response=conn.getresponse();body=response.read();conn.close()
+                    self.assertEqual(response.status,403)
+                    self.assertIn('CLI',body.decode())
+
 
 if __name__=='__main__':unittest.main()

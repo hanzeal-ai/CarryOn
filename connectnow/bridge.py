@@ -109,11 +109,27 @@ class Bridge:
             self.event_revision += 1
             self.events.notify_all()
 
+    def native_read(self, ipc, tid):
+        with self.lock:
+            if not self.enabled or self.ipc is not ipc or not ipc.connected:
+                return
+            workspace = getattr(self, 'workspace', None)
+            if workspace is None or tid not in workspace.thread_ids():
+                return
+            # Project already received native completion before advancing the cursor.
+            # Do not request IPC history here: this callback runs on its reader thread.
+            state = ipc.current(tid)
+            if state is not None:
+                workspace.observe(state)
+            workspace.read('native:codex', tid, workspace.latest_sequence(tid))
+
     def status(self):
+        import socket
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
                     "controllerId": self.controller, "protocol": "codex-desktop-ipc",
-                    "testedDesktopVersion": "26.901.51231"}
+                    "testedDesktopVersion": "26.901.51231",
+                    "deviceInfo": {"hostname": socket.gethostname(), **getattr(self, "listener_info", {})}}
 
     def enable(self):
         with self.lock:
@@ -125,6 +141,7 @@ class Bridge:
             except (OSError, IPCError) as exc:
                 raise BridgeError("无法连接 Codex App，请确认应用已启动：" + str(exc), 503) from exc
             ipc.on_change = self.notify
+            ipc.on_read = lambda tid: self.native_read(ipc, tid)
             self.ipc = ipc
             self.enabled = True
             self.generation += 1
@@ -231,6 +248,15 @@ class Bridge:
         ipc, generation = self.require()
         history = self.side_history(parent_id, thread_id) if parent_id is not None else self.history(thread_id)
         result = read_history_image(history, identifier)
+        with self.lock:
+            self.check_generation(ipc, generation)
+        return result
+
+    def artifact(self, thread_id, identifier, parent_id=None):
+        from .artifacts import read_artifact
+        ipc, generation = self.require()
+        history = self.side_history(parent_id, thread_id) if parent_id is not None else self.history(thread_id)
+        result = read_artifact(history, identifier)
         with self.lock:
             self.check_generation(ipc, generation)
         return result

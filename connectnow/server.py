@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
+            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -98,6 +98,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.stream_slots.release()
                 return
             self.auth()
+            if method=='POST' and (path.startswith('/api/cloud') or path.startswith('/api/service') or path in ('/api/bridge','/api/controller','/api/notifications/preferences')):
+                if self.headers.get('Origin') is not None or any(key.lower().startswith('sec-fetch-') for key in self.headers):
+                    raise BridgeError('本机配置仅支持 CLI 或桌面端',403)
             bridge = self.server.bridge
             data = self.body() if method == "POST" else {}
             if path == '/api/service' and method == 'GET':
@@ -116,6 +119,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/api/cloud/control' and method == 'POST':
                 self.reply(200,self.server.cloud.set_control(data.get('control'),data.get('id')));return
+            if path == '/api/cloud/link/status' and method == 'GET':
+                self.reply(200,self.server.local_link.status());return
             if path == '/api/cloud/link/start' and method == 'POST':
                 self.reply(200,self.server.local_link.start(data.get('url'),data.get('control',False)));return
             if path == '/api/cloud/link/poll' and method == 'POST':
@@ -178,6 +183,7 @@ def run(port, codex_home, directory):
     journal = Journal(directory / 'jobs.sqlite')
     bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
     server = Server(('127.0.0.1', port), Handler)
+    bridge.listener_info = {"listenHost": server.server_address[0], "port": server.server_port}
     server.bridge, server.token = bridge, token
     server.allowed_hosts = {f'127.0.0.1:{server.server_port}', f'localhost:{server.server_port}'}
     server.service_info = {'instanceId':str(uuid.uuid4()), 'pid':os.getpid(), 'port':server.server_port,
@@ -198,6 +204,8 @@ def run(port, codex_home, directory):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        from .services import register
+        register(directory,port=server.server_port,codex_home=codex_home)
         bridge.workspace.start()
         server.standby.start()
         server.cloud.start()

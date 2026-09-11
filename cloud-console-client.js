@@ -59,41 +59,55 @@ class CloudConsoleClient extends ConnectNowClient {
       this.storageScope+(storageKey==='connectnow-pending'?'pending':'operations'),retainUncertain);
   }
   subscribe(selection) {
+    const key=JSON.stringify([this.epoch,this.device,selection.threadId??null,
+      [...new Set(selection.threadIds||[])].sort(),selection.includeSideChats===true,selection.sideThreadId??null]);
+    if(this.selection && this.selectionKey===key){
+      this.connect();return this.selection.subscription;
+    }
     this.close();
+    this.selectionKey=key;
     this.selection={...selection,subscription:crypto.randomUUID()};
     this.connect();return this.selection.subscription;
   }
   connect() {
-    if(!this.token||!this.device||this.active)return;
+    if(this.removing||!this.token||!this.device||this.active)return;
     if(!this.selection)this.selection={threadId:null,threadIds:[],subscription:crypto.randomUUID()};
     this.active=true;
-    const generation=++this.loop, selection=this.selection,device=this.device;
+    const generation=++this.loop,selection=this.selection;
     const current=()=>this.loop===generation;
-    const route='devices/'+encodeURIComponent(device)+'/streams';
-    const run=async()=>{
-      let sid;
-      try {
-        const status=await this.request('/status');
+    const url=new URL('console/devices/'+encodeURIComponent(this.device)+'/ws',this.base);
+    url.protocol=url.protocol==='https:'?'wss:':'ws:';
+    const socket=new WebSocket(url);this.socket=socket;
+    let revision=0,chain=Promise.resolve();
+    const heartbeat=()=>{clearTimeout(this.heartbeatTimer);this.heartbeatTimer=setTimeout(()=>{if(current())socket.close();},45000);};
+    socket.onopen=()=>{if(current()){heartbeat();socket.send(JSON.stringify({type:'subscribe',...selection}));}else socket.close();};
+    socket.onmessage=event=>{
+      if(!current())return;heartbeat();
+      chain=chain.then(async()=>{
         if(!current())return;
-        await this.onUpdate({type:'update',status,subscription:selection.subscription,threadId:selection.threadId},current);
-        if(!current()||!status.enabled)return;
-        const created=await this.consoleRequest(route,selection);sid=created.streamId;
-        let revision=-1;
-        while(current()){
-          const packet=await this.consoleRequest(route+'/'+sid+'?after='+revision);
-          if(!current())break;
-          if(packet.body&&packet.revision>revision){
-            await this.onUpdate({...packet.body,subscription:selection.subscription},current);
-          }
-          revision=packet.revision;
+        const packet=JSON.parse(event.data);
+        if(packet.type==='ping'){socket.send(JSON.stringify({type:'pong'}));return;}
+        if(packet.type==='error'){
+          if(packet.status===401){this.token='';this.close();this.onAuthError();return;}
+          throw Error(packet.error||'实时订阅失败');
         }
-      } catch(error){if(current()){this.onDisconnect({});this.onError(error);}}
-      finally {
-        if(sid)await this.consoleRequest(route+'/'+sid,undefined,'DELETE').catch(()=>{});
-        if(current()){this.active=false;this.timer=setTimeout(()=>this.connect(),2000);}
-      }
+        if(packet.type!=='update'||packet.subscription!==selection.subscription||!Number.isInteger(packet.revision)||packet.revision<=revision)return;
+        if(!packet.body||packet.body.type!=='update')throw Error('实时更新格式无效');
+        revision=packet.revision;
+        await this.onUpdate({...packet.body,subscription:selection.subscription},current);
+      }).catch(error=>{if(current()){this.onError(error);socket.close();}});
     };
-    run();
+    socket.onclose=async()=>{
+      if(!current())return;
+      clearTimeout(this.heartbeatTimer);this.socket=null;this.active=false;this.onDisconnect({});
+      // Browsers do not expose HTTP handshake failures; distinguish expiry via HTTP.
+      try{await this.consoleRequest('session');}catch(error){if(!this.token||!current())return;}
+      if(current()&&this.token)this.timer=setTimeout(()=>this.connect(),2000);
+    };
+    socket.onerror=()=>{}; // onclose owns retry; never replay HTTP writes.
   }
-  close() {this.loop++;this.active=false;clearTimeout(this.timer);}
+  close() {
+    this.loop++;this.active=false;clearTimeout(this.timer);clearTimeout(this.heartbeatTimer);
+    const socket=this.socket;this.socket=null;if(socket)socket.close();
+  }
 }

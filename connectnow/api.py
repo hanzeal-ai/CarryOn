@@ -21,11 +21,11 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         if not hasattr(bridge,'workspace'):raise BridgeError('工作区功能尚未启用，请升级本机服务',503)
         return bridge.workspace.dispatch('local',method,path,data,parse_qs(parsed.query))
     if remote:
-        if path in ('/api/bridge', '/api/cloud', '/api/service') or path.startswith('/api/service/'):
+        if path in ('/api/bridge', '/api/cloud', '/api/service', '/api/controller') or path.startswith('/api/service/'):
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|images/[0-9a-f]{64})|side-chats/[^/]+/(history|images/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -61,10 +61,10 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "GET" and path.startswith('/api/side-chats/') and path.endswith('/history'):
         history = bridge.side_history(parse_qs(parsed.query).get('parentId', [''])[0], path.split('/')[3])
         respond(200, {k:v for k,v in history.items() if k != 'turns'})
-    elif method == 'GET' and '/images/' in path:
+    elif method == 'GET' and ('/images/' in path or '/artifacts/' in path):
         parts = path.split('/')
         parent = parse_qs(parsed.query).get('parentId', [''])[0] if parts[2] == 'side-chats' else None
-        respond(200, bridge.image(parts[3], parts[5], parent))
+        respond(200, (bridge.image if parts[4] == "images" else bridge.artifact)(parts[3], parts[5], parent))
     elif method == "GET" and path.startswith("/api/threads/") and path.endswith("/history"):
         history = bridge.history(path.split("/")[3])
         respond(200, {k: v for k, v in history.items() if k != "turns"})

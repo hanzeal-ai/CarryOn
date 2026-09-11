@@ -40,7 +40,7 @@ class LocalLink:
     def __init__(self, cloud, bridge, background=False):
         import threading
         self.lock=threading.Lock();self.pending=None;self.cloud=cloud;self.bridge=bridge
-        self.background=background;self.closed=threading.Event();self.completed={};self.workers=[]
+        self.background=background;self.closed=threading.Event();self.completed={};self.workers=[];self.failure=None
 
     @staticmethod
     def request(url, action, body):
@@ -53,7 +53,14 @@ class LocalLink:
         try:
             with opener.open(request,timeout=15) as response:return json.loads(response.read(16000))
         except urllib.error.HTTPError as exc:
-            exc.close();raise ValueError('云端连接授权失败或已过期，请重新发起连接') from None
+            status=exc.code
+            try:reason=json.loads(exc.read(16000)).get('error')
+            except (ValueError,AttributeError,OSError):reason=None
+            finally:exc.close()
+            if reason=='连接申请已拒绝':raise PermissionError(reason) from None
+            if reason=='连接请求不存在或已过期':raise ValueError(reason) from None
+            if status==403:raise PermissionError('云端拒绝了连接申请或申请凭证无效') from None
+            raise ValueError('云端连接授权失败或已过期，请重新发起连接') from None
 
     def start(self, url, control):
         import time
@@ -65,6 +72,7 @@ class LocalLink:
             if not all(isinstance(result.get(k),str) and 6<=len(result[k])<=200 for k in ('id','secret','verification')):
                 raise ValueError('云端连接响应无效')
             self.pending={**result,'url':url.rstrip('/'),'control':control,'expires':time.monotonic()+300}
+            self.failure=None;self.completed={}
             if self.background:
                 import threading
                 worker=threading.Thread(target=self._wait,args=(result['id'],),daemon=True)
@@ -99,8 +107,25 @@ class LocalLink:
         while not self.closed.wait(2):
             try:
                 if not self.poll(key)['pending']:return
-            except (ValueError,PermissionError):return
+            except (ValueError,PermissionError) as exc:
+                with self.lock:
+                    if self.pending and self.pending['id']==key and str(exc)!='连接请求已过期或已替换':
+                        self.failure=str(exc)
+                return
             except (OSError,EOFError):continue
+
+    def status(self):
+        import time
+        with self.lock:
+            if self.pending:
+                p=self.pending
+                state='failed' if self.failure else 'expired' if time.monotonic()>=p['expires'] else 'pending'
+                return {'state':state,'id':p['id'],'url':p['url'],'verification':p['verification'],
+                        'error':self.failure,'expiresIn':max(0,int(p['expires']-time.monotonic()))}
+            if self.completed:
+                key,result=next(iter(self.completed.items()))
+                return {'state':'bound','id':key,'bridgeEnabled':result['bridgeEnabled']}
+            return {'state':'idle'}
 
     def close(self):
         self.closed.set()

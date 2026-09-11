@@ -55,3 +55,21 @@ class CatalogTests(unittest.TestCase):
             for tid, cwd, _, expected in examples:
                 self.assertEqual(rows[tid]['projectless'], expected, tid)
                 self.assertEqual(rows[tid]['cwd'], cwd)
+
+    def test_worktree_and_subdirectory_share_saved_project_root(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp); home = base / 'home'; home.mkdir()
+            repo = base / 'project'; repo.mkdir(); tree = base / 'branch'
+            subprocess.run(['git', 'init', str(repo)], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-m', 'fixture'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(repo), 'worktree', 'add', '-b', 'branch', str(tree)], check=True, capture_output=True)
+            (home / '.codex-global-state.json').write_text(json.dumps({'local-projects': {'saved': {'rootPaths': [str(repo)]}}}))
+            with closing(sqlite3.connect(home / 'state_5.sqlite')) as db:
+                db.execute('CREATE TABLE threads(id,title,name,cwd,updated_at,created_at,history_mode,archived,source,thread_source)')
+                for tid, cwd in [('main', repo), ('branch', tree), ('child', repo / 'src')]:
+                    db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)', (tid, tid, tid, str(cwd), 1, 1, 'legacy', 0, 'vscode', 'user'))
+                db.commit()
+            rows = Catalog(home).list()
+            self.assertEqual({row['projectRoot'] for row in rows}, {str(repo)})
+            self.assertFalse(any(row['projectless'] for row in rows))

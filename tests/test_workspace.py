@@ -106,3 +106,72 @@ class WorkspaceTests(unittest.TestCase):
         self.workspace.rows[U]['projectless'] = False
         groups, _ = self.workspace.projection('local')
         self.assertEqual({g['name'] for g in groups}, {'最近', 'same'})
+
+    def native_read_event(self, **overrides):
+        import threading
+        from connectnow.events import Events
+        ipc=self.bridge.ipc
+        if not hasattr(ipc,'events'):
+            ipc.lock=threading.RLock();ipc.following={};ipc.events=Events(ipc)
+        packet={'type':'broadcast','method':'thread-read-state-changed','version':2,
+                'sourceClientId':'desktop','params':{'hostId':'local','conversationId':T,'hasUnreadTurn':False}}
+        packet.update(overrides)
+        ipc.events.handle(packet)
+
+    def test_native_read_clears_all_readers_and_survives_restart(self):
+        self.observe(request=True)
+        revision=self.workspace.revision;event_revision=self.bridge.event_revision
+        self.native_read_event()
+        self.assertGreater(self.workspace.revision,revision)
+        self.assertGreater(self.bridge.event_revision,event_revision)
+        for reader in ('local','binding:a','binding:b','binding:new'):
+            groups,threads=self.workspace.projection(reader)
+            self.assertFalse(next(t for t in threads if t['id']==T)['unread'])
+            self.assertEqual(sum(g['waiting'] for g in groups),1)
+        restored=Workspace(self.bridge);restored.catalog_refresh()
+        self.assertFalse(next(t for t in restored.projection('binding:new')[1] if t['id']==T)['unread'])
+        revision=self.workspace.revision
+        self.native_read_event()
+        self.assertEqual(self.workspace.revision,revision)
+
+    def test_native_read_projects_pending_completion_but_preserves_later_message(self):
+        state=self.observe()
+        completed=copy.deepcopy(state);completed['turns'][0]['status']='completed'
+        completed['threadRuntimeStatus']={'type':'idle'}
+        # IPC has received completion, workspace observer has not processed it yet.
+        self.bridge.ipc.states[T]=completed
+        self.native_read_event()
+        self.assertEqual(len(self.workspace.events('local')['events']),2)
+        self.assertFalse(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
+        later=copy.deepcopy(completed);later['turns'].append({'turnId':'turn-2','status':'completed',
+            'items':[{'id':'message-2','type':'agentMessage','text':'new message'}]})
+        self.bridge.ipc.states[T]=later;self.workspace.observe(later)
+        self.assertTrue(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
+        self.assertFalse(self.bridge.ipc.events.flags[T]['hasUnreadTurn'])
+        self.workspace.observe(later)  # Cached native false does not consume the new message.
+        self.assertTrue(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
+
+    def test_native_read_ignores_invalid_events_and_old_connection(self):
+        self.observe(request=True)
+        for overrides in ({'version':1},{'sourceClientId':''},
+                {'params':{'hostId':'remote','conversationId':T,'hasUnreadTurn':False}},
+                {'params':{'hostId':'local','conversationId':T,'hasUnreadTurn':'false'}},
+                {'params':{'hostId':'local','conversationId':T,'hasUnreadTurn':True}}):
+            self.native_read_event(**overrides)
+            self.assertTrue(next(t for t in self.workspace.projection('local')[1] if t['id']==T)['unread'])
+        previous=self.bridge.ipc
+        self.bridge.disable();self.bridge.enable()
+        previous.on_read(T)
+        self.assertEqual(self.workspace.latest_sequence(T),1)
+        self.assertIsNone(self.journal.conn.execute("SELECT sequence FROM notification_readers WHERE reader='native:codex'").fetchone())
+
+    def test_native_read_is_thread_scoped_and_preserves_newer_reader_cursor(self):
+        self.observe(request=True);self.observe(U,request=True)
+        self.native_read_event()
+        threads={t['id']:t for t in self.workspace.projection('binding:a')[1]}
+        self.assertFalse(threads[T]['unread']);self.assertTrue(threads[U]['unread'])
+        state=copy.deepcopy(self.bridge.ipc.states[T]);state['requests'][0]['params']['extra']='later'
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        self.workspace.read('binding:a',T,self.workspace.latest_sequence(T))
+        self.assertFalse(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
+        self.assertTrue(next(t for t in self.workspace.projection('binding:b')[1] if t['id']==T)['unread'])

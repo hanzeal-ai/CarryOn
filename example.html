@@ -9,18 +9,16 @@
   <script src="/timeline.js" defer></script>
   <script src="/operations.js" defer></script>
   <script src="/client.js" defer></script>
-  <script src="/cloud-ui.js" defer></script>
   <script src="/cloud-console-client.js" defer></script>
   <script src="/notification-client.js" defer></script>
   <script src="/app.js" defer></script>
-  <script src="/standby-ui.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
 </head>
 <body class="booting">
   <header>
     <div class="brand"><span class="mark">C<span>↗</span></span><div><strong>ConnectNow</strong><small>让工作，随处继续。</small></div></div>
     <span id="environment-label" class="environment-label">本地工作台</span>
-    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><button id="bridge" class="primary">开启桥接</button><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-pair-device" hidden>获取备用配对码</button><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
+    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><span id="bridge" class="badge">请在 CLI 或桌面端管理桥接</span><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-pair-device" hidden>获取备用配对码</button><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <section id="pairing" class="pairing" hidden aria-labelledby="auth-title">
@@ -39,10 +37,9 @@
       <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
       <div id="threads" class="threads"><div class="empty-small">开启桥接后，查看本机会话。</div></div>
       <button id="more" class="quiet" hidden>加载更多</button>
-      <details class="controller-box"><summary>新建会话设置 <span aria-hidden="true">⌄</span></summary>
+      <details class="controller-box"><summary>控制会话信息 <span aria-hidden="true">⌄</span></summary>
         <label for="controller">创建新任务的控制会话</label>
         <select id="controller" disabled><option value="">选择一个已加载的空闲会话</option></select>
-        <button id="set-controller" type="button" disabled>设为控制会话</button>
         <small id="controller-note">首次请在 Codex App 中打开专用控制会话。</small>
       </details>
     </aside>
@@ -72,38 +69,7 @@
   </section>
   <dialog id="question-dialog" aria-labelledby="question-heading"><div class="dialog-head"><h2 id="question-heading">Codex 需要你的回答</h2><button id="question-later" type="button">稍后回答</button></div><div id="question-content"></div></dialog>
   <dialog id="requests-dialog"><h2>待连接设备</h2><p>请与本机核对确认码，再批准连接。</p><div id="connection-requests" role="status"></div><button id="requests-close">关闭</button></dialog>
-  <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对本机页面显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>确认后自动登记这台电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
-  <details class="cloud-settings">
-    <summary>连接与本机设置</summary>
-    <section id="standby-settings" aria-label="远程待机">
-      <label><input id="standby-enabled" type="checkbox" disabled>远程待机（接电时保持后台运行）</label>
-      <p id="standby-state" role="status">正在读取待机状态…</p>
-      <p>允许熄屏和锁屏；合盖、手动睡眠或关机仍可能中断连接。关闭此开关或退出本地服务会释放保护。</p>
-    </section>
-    <p id="cloud-state">读取云端配置…</p>
-    <div id="cloud-bindings" aria-label="已连接云端"></div><p>每个云端均可查看本机桥接中的全部会话；远程控制权限分别授予。</p>
-    <form id="cloud-link-form"><label>云端控制台地址<input id="cloud-link-url" type="url" placeholder="https://console.example.com/connectnow/" required></label><label><input id="cloud-link-control" type="checkbox">允许远程控制；默认只读</label><button id="cloud-link-start">连接云端</button></form>
-    <p id="cloud-link-status" role="status"></p><a id="cloud-link-open" target="_blank" rel="noopener noreferrer" hidden>打开云端确认连接</a>
-    <details><summary>使用一次性配对码</summary><form id="cloud-pair-form">
-      <label>云端控制台地址<input id="cloud-console-url" type="url" placeholder="https://console.example.com" required></label>
-      <label>一次性配对码<input id="cloud-pair-code" type="password" autocomplete="off" required></label>
-      <label><input id="cloud-pair-control" type="checkbox">允许远程控制（包括投递、编辑、设置与审批）；默认只读</label>
-      <button id="cloud-pair-submit">配对并连接</button>
-    </form>
-    </details>
-    <details><summary>高级连接配置</summary>
-    <form id="cloud-form">
-      <label>网关地址<input id="cloud-url" type="url" placeholder="wss://gateway.example.com/device" required></label>
-      <label>设备 ID<input id="cloud-device" required maxlength="100" pattern="[A-Za-z0-9_-]+"></label>
-      <label>设备 Token<input id="cloud-token" type="password" required minlength="32" autocomplete="off"></label>
-      <label><input id="cloud-control" type="checkbox">允许此网关远程控制，包括投递、编辑、设置与审批；默认仅允许读取</label>
-      <button id="cloud-connect">保存并连接</button>
-      <button id="cloud-refresh" type="button">刷新状态</button>
-    </form>
-    </details>
-    <p>云端无法开启已关闭的桥接。关闭浏览器后 API 仍可用；停止服务会断开所有连接。</p>
-    <button id="service-stop" type="button">停止本地服务</button>
-  </details>
+  <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对 CLI 或桌面端显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>确认后自动登记这台电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
   <dialog id="create-dialog">
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>

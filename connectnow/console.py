@@ -38,7 +38,7 @@ class ConsoleServer(Gateway):
         self.origin=parsed.scheme+'://'+parsed.netloc
         self.prefix=parsed.path.rstrip('/')
         from .linking import LinkRequests
-        self.links=LinkRequests()
+        self.links=LinkRequests(Path(state_dir)/'link-history.json' if state_dir is not None else None)
         self.sessions={};self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
         import copy
         config=copy.deepcopy(config)
@@ -148,8 +148,8 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js','cloud-ui.js',
-                 'standby-ui.js','cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
+        allowed={'example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js',
+                 'cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
         if name not in allowed:return False
         payload=b'window.CONNECTNOW_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
         if name=='example.html':
@@ -163,7 +163,8 @@ class ConsoleHandler(Handler):
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('Referrer-Policy','no-referrer')
-        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        socket_origin = self.server.origin.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
+        self.send_header('Content-Security-Policy',f"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' {socket_origin}; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.end_headers();self.wfile.write(payload);return True
 
     def handle_api(self,method):
@@ -215,7 +216,9 @@ class ConsoleHandler(Handler):
                 device=self.server.approve_link(data.get('id'),data.get('deviceId'))
                 self.reply(200,{'approved':True,'deviceId':device});return
             if path=='/console/link/pending' and method=='GET':
-                self.reply(200,{'requests':self.server.links.pending()});return
+                self.reply(200,{'requests':self.server.links.pending(),'history':self.server.links.history_snapshot(),'historyError':self.server.links.history_error});return
+            if path=='/console/link/history' and method=='DELETE':
+                self.server.links.clear_history();self.reply(200,{'cleared':True});return
             if path=='/console/link/reject' and method=='POST':
                 self.server.links.reject(self.body().get('id'));self.reply(200,{'rejected':True});return
             if path=='/console/logout' and method=='POST':
@@ -244,6 +247,20 @@ class ConsoleHandler(Handler):
                     raise PermissionError('设备未授权')
                 if len(parts)==4 and method=='DELETE':
                     self.server.revoke_device(parts[3]);self.reply(200,{'removed':True,'notice':'设备凭证已撤销；在途请求可能已执行，请在本机核对，勿自动重发'});return
+                if len(parts)==5 and parts[4]=='ws' and method=='GET':
+                    if self.headers.get('Origin') != self.server.origin:
+                        raise PermissionError('实时连接来源不匹配')
+                    if urlsplit(self.path).query:
+                        raise ValueError('实时连接不接受查询参数')
+                    if not self.server.slots.acquire(False):
+                        self.reply(503,{'error':'连接过多'});return
+                    try:
+                        from .websocket import upgrade
+                        from .console_socket import serve
+                        upgrade(self)
+                        serve(self,key,parts[3])
+                    finally:self.server.slots.release()
+                    return
                 if len(parts)==5 and parts[4]=='streams' and method=='POST':self.stream_context=(parts[3],key)
                 if len(parts)==6 and parts[4]=='streams':
                     with self.server.auth_lock:

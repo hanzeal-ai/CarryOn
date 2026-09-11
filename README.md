@@ -26,23 +26,27 @@ connectnow stop
 
 源码开发者在项目根目录使用 `python3 -m connectnow start`。默认数据目录为 `~/Library/Application Support/ConnectNow`，可通过 `CONNECTNOW_HOME` 或命令后的 `--state-dir` 设置。旧源码项目 `.runtime` 不自动迁移，有历史请求时请按安装文档沿用原目录。
 
-开启页面后点击「开启桥接」。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
+在 CLI 执行 `connectnow bridge on`，或在 ConnectNow 桌面端开启桥接。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
 
-关闭页面不停止服务；使用页面「停止本地服务」或 CLI stop。重复启动复用同一个数据目录下的服务。ConnectNow 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
+关闭页面不停止服务；使用桌面端「停止服务」或 CLI stop。重复启动复用同一个数据目录下的服务。ConnectNow 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
+
+CLI 和 macOS 桌面端共用同一数据目录和本机服务，设置双向可见。本地网页仅用于会话交互，不提供本机配置。参见[配置命令与桌面端](docs/CONFIGURATION.md)。
 
 ## 云端接入
 
-推荐在本机填写云端控制台 HTTPS 地址申请连接，云端收到通知后确认，即可自动登记设备。支持多台本机接入同一云端，以及本机同时绑定多个云端；权限与解除绑定独立管理。见[多云端绑定指南](docs/MULTI_CLOUD.md)。
+推荐在 CLI 或桌面端填写云端控制台 HTTPS 地址申请连接，云端收到通知后确认，即可自动登记设备。支持多台本机接入同一云端，以及本机同时绑定多个云端；权限与解除绑定独立管理。见[多云端绑定指南](docs/MULTI_CLOUD.md)。
 
-在本地页面「云端接入与本地服务」填写自己网关的 WSS 地址、设备 ID、设备 Token；或：
+CLI 提供云端控制台 HTTPS 地址即可申请连接，然后在云端「连接申请」核对确认：
 
 ```sh
-connectnow cloud connect --url wss://你的网关域名/device --device-id my-mac --token-file /本机/device-token.txt
+connectnow cloud connect --url https://你的云端域名/connectnow
 connectnow cloud status
 connectnow cloud disconnect
 ```
 
-默认只读。允许远程投递、编辑、设置和审批需要本机明确勾选远程控制或使用 `--allow-control`。云端不能开启已关闭的本地桥接。参考网关及自定义协议见云端接入文档；本项目不提供云端账号系统或公共托管。
+命令返回表示申请已提交，绑定由本地服务在云端确认后自动完成。无需输入一次性配对码或设备 Token。多实例时每条命令带上对应的 `--state-dir`。
+
+默认只读。允许远程投递、编辑、设置和审批需要桌面端明确勾选远程控制或使用 `--allow-control`。云端不能开启已关闭的本地桥接。参考网关及自定义协议见云端接入文档；本项目不提供云端账号系统或公共托管。
 
 ## 当前业务能力
 
@@ -77,3 +81,5 @@ python3 -m compileall -q connectnow examples tests
 ```
 
 Node 只用于开发测试，终端用户运行独立安装包不需要 Node。
+
+桌面端支持多个本地工作区：自动发现 CLI 服务，并提供启停、前台日志、诊断和云端配置。CLI 查看全部服务用 `connectnow services list`；新建和接入目录见 [配置说明](docs/CONFIGURATION.md)。

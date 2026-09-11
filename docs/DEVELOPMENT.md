@@ -31,7 +31,6 @@ python3 -m compileall -q connectnow examples tests
 node --check app.js
 node --check client.js
 node --check operations.js
-node --check cloud-ui.js
 node --check timeline.js
 # 对实际独立可执行文件重复 CLI 启停、单实例与资源验证：
 CONNECTNOW_TEST_EXECUTABLE="$PWD/dist/connectnow/connectnow" python3 -m unittest discover -s tests -p test_cli.py -v
@@ -40,3 +39,9 @@ CONNECTNOW_TEST_EXECUTABLE="$PWD/dist/connectnow/connectnow" python3 -m unittest
 cloud 测试使用临时网关、临时 SQLite 与模拟原生 IPC，验证真实 HTTP/WS 通道、设备权限、只读/控制、本机撤销、幂等、订阅、离线和错误凭证。不会向真实 Codex 投递任务。生产 WSS、证书、代理、真实云端延迟和实际 App 版本仍需目标环境验收。
 
 任务风险 R2：涉及公开接口、远程访问与生命周期。发布前需独立审查与人类验收；创建安装产物不等于部署或批准生产使用。已生成代码的恢复副本保存在本项目 .runtime/source-backups/，无需迁移原生 Codex 数据。
+
+桌面端使用系统 SwiftUI（macOS 13+），由 `desktop/` 下的 Swift 文件实现，构建需要 Xcode 命令行工具。窗口通过打包的 `connectnow-service` 执行相同 CLI 命令，配置与服务共用；开发检查可用 `CONNECTNOW_DESKTOP_CLI` 指向待验证的 CLI 可执行文件。
+
+打包后执行 `python3 tests/run_desktop_smoke.py`，使用隔离目录和禁止连接的测试绑定，验证桌面模型经应用内 CLI 修改权限、独立 CLI 读取并改回、桌面刷新看到相同状态。此测试不替代真实桌面窗口点击、云端 HTTPS 配对和人工独立审查。
+
+多工作区回归同样使用 `python3 tests/run_desktop_smoke.py`：启动两个真实隔离实例，验证发现、切换、跨工作区配置隔离、doctor、独立停止以及桌面创建的前台服务退出生命周期。`tests/test_services.py` 覆盖并发登记、规范路径、旧进程认证发现和导入参数保留。

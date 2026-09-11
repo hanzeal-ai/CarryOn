@@ -88,3 +88,60 @@ class LinkHTTPTests(unittest.TestCase):
         status,result,_=self.call('POST','/console/link/poll',{'id':r['id'],'secret':r['secret']},False)
         self.assertEqual(status,200);self.assertEqual(result['deviceId'],'my-mac');self.assertEqual(result['token'],'d'*40)
         self.assertEqual(self.call('POST','/console/link/poll',{'id':r['id'],'secret':r['secret']},False)[0],400)
+
+class LinkStatusTests(unittest.TestCase):
+    def test_status_tracks_pending_bound_expired_and_failure_without_secrets(self):
+        cloud=Mock();cloud.validate=CloudConnector.validate
+        local=LocalLink(cloud,Mock(),background=True)
+        with patch.object(local,'request',side_effect=[{'id':'request-id','secret':'s'*40,'verification':'ABC123'},
+                {'deviceId':'my-mac','token':'d'*40}]), patch('threading.Thread'):
+            self.assertEqual(local.status(),{'state':'idle'})
+            local.start('https://example.test',False)
+            self.assertEqual(local.status()['state'],'pending')
+            self.assertNotIn('s'*40,json.dumps(local.status()))
+            local.failure='连接申请已拒绝'
+            self.assertEqual(local.status()['state'],'failed')
+            local.pending['expires']=time.monotonic()-1
+            self.assertEqual(local.status()['state'],'failed')
+            self.assertEqual(local.status()['error'],'连接申请已拒绝')
+            local.failure=None
+            self.assertEqual(local.status()['state'],'expired')
+            local.pending['expires']=time.monotonic()+100
+            local.failure=None
+            local.poll('request-id')
+            self.assertEqual(local.status()['state'],'bound')
+            self.assertNotIn('d'*40,json.dumps(local.status()))
+
+    def test_remote_rejection_is_visible_without_forwarding_arbitrary_error_text(self):
+        import io
+        import urllib.error
+        for text,expected in [('连接申请已拒绝','连接申请已拒绝'),('untrusted secret text','云端连接授权失败或已过期，请重新发起连接')]:
+            failure=urllib.error.HTTPError('https://example.test',400,'Bad Request',{},io.BytesIO(json.dumps({'error':text}).encode()))
+            with patch('connectnow.pairing.urllib.request.build_opener') as build:
+                build.return_value.open.side_effect=failure
+                with self.assertRaises((PermissionError,ValueError)) as result:
+                    LocalLink.request('https://example.test','poll',{})
+                self.assertEqual(str(result.exception),expected)
+
+    def test_background_rejection_remains_terminal_until_next_request(self):
+        cloud=Mock();local=LocalLink(cloud,Mock())
+        start={'id':'request-id','secret':'s'*40,'verification':'ABC123'}
+        with patch.object(local,'request',return_value=start):local.start('https://example.test',False)
+        with patch.object(local.closed,'wait',return_value=False),patch.object(local,'request',side_effect=PermissionError('连接申请已拒绝')):
+            local._wait('request-id')
+        local.pending['expires']=time.monotonic()-1
+        self.assertEqual(local.status()['state'],'failed')
+        self.assertEqual(local.status()['error'],'连接申请已拒绝')
+        cloud.configure.assert_not_called()
+        with patch.object(local,'request',return_value={**start,'id':'next-request'}):local.start('https://example.test',False)
+        self.assertEqual(local.status()['state'],'pending')
+        self.assertIsNone(local.status()['error'])
+
+    def test_background_timeout_remains_expired(self):
+        local=LocalLink(Mock(),Mock())
+        with patch.object(local,'request',return_value={'id':'request-id','secret':'s'*40,'verification':'ABC123'}):
+            local.start('https://example.test',False)
+        local.pending['expires']=time.monotonic()-1
+        with patch.object(local.closed,'wait',return_value=False):local._wait('request-id')
+        self.assertEqual(local.status()['state'],'expired')
+        self.assertIsNone(local.status()['error'])

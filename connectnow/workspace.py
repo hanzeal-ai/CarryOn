@@ -143,7 +143,7 @@ class Workspace:
         for record in records:
             body=json.loads(record[1]);tid=body['threadId']
             if tid in rows:
-                pid,_=project_identity(rows[tid].get('cwd'),rows[tid].get('projectless',False))
+                pid,_=project_identity(rows[tid].get('projectRoot', rows[tid].get('projectKey', rows[tid].get('cwd'))),rows[tid].get('projectless',False))
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
@@ -154,7 +154,8 @@ class Workspace:
             rows=list(self.rows.values());states=dict(self.states)
             unread={row[0]:row[1] for row in self.db.execute('''SELECT e.thread_id,MAX(e.sequence) FROM notification_events e
                 LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
-                WHERE e.sequence>COALESCE(r.sequence,0) GROUP BY e.thread_id''',(reader,))}
+                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader='native:codex'
+                WHERE e.sequence>MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0)) GROUP BY e.thread_id''',(reader,))}
             sequences={row[0]:row[1] for row in self.db.execute('SELECT thread_id,MAX(sequence) FROM notification_events GROUP BY thread_id')}
         ipc,_=self.bridge.require();groups={};threads=[]
         for row in rows:
@@ -163,11 +164,11 @@ class Workspace:
             # Never preserve cached running/idle after a connection reset or unload.
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
-            pid,name=project_identity(row.get('cwd'),row.get('projectless',False))
+            pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),row.get('projectless',False))
             thread={**row,'projectId':pid,'status':status,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0)}
             threads.append(thread)
-            group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('cwd',''),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
+            group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('projectRoot',row.get('cwd','')),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
         return sorted(groups.values(),key=lambda g:(-bool(g['waiting']),-bool(g['running']),g['name'],g['id'])),threads
@@ -198,4 +199,5 @@ class Workspace:
         if mode not in ('all','waiting','running'):raise ValueError('无效筛选')
         if mode=='waiting':threads=[t for t in threads if t['actionable']]
         if mode=='running':threads=[t for t in threads if t['status']['state']=='running']
+        threads.sort(key=lambda t: (t.get('updated_at') or 0, t['id']), reverse=True)
         return 200,{'threads':threads[offset:offset+limit],'total':len(threads),'nextOffset':offset+limit}

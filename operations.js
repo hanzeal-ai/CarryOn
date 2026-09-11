@@ -16,7 +16,7 @@ const Operations = (() => {
       const job=await transport.operation(target,action,fields,()=>target===selected);
       if(job.state==='failed')throw Error(job.error||'操作失败');
       if(job.state==='uncertain')throw Error((job.error||'结果待确认')+'；请在 App 核对，不会自动重发');
-      notify('操作已登记，请查看桥接请求记录和会话状态');return true;
+      return true;
     } catch(e){notify(e.message);} finally{button.disabled=!writable;}
   }
   function button(parent, label, run) {const b=el('button',label);b.type='button';b.onclick=()=>run(b);parent.append(b);return b;}

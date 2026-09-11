@@ -20,7 +20,7 @@ def run(*args):subprocess.run(args,cwd=ROOT,check=True)
 def main():
     if sys.platform!='darwin':raise SystemExit('请在目标 macOS 架构上构建')
     out=ROOT/'dist';work=ROOT/'build';out.mkdir(exist_ok=True);work.mkdir(exist_ok=True)
-    assets=['example.html','app.js','client.js','timeline.js','operations.js','cloud-ui.js','standby-ui.js','cloud-console-client.js','style.css']
+    assets=['example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','style.css','mobile.css','mobile-ui.js']
     common=[sys.executable,'-m','PyInstaller','--noconfirm','--log-level','WARN',
         '--paths',str(ROOT),'--collect-data','connectnow','--collect-submodules','connectnow',
         '--workpath',str(work),'--specpath',str(work),'--distpath',str(out)]
@@ -28,7 +28,20 @@ def main():
     identity=os.environ.get('CONNECTNOW_SIGN_IDENTITY')
     if identity:common+=['--codesign-identity',identity]
     run(*common,'--name','connectnow','--onedir',str(ROOT/'packaging/cli_entry.py'))
-    run(*common,'--name','ConnectNow','--windowed','--osx-bundle-identifier','local.connectnow.desktop',str(ROOT/'packaging/app_entry.py'))
+    # Recreate the generated bundle before replacing its executable with the native UI.
+    if (out/'ConnectNow.app').exists():shutil.rmtree(out/'ConnectNow.app')
+    run(*common,'--name','ConnectNow','--windowed','--osx-bundle-identifier','local.connectnow.desktop',str(ROOT/'packaging/cli_entry.py'))
+    app=out/'ConnectNow.app'
+    executable=app/'Contents/MacOS/ConnectNow'
+    executable.rename(executable.with_name('connectnow-service'))
+    run('xcrun','swiftc','-parse-as-library','-swift-version','5','-target',platform.machine()+'-apple-macos13.0',
+        *map(str,sorted((ROOT/'desktop').glob('*.swift'))),'-o',str(executable))
+    import plistlib
+    info_path=app/'Contents/Info.plist'
+    info=plistlib.loads(info_path.read_bytes());info['LSMinimumSystemVersion']='13.0'
+    info['CFBundleShortVersionString']=__version__;info['CFBundleVersion']=__version__
+    info_path.write_bytes(plistlib.dumps(info))
+    run('codesign','--force','--deep','--sign',identity or '-',str(app))
     arch=platform.machine();prefix=f'ConnectNow-{__version__}-macos-{arch}'
     shutil.copy2(ROOT/'scripts/install.sh',out/'connectnow/install.sh')
     shutil.copy2(ROOT/'README.md',out/'connectnow/README.md')

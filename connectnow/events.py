@@ -83,4 +83,8 @@ class Events:
             for store in (self.queues, self.flags):
                 while len(store) > 500:
                     del store[next(iter(store))]
+        # Consume the edge synchronously before the IPC reader accepts later messages.
+        # Cached false flags must never clear notifications from a subsequent turn.
+        if method == 'thread-read-state-changed' and params['hasUnreadTurn'] is False:
+            ipc.on_read(tid)
         ipc.on_change()

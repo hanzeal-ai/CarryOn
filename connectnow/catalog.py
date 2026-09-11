@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 import threading
+import subprocess
 from pathlib import Path
 from collections import deque
 from contextlib import contextmanager
@@ -65,6 +66,17 @@ class Catalog:
                      for root in state.get('electron-saved-workspace-roots', []))
         columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
         native = dict(conn.execute('SELECT id,project_id FROM threads')) if 'project_id' in columns else {}
+        projects = state.get('local-projects', {})
+        git_roots = {}
+        def repository(path):
+            key = str(path)
+            if key not in git_roots:
+                try:
+                    result = subprocess.run(['git', '-C', key, 'rev-parse', '--path-format=absolute', '--git-common-dir'], capture_output=True, text=True, timeout=2)
+                    git_roots[key] = Path(result.stdout.strip()).resolve() if result.returncode == 0 else None
+                except (OSError, subprocess.TimeoutExpired):
+                    git_roots[key] = None
+            return git_roots[key]
         for row in rows:
             tid = row['id']
             if native.get(tid):
@@ -76,6 +88,21 @@ class Catalog:
             else:
                 cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
                 row['projectless'] = not (cwd and any(cwd.is_relative_to(root) for root in roots))
+            cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
+            pid = native.get(tid) or assignments.get(tid, {}).get('projectId')
+            assigned = projects.get(pid, {}).get('rootPaths', []) if native.get(tid) or tid not in projectless else []
+            root = Path(assigned[0]).expanduser().absolute() if assigned else None
+            if root is None and cwd and tid not in projectless:
+                matches = [r for r in roots if cwd.is_relative_to(r)]
+                root = max(matches, key=lambda r: len(r.parts)) if matches else None
+                if root is None:
+                    common = repository(cwd)
+                    root = next((r for r in roots if common and repository(r) == common), None)
+            if root is not None:
+                row['projectless'] = False
+                row['projectRoot'] = str(root)
+            elif pid:
+                row['projectKey'] = str(pid)
 
     def get(self, thread_id):
         valid_id(thread_id)

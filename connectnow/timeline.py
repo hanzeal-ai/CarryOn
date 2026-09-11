@@ -2,6 +2,8 @@
 import json
 import re
 from .images import image_id
+from .user_messages import unwrap_user_message
+from .artifacts import references
 
 
 def text(value):
@@ -97,10 +99,11 @@ def project_item(item, turn, index):
         title += " · " + ".".join(str(item[k]) for k in ("server", "tool") if item.get(k))
     if kind == "contextCompaction":
         title = ("手动" if item.get("source") == "manual" else "自动") + "压缩上下文"
+    display_body = unwrap_user_message(body)[0] if kind in ("userMessage", "steeringUserMessage") else body
     return {"id": f"{turn.get('turnId')}:{item.get('id', index)}", "nativeId": item.get("id"),
         "turnId": turn.get("turnId"), "type": kind, "title": title, "status": status,
-        "text": body, "phase": item.get("phase"), "durationMs": item.get("durationMs"),
-        "data": data, "supported": kind in FIELDS}
+        "text": body, **({"displayText": display_body} if display_body != body else {}), "phase": item.get("phase"), "durationMs": item.get("durationMs"),
+        "data": data, "artifacts": references(kind, data), "supported": kind in FIELDS}
 
 
 def project_timeline(turns, state):
@@ -140,6 +143,8 @@ def project_timeline(turns, state):
         if turn.get("error"):
             entries.append({"id":f"{tid}:error", "turnId":tid, "type":"error", "title":"本轮错误",
                             "status":"failed", "data":{"error":turn["error"]}})
+    from .questions import project_questions
+    project_questions(entries)
     from .operations import controls
     return {"timeline": entries, "controls": controls(state), "runtime": state.get("threadRuntimeStatus", {"type":"unknown"}),
         "metadata": pick(state, "latestModel latestReasoningEffort latestTokenUsageInfo gitInfo"),

@@ -35,6 +35,7 @@ class DesktopIPC:
         self.changed = threading.Condition(self.lock)
         self.snapshot_lock = threading.Lock()
         self.on_change = lambda: None
+        self.on_read = lambda tid: None
         self.resyncing = set()
         self.watchers = {}
         from .events import Events

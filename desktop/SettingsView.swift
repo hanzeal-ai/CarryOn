@@ -1,0 +1,289 @@
+import SwiftUI
+import AppKit
+
+@MainActor struct SettingsView: View {
+    @StateObject var model: SettingsModel
+    @ObservedObject private var foreground = ForegroundServices.shared
+    @State private var page = "overview"
+    @State private var adding = false
+    @State private var connecting = false
+    @State private var stopping = false
+    @State private var removing: CloudBinding?
+    @State private var controllerInput = ""
+
+    var body: some View {
+        HStack(spacing: 0) {
+            sidebar.frame(width: 256)
+            Rectangle().fill(DesktopDesign.line).frame(width: 1)
+            VStack(spacing: 0) {
+                header
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if !model.catalogError.isEmpty { notice(model.catalogError, error: true) }
+                        if page == "overview" { overview }
+                        else if page == "diagnostics" { diagnostics }
+                        else { logs }
+                    }.frame(maxWidth: 780).padding(.horizontal, 30).padding(.bottom, 28).frame(maxWidth: .infinity)
+                }
+                if !model.message.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: model.messageIsError ? "exclamationmark.circle" : "checkmark.circle")
+                        Text(model.message).font(.system(size: 12)).textSelection(.enabled).lineLimit(4)
+                        Spacer()
+                        Button { model.message = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                    }.foregroundStyle(model.messageIsError ? Color.red : DesktopDesign.secondary).padding(15).background(.white)
+                }
+            }
+        }
+        .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
+        .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
+        .sheet(isPresented: $adding) { AddWorkspaceView(model: model) }
+        .sheet(isPresented: $connecting) { ConnectCloudView(model: model, initialURL: model.linkURL).id(model.directory) }
+        .alert("停止「\(model.selectedName)」的服务？", isPresented: $stopping) {
+            Button("取消", role: .cancel) {}
+            Button("停止服务", role: .destructive) { Task { await model.perform(["stop"]) } }
+        } message: { Text("仅停止此工作区的服务和云端连接。Codex 已接收的任务会继续执行。") }
+        .alert("解除云端绑定？", isPresented: Binding(get: {removing != nil}, set: {if !$0 {removing = nil}})) {
+            Button("取消", role: .cancel) { removing = nil }
+            Button("解除绑定", role: .destructive) {
+                if let binding = removing { Task { await model.perform(["cloud", "disconnect", "--binding-id", binding.id]) } }
+                removing = nil
+            }
+        } message: { Text(removing?.url ?? "") }
+        .task {
+            await model.refresh()
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 4_000_000_000) } catch { return }
+                await model.refresh()
+            }
+        }
+        .onChange(of: model.directory) { _ in controllerInput = ""; page = "overview" }
+    }
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 23)).foregroundStyle(DesktopDesign.blue)
+                VStack(alignment: .leading, spacing: 3) { Text("ConnectNow").font(.system(size: 18, weight: .semibold)); Text("让工作，随处继续").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
+            }.padding(.horizontal, 23).padding(.top, 30).padding(.bottom, 32)
+            HStack { Text("本地工作区").font(.system(size: 11, weight: .medium)); Spacer(); Text("\(model.services.filter(\.running).count) 个运行中").font(.system(size: 10)) }
+                .foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 12)
+            ScrollView {
+                VStack(spacing: 7) {
+                    ForEach(model.services) { service in
+                        Button { Task { await model.select(service) } } label: {
+                            HStack(alignment: .top, spacing: 11) {
+                                Image(systemName: "laptopcomputer").font(.system(size: 20)).foregroundStyle(service.directory == model.directory ? DesktopDesign.blue : DesktopDesign.secondary).padding(.top, 3)
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text(service.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                                    Text(shortPath(service.directory)).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary).lineLimit(1).truncationMode(.middle)
+                                    HStack(spacing: 5) { Circle().fill(service.running ? DesktopDesign.green : DesktopDesign.secondary).frame(width: 5, height: 5); Text(service.label + (service.running ? " · \(service.port)" : "")).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
+                                }; Spacer(minLength: 0)
+                            }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(service.directory == model.directory ? Color.white : Color.clear, in: RoundedRectangle(cornerRadius: 13))
+                                .overlay(RoundedRectangle(cornerRadius: 13).stroke(service.directory == model.directory ? DesktopDesign.blue.opacity(0.15) : .clear, lineWidth: 1))
+                        }.buttonStyle(.plain).disabled(model.busy)
+                    }
+                }.padding(.horizontal, 12)
+            }
+            Button { adding = true } label: { Label("添加工作区", systemImage: "plus").frame(maxWidth: .infinity).frame(height: 38) }
+                .buttonStyle(QuietButton()).padding(18).disabled(model.busy)
+            Text("CLI 启动的服务会自动出现在这里").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 22)
+        }.background(DesktopDesign.background)
+    }
+    private var header: some View {
+        HStack {
+            HStack(spacing: 7) {
+                tab("工作区", id: "overview")
+                tab("诊断", id: "diagnostics")
+                tab("运行日志", id: "logs")
+            }
+            Spacer()
+            if model.busy { ProgressView().controlSize(.small) }
+            Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28) }
+                .buttonStyle(.plain).foregroundStyle(DesktopDesign.secondary).help("刷新状态 · connectnow status").disabled(model.busy)
+        }.padding(.horizontal, 30).padding(.vertical, 17)
+    }
+    private func tab(_ title: String, id: String) -> some View {
+        Button { page = id } label: { Text(title).font(.system(size: 12, weight: page == id ? .semibold : .regular)).padding(.horizontal, 15).padding(.vertical, 8)
+            .foregroundStyle(page == id ? DesktopDesign.ink : DesktopDesign.secondary).background(page == id ? .white : .clear, in: Capsule()) }.buttonStyle(.plain)
+    }
+    private var overview: some View {
+        VStack(spacing: 0) {
+            Paper {
+                VStack(spacing: 13) {
+                    Image(systemName: "laptopcomputer").font(.system(size: 48, weight: .ultraLight)).foregroundStyle(DesktopDesign.secondary)
+                    Text(model.selectedName).font(.system(size: 23, weight: .semibold))
+                    Text(shortPath(model.directory)).font(.system(size: 11)).foregroundStyle(DesktopDesign.secondary).textSelection(.enabled)
+                    StatePill(label: model.running ? "服务运行中 · \(model.port)" : "服务未运行", active: model.running)
+                    HStack(spacing: 10) {
+                        if model.running {
+                            Button("打开会话") { Task { await model.perform(["open"]) } }.buttonStyle(AccentButton()).help("connectnow open")
+                            Button("停止服务") { stopping = true }.buttonStyle(QuietButton()).help("connectnow stop")
+                        } else {
+                            Button("启动服务") { Task { await model.perform(["start", "--no-open", "--port", model.port, "--codex-home", model.codexHome]) } }.buttonStyle(AccentButton()).help("后台启动 · connectnow start")
+                            Button("前台运行") { page = "logs"; Task { await model.serve() } }.buttonStyle(QuietButton()).help("在桌面端查看实时输出 · connectnow serve")
+                        }
+                    }.padding(.top, 5).disabled(model.busy)
+                }.padding(25).frame(maxWidth: .infinity)
+                if !model.running {
+                    RowDivider()
+                    HStack { Text("启动端口").font(.system(size: 12)); TextField("0", text: $model.port).frame(width: 65); Text("0 表示自动分配空闲端口").font(.system(size: 11)).foregroundStyle(DesktopDesign.secondary); Spacer() }.padding(16).disabled(model.busy)
+                }
+            }
+            SectionCaption(title: "连接与访问")
+            Paper {
+                SettingRow(icon: "cable.connector", title: "Codex 桥接", detail: model.enabled ? "已连接本机 Codex" : "连接后可读取与继续会话") {
+                    Toggle("Codex 桥接", isOn: Binding(get: {model.enabled}, set: {v in Task { await model.perform(["bridge", v ? "on" : "off"]) } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+                RowDivider()
+                SettingRow(icon: "moon", title: "远程待机", detail: model.standbyDescription) {
+                    Toggle("远程待机", isOn: Binding(get: {model.standby}, set: {v in Task { await model.perform(["standby", v ? "on" : "off"]) } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+            }.disabled(!model.running || model.busy)
+            HStack { SectionCaption(title: "云端连接"); Spacer(); Button("连接云端") { connecting = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(DesktopDesign.blue).padding(.top, 14).disabled(!model.running || model.busy) }
+            Paper {
+                if model.bindings.isEmpty {
+                    SettingRow(icon: "icloud", title: "尚未连接云端", detail: "向云端申请连接，确认后即可远程访问") {
+                        Button { connecting = true } label: { Image(systemName: "plus.circle").font(.system(size: 20)) }.buttonStyle(.plain).foregroundStyle(DesktopDesign.blue).disabled(!model.running || model.busy)
+                    }
+                }
+                ForEach(model.bindings) { binding in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            SymbolTile(name: "icloud", color: DesktopDesign.blue)
+                            VStack(alignment: .leading, spacing: 5) { Text(binding.url).font(.system(size: 12, weight: .medium)).textSelection(.enabled); StatePill(label: binding.connected ? "已连接" : "等待连接", active: binding.connected) }
+                            Spacer()
+                            Menu { Button("解除绑定", role: .destructive) { removing = binding } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
+                        }
+                        HStack {
+                            Text("允许远程控制").font(.system(size: 12)); Spacer()
+                            Toggle("允许此云端远程控制", isOn: Binding(get: {binding.control}, set: {v in Task { await model.perform(["cloud", "control", "--binding-id", binding.id, v ? "--allow-control" : "--read-only"]) } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        }.padding(.leading, 48)
+                        if !binding.error.isEmpty { Text(binding.error).font(.caption).foregroundStyle(.red) }
+                    }.padding(16).disabled(model.busy)
+                    if binding.id != model.bindings.last?.id { RowDivider() }
+                }
+            }
+            if !model.linkDescription.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: model.linkIsError ? "exclamationmark.circle.fill" : "info.circle")
+                    Text(model.linkDescription).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    if model.linkCanRetry {
+                        Button("重新申请") { connecting = true }.buttonStyle(QuietButton()).disabled(!model.running || model.busy)
+                    }
+                }.foregroundStyle(model.linkIsError ? Color.red : DesktopDesign.secondary)
+                    .padding(14).background((model.linkIsError ? Color.red : DesktopDesign.blue).opacity(0.06), in: RoundedRectangle(cornerRadius: 12)).padding(.top, 10)
+            }
+            Text("每个云端可查看此工作区桥接中的全部会话，控制权限分别授予。").font(.system(size: 11)).foregroundStyle(DesktopDesign.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            SectionCaption(title: "任务与通知")
+            Paper {
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(model.controller.isEmpty ? "尚未选定控制会话" : model.controller).font(.caption).textSelection(.enabled)
+                        HStack { TextField("已加载的空闲会话 ID", text: $controllerInput); Button("保存") { Task { await model.perform(["controller", "set", "--thread-id", controllerInput]) } }.buttonStyle(QuietButton()).disabled(controllerInput.isEmpty) }
+                    }.padding(14)
+                } label: { Label("创建任务的控制会话", systemImage: "bubble.left.and.bubble.right").font(.system(size: 13)) }.padding(16).disabled(!model.enabled || model.busy)
+                RowDivider()
+                DisclosureGroup {
+                    ForEach(["message", "done", "failed", "approval"], id: \.self) { kind in
+                        Toggle(["message":"新消息", "done":"任务完成", "failed":"执行失败", "approval":"需要确认"][kind]!, isOn: Binding(get: {model.preferences[kind] ?? true}, set: {v in Task { await model.perform(["notifications", "set", v ? "--"+kind : "--no-"+kind]) } })).toggleStyle(.switch).controlSize(.small).padding(10)
+                    }
+                } label: { Label("消息通知", systemImage: "bell").font(.system(size: 13)) }.padding(16).disabled(!model.enabled || model.preferences.isEmpty || model.busy)
+            }
+        }
+    }
+    private var diagnostics: some View {
+        VStack(spacing: 0) {
+            Paper {
+                SettingRow(icon: "waveform.path.ecg", title: "工作区诊断", detail: "检查本机环境、Codex 与当前服务") { Button("运行诊断") { Task { await model.diagnose() } }.buttonStyle(AccentButton()).disabled(model.busy).help("connectnow doctor") }
+                ForEach(["supportedPlatform", "ipcSocketAvailable", "databaseAvailable"], id: \.self) { key in
+                    RowDivider()
+                    SettingRow(icon: key == "ipcSocketAvailable" ? "cable.connector" : key == "databaseAvailable" ? "externaldrive" : "laptopcomputer", title: ["supportedPlatform":"系统支持", "ipcSocketAvailable":"Codex 连接", "databaseAvailable":"会话数据库"][key]!) {
+                        Text((model.diagnostics[key] as? Bool).map {$0 ? "正常" : "需处理"} ?? "未检测").font(.system(size: 12)).foregroundStyle((model.diagnostics[key] as? Bool) == true ? DesktopDesign.green : DesktopDesign.secondary)
+                    }
+                }
+            }
+            SectionCaption(title: "当前服务 · status")
+            Paper {
+                SettingRow(icon: "folder", title: "数据目录") { Text(shortPath(model.directory)).font(.caption).textSelection(.enabled) }
+                RowDivider()
+                SettingRow(icon: "externaldrive", title: "Codex 目录") {
+                    if model.running { Text(shortPath(model.codexHome)).font(.caption).textSelection(.enabled) }
+                    else { TextField("~/.codex", text: $model.codexHome).frame(maxWidth: 330) }
+                }
+                RowDivider()
+                SettingRow(icon: "network", title: "服务端口", detail: model.processID.map {"进程 \($0)"} ?? "") { Text(model.running ? model.port : "未运行").font(.caption.monospaced()) }
+            }
+            if !model.diagnosticText.isEmpty {
+                SectionCaption(title: "诊断结果")
+                Paper { Text(model.diagnosticText).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(18) }
+            }
+        }
+    }
+    private var logs: some View {
+        VStack(spacing: 0) {
+            Paper {
+                SettingRow(icon: "terminal", title: "前台运行", detail: "服务输出显示在这里；退出桌面应用时停止前台服务。") {
+                    Button("前台启动") { Task { await model.serve() } }.buttonStyle(AccentButton()).disabled(model.running || model.busy).help("connectnow serve")
+                }
+            }
+            SectionCaption(title: "\(model.selectedName) · 实时输出")
+            Paper { Text(foreground.logs[model.directory] ?? "还没有前台运行记录。后台运行的工作区不受关闭窗口影响。")
+                .font(.system(size: 12, design: .monospaced)).foregroundStyle(DesktopDesign.secondary).textSelection(.enabled).frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading).padding(20) }
+        }
+    }
+    private func notice(_ text: String, error: Bool = false) -> some View { Text(text).font(.system(size: 12)).foregroundStyle(error ? Color.red : DesktopDesign.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(14) }
+    private func shortPath(_ path: String) -> String { path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~", options: .anchored) }
+}
+
+@MainActor struct AddWorkspaceView: View {
+    @ObservedObject var model: SettingsModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = "新工作区"
+    @State private var path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ConnectNow/Workspaces/" + String(UUID().uuidString.prefix(8))).path
+    @State private var port = "0"
+    @State private var codex = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack { SymbolTile(name: "plus", color: DesktopDesign.blue); Text("添加工作区").font(.title2.weight(.semibold)) }
+            Text("创建新的服务目录，或选择已有目录接入。已有服务会被识别并保留。").font(.system(size: 13)).foregroundStyle(DesktopDesign.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("名称").font(.caption); TextField("工作区名称", text: $name)
+                Text("数据目录").font(.caption)
+                HStack { TextField("服务配置保存位置", text: $path); Button("选择…") {
+                    let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let url = panel.url { path = url.path; if name == "新工作区" {name = url.lastPathComponent} }
+                } }
+                HStack { VStack(alignment: .leading) { Text("端口（0 为自动分配）").font(.caption); TextField("0", text: $port) }.frame(width: 165)
+                    VStack(alignment: .leading) { Text("Codex 目录").font(.caption); TextField("~/.codex", text: $codex) } }
+            }.textFieldStyle(.roundedBorder)
+            if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("添加工作区") { Task { if await model.add(name: name.trimmingCharacters(in: .whitespacesAndNewlines), path: path, port: port, codex: codex) { dismiss() } } }.buttonStyle(AccentButton())
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.isEmpty || codex.isEmpty || !(0...65535).contains(Int(port) ?? -1))
+            }
+        }.padding(28).frame(width: 560).background(DesktopDesign.background).disabled(model.busy)
+    }
+}
+@MainActor struct ConnectCloudView: View {
+    @ObservedObject var model: SettingsModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var url: String
+    init(model: SettingsModel, initialURL: String = "") {
+        self.model = model; _url = State(initialValue: initialURL)
+    }
+    @State private var control = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack { SymbolTile(name: "icloud", color: DesktopDesign.blue); Text("连接云端").font(.title2.weight(.semibold)) }
+            Text("\(model.selectedName) · 发起连接申请").font(.system(size: 13)).foregroundStyle(DesktopDesign.secondary)
+            TextField("https://你的云端地址/connectnow", text: $url).textFieldStyle(.roundedBorder)
+            Toggle("允许远程控制", isOn: $control).toggleStyle(.switch)
+            Text("默认只读。申请后，在云端核对确认码并确认连接。").font(.caption).foregroundStyle(DesktopDesign.secondary)
+            if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("申请连接") { Task { var args = ["cloud", "connect", "--url", url.trimmingCharacters(in: .whitespacesAndNewlines)]; if control { args.append("--allow-control") }; await model.perform(args); if !model.messageIsError { dismiss() } } }.buttonStyle(AccentButton()).disabled(url.isEmpty)
+            }
+        }.padding(28).frame(width: 470).background(DesktopDesign.background).disabled(model.busy)
+    }
+}
