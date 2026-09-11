@@ -80,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/client.js", "/cloud-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
+            if method == "GET" and path in ("/", "/example.html", "/app.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -100,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
             data = self.body() if method == "POST" else {}
             if path == '/api/service' and method == 'GET':
                 self.reply(200, self.server.service_info)
+                return
+            if path == '/api/service/standby' and method in ('GET', 'POST'):
+                result = self.server.standby.configure(data.get('enabled')) if method == 'POST' else self.server.standby.status()
+                self.reply(200, result)
                 return
             if path == '/api/service/stop' and method == 'POST':
                 self.reply(200, {'stopping': True})
@@ -176,6 +180,8 @@ def run(port, codex_home, directory):
     server.allowed_hosts = {f'127.0.0.1:{server.server_port}', f'localhost:{server.server_port}'}
     server.service_info = {'instanceId':str(uuid.uuid4()), 'pid':os.getpid(), 'port':server.server_port,
                            'version':__version__, 'codexHome':str(codex_home)}
+    from .standby import RemoteStandby
+    server.standby = RemoteStandby(directory)
     server.cloud = CloudConnector(bridge, directory)
     from .pairing import LocalLink
     server.local_link = LocalLink(server.cloud, bridge)
@@ -187,9 +193,11 @@ def run(port, codex_home, directory):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        server.standby.start()
         server.cloud.start()
         server.serve_forever()
     finally:
+        server.standby.close()
         server.cloud.stop()
         bridge.disable()
         if bridge.realtime:

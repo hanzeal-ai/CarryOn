@@ -11,6 +11,7 @@
   <script src="/cloud-ui.js" defer></script>
   <script src="/cloud-console-client.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/standby-ui.js" defer></script>
 </head>
 <body>
   <header>
@@ -65,6 +66,11 @@
   <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对本机页面显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>选中的云端设备将绑定到发起连接的电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
   <details class="cloud-settings">
     <summary>云端接入与本地服务</summary>
+    <section id="standby-settings" aria-label="远程待机">
+      <label><input id="standby-enabled" type="checkbox" disabled>远程待机（接电时保持后台运行）</label>
+      <p id="standby-state" role="status">正在读取待机状态…</p>
+      <p>允许熄屏和锁屏；合盖、手动睡眠或关机仍可能中断连接。关闭此开关或退出本地服务会释放保护。</p>
+    </section>
     <p id="cloud-state">读取云端配置…</p>
     <div id="cloud-permission" hidden><label><input id="cloud-current-control" type="checkbox">允许远程控制</label><button id="cloud-save-control">保存权限</button></div>
     <form id="cloud-link-form"><label>云端控制台地址<input id="cloud-link-url" type="url" placeholder="https://console.example.com/connectnow/" required></label><label><input id="cloud-link-control" type="checkbox">允许远程控制；默认只读</label><button id="cloud-link-start">连接云端</button></form>

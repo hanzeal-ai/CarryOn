@@ -20,7 +20,7 @@ def run(*args):subprocess.run(args,cwd=ROOT,check=True)
 def main():
     if sys.platform!='darwin':raise SystemExit('请在目标 macOS 架构上构建')
     out=ROOT/'dist';work=ROOT/'build';out.mkdir(exist_ok=True);work.mkdir(exist_ok=True)
-    assets=['example.html','app.js','client.js','timeline.js','operations.js','cloud-ui.js','cloud-console-client.js','style.css']
+    assets=['example.html','app.js','client.js','timeline.js','operations.js','cloud-ui.js','standby-ui.js','cloud-console-client.js','style.css']
     common=[sys.executable,'-m','PyInstaller','--noconfirm','--log-level','WARN',
         '--paths',str(ROOT),'--collect-data','connectnow','--collect-submodules','connectnow',
         '--workpath',str(work),'--specpath',str(work),'--distpath',str(out)]
