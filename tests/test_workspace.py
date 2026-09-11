@@ -89,3 +89,20 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/projects?limit=1',None,False,'a')[1]['total'],2)
         self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/activity',None,False,'a')[1]['total'],1)
         self.assertEqual(len(self.workspace.events('binding:a')['events']),1)
+
+    def test_projectless_threads_share_recent_group_and_preserve_working_directories(self):
+        self.workspace.rows[T]['projectless'] = True
+        self.workspace.rows[U]['projectless'] = True
+        groups, threads = self.workspace.projection('local')
+        self.assertEqual(len(groups), 1)
+        recent = groups[0]
+        self.assertEqual((recent['name'], recent['cwd'], recent['total']), ('最近', '', 2))
+        self.assertEqual({t['cwd'] for t in threads}, {'/one/same', '/two/same'})
+        result = self.workspace.dispatch('local', 'GET', '/api/projects/' + recent['id'] + '/threads', None, {})[1]
+        self.assertEqual({t['id'] for t in result['threads']}, {T, U})
+        self.observe(request=True)
+        event = self.workspace.events('local')['events'][0]
+        self.assertEqual(event['projectId'], recent['id'])
+        self.workspace.rows[U]['projectless'] = False
+        groups, _ = self.workspace.projection('local')
+        self.assertEqual({g['name'] for g in groups}, {'最近', 'same'})

@@ -99,6 +99,12 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('; Secure',result[2]);self.assertIn('Path=/connectnow/console/',result[2])
         page=self.call('GET','/example.html',origin=False)[1]
         self.assertIn(b'src="/connectnow/app.js"',page)
+        self.assertIn(b'src="/connectnow/mobile-ui.js"',page)
+        self.assertIn(b'href="/connectnow/mobile.css"',page)
+        for asset in ('mobile-ui.js', 'mobile.css'):
+            status, content, _ = self.call('GET', '/' + asset, origin=False)
+            self.assertEqual(status, 200)
+            self.assertTrue(content)
         self.assertIn(b'src="/connectnow/console-mode.js"',page)
     def test_early_offline_response_does_not_poison_next_http_request(self):
         self.login()

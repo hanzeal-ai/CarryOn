@@ -148,7 +148,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'example.html','style.css','app.js','notification-client.js','client.js','cloud-ui.js',
+        allowed={'example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js','cloud-ui.js',
                  'standby-ui.js','cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
         if name not in allowed:return False
         payload=b'window.CONNECTNOW_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()

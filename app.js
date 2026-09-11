@@ -1,6 +1,8 @@
 /* No HTML interpolation of conversation content or external responses. */
 const $ = id => document.getElementById(id);
-const mobileLayout = window.matchMedia('(max-width:760px)');
+const mobilePreview = new URLSearchParams(location.search).get('mobile') === '1';
+const mobileLayout = window.matchMedia(mobilePreview ? 'all' : '(max-width:760px)');
+if(mobilePreview){document.body.classList.add('mobile-preview');document.querySelector('link[href$="/style.css"]').media='not all';document.querySelector('link[href$="/mobile.css"]').media='all';}
 function setThreadListOpen(open) {
   document.body.classList.toggle('threads-open', open);
   $('toggle-threads').setAttribute('aria-expanded', String(open));
@@ -52,6 +54,7 @@ function updateThreadStatuses(values) {
   const count=state=>ids.filter(id=>values[id]?.state===state).length;
   const unknown=ids.filter(id=>!values[id] || ['loading','unknown'].includes(values[id].state)).length;
   $('thread-status-summary').textContent=enabled ? `已确认 ${count('running')} 个执行中 · ${count('waiting')} 个待处理`+(unknown?` · ${unknown} 个待确认`:'')+(threads.length>100?' · 状态仅订阅前 100 条':'') : '';
+  window.MobileUI?.sync();
 }
 const states = {preparing:'检查会话中',dispatching:'正在投递',accepted:'Codex 已接收',completed:'已完成',failed:'发送失败',uncertain:'结果待确认',acknowledged:'已人工核对',interrupted:'已中断'};
 
@@ -112,7 +115,9 @@ function renderThreads() {
     const button = node('button','thread' + (t.id === selected ? ' active' : ''));
     const row=node('div','thread-heading');
     const badge=node('span','thread-status');badge.dataset.threadStatus=t.id;
-    row.append(node('strong','',(t.unread?'● ':'')+(t.title || '未命名会话')),badge);
+    const title=node('strong','',t.title || '未命名会话');
+    if(t.unread){const unread=node('span','thread-unread');unread.setAttribute('aria-label','有未读消息');title.append(unread);}
+    row.append(title,badge);
     button.append(row,node('small','',t.cwd));
     button.onclick = () => selectThread(t.id); return button;
   });
@@ -122,16 +127,25 @@ function renderThreads() {
   $('controller').replaceChildren(new Option('选择一个已加载的空闲会话',''),...threads.map(t => new Option(t.title || t.id,t.id)));
   if(chosen && !threads.some(t=>t.id===chosen)) $('controller').append(new Option('已选控制会话 · '+chosen.slice(0,8),chosen));
   if(chosen) $('controller').value=chosen;
+  window.MobileUI?.sync();
 }
 function renderProjects(){
   $('threads').replaceChildren(...workspaceProjects.map(project=>{
-    const button=node('button','thread');
-    button.append(node('strong','',project.name),node('small','',project.cwd),node('small','',`${project.total} 个会话 · ${project.waiting} 待处理 · ${project.running} 进行中 · ${project.unread} 未读`+(project.unknown?` · ${project.unknown} 状态未知`:'')));
+    const button=node('button','thread project-row');
+    const folder=node('span','project-folder','⌘');folder.setAttribute('aria-hidden','true');
+    const body=node('span','project-body'),counts=node('span','project-statuses');
+    body.append(node('strong','',project.name),node('small','project-path',project.cwd),node('small','project-count',`${project.total} 个会话`));
+    for(const [key,label] of [['waiting','待处理'],['running','进行中'],['unread','未读'],['unknown','状态未知']]){
+      if(project[key])counts.append(node('span','project-'+key,`${project[key]} ${label}`));
+    }
+    if(!counts.childNodes.length)counts.append(node('span','','暂无进行中的任务'));
+    body.append(counts);const chevron=node('span','row-chevron','›');chevron.setAttribute('aria-hidden','true');button.append(folder,body,chevron);
     button.onclick=()=>{workspaceView='threads';workspaceProject=project.id;$('search').value='';$('project-filter').value='all';loadThreads().catch(e=>notice(e.message));};
     return button;
   }));
   if(!workspaceProjects.length)$('threads').append(node('div','empty-small','没有匹配的项目。'));
   $('thread-status-summary').textContent='项目汇总来自服务端全部会话；未知状态不会计为空闲。';
+  window.MobileUI?.sync();
 }
 async function loadThreads(more=false){
   const version=++listVersion,start=more?offset:0;
@@ -145,6 +159,7 @@ async function loadThreads(more=false){
   else{threads=more?[...threads,...result.threads]:result.threads;renderThreads();}
   const totals=await api('/activity?limit=1');if(version!==listVersion)return;
   $('show-activity').textContent='动态'+(totals.total?' · '+totals.total:'');
+  window.MobileUI?.sync();
   if(!$('controller').options.length||workspaceView==='projects'){
     const all=await api('/threads?limit=100');if(version!==listVersion)return;
     $('controller').replaceChildren(new Option('选择一个已加载的空闲会话',''),...all.threads.map(t=>new Option(t.title||t.id,t.id)));
@@ -166,6 +181,8 @@ async function selectThread(id) {
   Timeline.reset();
   selected=id; lastHistory=''; delete $('messages').dataset.loaded; renderThreads(); $('attach-images').disabled=!canAttach();$('prompt').disabled=!canWrite(); $('send').disabled=!canWrite();
   const thread=threads.find(t=>t.id===id); $('title').textContent=thread?.title || id; $('cwd').textContent=thread?.cwd || '';
+  $('prompt').placeholder='发送消息…';
+  window.MobileUI?.show('chat');
   $('messages').replaceChildren(node('div','empty-small','读取历史中…'));
   try { await loadHistory(); } catch(e) { if(selected===id) $('messages').replaceChildren(node('div','empty-small',e.message)); }
 }
@@ -211,7 +228,7 @@ async function receiveUpdate(data, current) {
     updateCompose(data.history);
     const signature = JSON.stringify(data.history);
     if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'),historyImageLoader(data.history.thread.id));Operations.render(data.history,selected,client,notice,canWrite());}
-    if(document.visibilityState==='visible'&&data.readSequence)api('/notifications/read',{threadId:selected,sequence:data.readSequence}).catch(()=>{});
+    if(document.visibilityState==='visible'&&(!mobileLayout.matches||document.body.dataset.mobilePage==='chat')&&data.readSequence)api('/notifications/read',{threadId:selected,sequence:data.readSequence}).catch(()=>{});
   }
 }
 function streamDisconnected(event) {
@@ -264,7 +281,7 @@ $('pairing-form').onsubmit=async event=>{
 $('set-controller').onclick=async()=>{if(!$('controller').value)return notice('请选择控制会话');$('set-controller').disabled=true;try{applyStatus(await api('/controller',{threadId:$('controller').value}));notice('控制会话已就绪');}catch(e){notice('设置失败：'+e.message);}finally{$('set-controller').disabled=!canWrite();}};
 $('create').onclick=()=>{$('create-error').textContent='';$('create-dialog').showModal();$('new-prompt').focus();};
 for(const id of ['close-dialog','cancel-create']) $(id).onclick=()=>$('create-dialog').close();
-$('create-form').onsubmit=async e=>{e.preventDefault();$('submit-create').disabled=true;try{await submit('create',$('new-prompt').value.trim());$('create-dialog').close();$('new-prompt').value='';notice('已提交创建请求，等待控制会话处理');await tick();}catch(e){$('create-error').textContent=e.message+'；重试会沿用原请求 ID。';}finally{$('submit-create').disabled=false;}};
+$('create-form').onsubmit=async e=>{e.preventDefault();$('submit-create').dataset.pending='true';$('submit-create').disabled=true;try{await submit('create',$('new-prompt').value.trim());$('create-dialog').close();$('new-prompt').value='';notice('已提交创建请求，等待控制会话处理');await tick();}catch(e){$('create-error').textContent=e.message+'；重试会沿用原请求 ID。';}finally{delete $('submit-create').dataset.pending;$('submit-create').disabled=false;window.MobileUI?.sync();}};
 let attachedImages=[],imageGeneration=0,imageBusy=false;
 function clearImages(){imageGeneration++;attachedImages=[];renderImages();}
 function renderImages(){
@@ -338,7 +355,7 @@ async function refreshConsoleDevices(){
   const previous=client.device;
   await client.initialize();
   if(previous!==client.device){
-    client.close();client.epoch++;client.selection=null;selected=null;threads=[];
+    client.close();client.epoch++;client.selection=null;
     applyStatus({enabled:false,controllerId:null});
     if(client.device){try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}client.connect();}
   }
@@ -353,7 +370,8 @@ async function refreshConnectionRequests(){
   if(!result.requests.length)list.textContent='暂无待连接设备';
   for(const request of result.requests){
     const row=document.createElement('section'),title=document.createElement('p');
-    title.textContent=request.name+' · '+request.verification+' · '+new Date(request.created*1000).toLocaleTimeString();
+    title.textContent=request.name;row.className='connection-request-card group';
+    const created=node('p','caption','申请时间 · '+new Date(request.created*1000).toLocaleString()),verification=node('div','code-display',request.verification);
     const approve=document.createElement('button'),reject=document.createElement('button');
     approve.textContent='确认连接';reject.textContent='拒绝';
     const respond=async action=>{
@@ -361,7 +379,7 @@ async function refreshConnectionRequests(){
       try{await client.consoleRequest('link/'+action,{id:request.id});await refreshConnectionRequests();await refreshConsoleDevices();}
       catch(e){notice(e.message);approve.disabled=reject.disabled=false;}
     };
-    approve.onclick=()=>respond('approve');reject.onclick=()=>respond('reject');row.append(title,approve,reject);list.append(row);
+    approve.onclick=()=>respond('approve');reject.onclick=()=>respond('reject');approve.className='primary';reject.className='secondary';row.append(title,created,verification,approve,reject);list.append(row);
   }
 }
 async function init(){
@@ -387,7 +405,7 @@ async function init(){
     pollRequests();
     $('console-device').onchange=async()=>{
       client.close();client.epoch++;client.selection=null;client.device=$('console-device').value;client.setStorage();
-      selected=null;threads=[];applyStatus({enabled:false,controllerId:null});
+      applyStatus({enabled:false,controllerId:null});
       try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}finally{client.connect();}
     };
     $('console-pair-device').onclick=async()=>{
@@ -417,7 +435,7 @@ init().then(()=>{if(!cloudMode)CloudSettings.init(api,notice);}).finally(()=>doc
 function draftScope(){return cloudMode?client.storageScope:location.origin;}
 let composeHistory=null;
 function canAttach(){return canWrite()&&!!selected&&composeHistory?.status?.state==='idle'&&!imageBusy;}
-function updateCompose(history){composeHistory=history;updateComposeButton();$('attach-images').disabled=!canAttach();}
+function updateCompose(history){composeHistory=history;updateComposeButton();$('attach-images').disabled=!canAttach();window.MobileUI?.sync();}
 function updateComposeButton(){
   const running=composeHistory?.runtime?.type==='active';
   $('send').textContent=running&&!$('prompt').value.trim()&&!attachedImages.length?'停止任务':'发送任务 ↑';
@@ -450,6 +468,6 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 
 let refreshTouch=null;
 const sidebar=document.querySelector('aside');
-sidebar.addEventListener('touchstart',event=>{if(sidebar.scrollTop===0&&event.touches.length===1)refreshTouch=event.touches[0].clientY;},{passive:true});
+sidebar.addEventListener('touchstart',event=>{if(sidebar.scrollTop===0&&$('threads').scrollTop===0&&event.touches.length===1)refreshTouch=event.touches[0].clientY;},{passive:true});
 sidebar.addEventListener('touchend',event=>{if(refreshTouch!==null&&event.changedTouches[0]?.clientY-refreshTouch>80&&enabled)loadThreads().catch(e=>notice(e.message));refreshTouch=null;},{passive:true});
 sidebar.addEventListener('touchcancel',()=>{refreshTouch=null;},{passive:true});

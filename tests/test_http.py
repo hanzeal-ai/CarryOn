@@ -44,18 +44,22 @@ class HTTPTests(unittest.TestCase):
         self.assertNotIn(self.server.token.encode(),body)
         self.assertEqual(self.request('/.runtime/token')[0],401)
 
-    def test_every_page_script_is_served_without_authentication(self):
+    def test_every_page_asset_is_served_without_authentication(self):
         scripts = []
+        styles = []
         class Parser(HTMLParser):
             def handle_starttag(self, tag, attrs):
                 if tag == 'script': scripts.append(dict(attrs)['src'])
+                if tag == 'link' and dict(attrs).get('rel') == 'stylesheet': styles.append(dict(attrs)['href'])
         Parser().feed(self.request('/example.html')[1].decode())
         self.assertIn('/client.js', scripts)
-        for path in scripts:
+        self.assertIn('/mobile.css', styles)
+        self.assertIn('/mobile-ui.js', scripts)
+        for path in scripts + styles:
             with self.subTest(path=path):
                 status, body, headers = self.request(path)
                 self.assertEqual(status, 200)
-                self.assertIn('javascript', headers['Content-Type'])
+                self.assertIn('javascript' if path in scripts else 'text/css', headers['Content-Type'])
                 self.assertTrue(body)
     def test_operation_post_obeys_auth_origin_and_bridge_gate(self):
         path='/api/threads/11111111-1111-4111-8111-111111111111/operations'

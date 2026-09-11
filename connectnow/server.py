@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css"):
+            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-ui.js", "/standby-ui.js", "/cloud-console-client.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")

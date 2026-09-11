@@ -8,7 +8,7 @@ const Operations = (() => {
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
   box('question-later').onclick=()=>box('question-dialog').close();
-  function reset() {selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  function reset() {window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
   async function send(target, action, fields, button) {
     if(target!==selected||!writable)return;
     button.disabled=true;
@@ -32,6 +32,7 @@ const Operations = (() => {
     if(!c){reset();return;}
     const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite]);
     if(next===signature)return;
+    window.MobileUI?.beforeOperationsRender();
     const same=selected===threadId;
     const opened=same?new Set([...box('operations').querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent)):new Set();
     const allDrafts=same?new Map([...box('operations').querySelectorAll('[data-draft-key]'),...box('requests').querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')].map(n=>[n.dataset.draftKey,n.value])):new Map();
@@ -53,14 +54,14 @@ const Operations = (() => {
     if(idle){
       button(root,'压缩上下文',b=>send(threadId,'compact',{},b));
       if(c.lastUserText){
-        const edit=el('details');edit.append(el('summary','编辑最后一轮'));root.append(edit);
+        const edit=el('details');edit.classList.add('mobile-edit-composer');edit.append(el('summary','编辑最后一轮'));root.append(edit);
         const input=field(edit,'修改后的内容',c.lastUserText,true);
         button(edit,'替换并重新执行',b=>{if(confirm('这会替换最后一轮用户输入及其后续结果，并重新执行。继续吗？'))send(threadId,'edit',{turnId:c.lastTurnId,prompt:input.value,confirmed:true},b);});
       }
 
     }
     if(['active','idle'].includes(history.runtime?.type)){
-      const settings=el('details');settings.append(el('summary','会话设置'));root.append(settings);
+      const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
       const model=field(settings,'模型',c.settings.model||history.metadata?.latestModel||'');
       const effortLabel=el('label','思考强度'), effort=el('select');
       for(const value of ['', 'none','minimal','low','medium','high','xhigh','max','ultra'])effort.append(new Option(value||'默认',value));
@@ -77,12 +78,13 @@ const Operations = (() => {
       if(editable.permissions!=null||editable.activePermissionProfile!=null)delete editable.sandboxPolicy;
       const raw=field(advanced,'高级设置 JSON',JSON.stringify(editable,null,2),true);raw.rows=10;
       button(advanced,'应用全部设置',b=>{try{const patch=JSON.parse(raw.value);if(confirm('确认将填写的设置应用于此会话后续任务？'))send(threadId,'settings',{settings:patch},b);}catch(e){notice('设置 JSON 格式错误：'+e.message);}});
-      const queue=el('details');queue.append(el('summary','排队任务'));root.append(queue);
+      const queue=el('details');queue.classList.add('mobile-queue');queue.append(el('summary','排队任务'));root.append(queue);
       if(!history.queue||history.queue.error){queue.append(el('p',history.queue?.error||'队列尚未同步'));}
       else{
         const q=history.queue, base={queueFingerprint:q.fingerprint};
         const input=field(queue,'下一轮任务','',true);
-        button(queue,'加入队列',b=>send(threadId,'queue-add',{...base,prompt:input.value},b));
+        input.parentElement.classList.add('mobile-redundant-operation');
+        button(queue,'加入队列',b=>send(threadId,'queue-add',{...base,prompt:input.value},b)).classList.add('mobile-redundant-operation');
         const list=el('div');queue.append(list);
         if(!q.messages.length)list.append(el('p','暂无排队任务'));
         q.messages.forEach((m,index)=>{
@@ -105,7 +107,7 @@ const Operations = (() => {
     requests.hidden=!c.requests.length&&!unsupported;
     if(unsupported>0)requests.append(el('p',`另有 ${unsupported} 项请求尚未适配，请在 Codex App 处理。`));
     for(const r of c.requests){
-      const card=el('section');card.className='request-card';card.append(el('h3',labels[r.action]));
+      const card=el('section');card.className='request-card';card.dataset.action=r.action;card.append(el('h3',labels[r.action]));
       const detail=el('details');detail.append(el('summary','查看请求内容'));const pre=el('pre',JSON.stringify(r.params,null,2));detail.append(pre);card.append(detail);
       const base={nativeRequestId:r.id,requestFingerprint:r.fingerprint};
       const respond=(fields,b)=>send(threadId,r.action,{...base,...fields},b);
@@ -137,7 +139,7 @@ const Operations = (() => {
         button(card,'取消',b=>respond({response:{action:'cancel'}},b));
       }
       for(const n of card.querySelectorAll('[data-draft-key]'))n.dataset.draftKey='request:'+r.id+':'+r.fingerprint+':'+n.dataset.draftKey;
-      if(r.action==='user-input'){
+      if(r.action==='user-input'&&!mobileLayout.matches){
         const key=threadId+':'+r.id+':'+r.fingerprint;
         box('question-content').append(card);
         const open=()=>{if(!box('question-dialog').open)box('question-dialog').showModal();};
@@ -148,7 +150,12 @@ const Operations = (() => {
     for(const d of root.querySelectorAll('details'))if(opened.has(d.querySelector('summary')?.textContent))d.open=true;
     const fields=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')];
     for(const input of fields)if(allDrafts.has(input.dataset.draftKey))input.value=allDrafts.get(input.dataset.draftKey);
+    for(const child of root.children){
+      const label=child.tagName==='DETAILS'?child.querySelector('summary')?.textContent:child.textContent;
+      if(['停止任务','补充指令'].includes(label))child.classList.add('mobile-redundant-operation');
+    }
     if(!canWrite)for(const container of [root,requests,box('question-content')])for(const control of container.querySelectorAll('button,input,select,textarea'))control.disabled=true;
+    window.MobileUI?.decorate(root);
     if(draft){
       const input=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]')].find(n=>n.dataset.draftKey===draft.key);
       if(input){input.value=draft.value;input.focus();if(input.setSelectionRange&&draft.start!==null)input.setSelectionRange(draft.start,draft.end);}

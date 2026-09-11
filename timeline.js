@@ -76,6 +76,7 @@ const Timeline = (() => {
       const row=el('div','turn-marker');const d=item.data||{};
       const time=d.turnStartedAtMs?new Date(d.turnStartedAtMs).toLocaleString():'';
       row.append(el('strong','',item.title),el('span','',[labels[item.status]||item.status,duration(d.durationMs),time,d.model,d.effort].filter(Boolean).join(' · ')));
+      if(d.turnStartedAtMs){const stamp=el('time','mobile-turn-time',new Date(d.turnStartedAtMs).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}));stamp.dateTime=new Date(d.turnStartedAtMs).toISOString();row.append(stamp);}
       return row;
     }
     if(['userMessage','steeringUserMessage','agentMessage'].includes(item.type)){
@@ -105,19 +106,20 @@ const Timeline = (() => {
     imageObserver?.disconnect();
     current={data,container,loadImage};
     const open=new Map([...container.querySelectorAll('details[data-key]')].map(n=>[n.dataset.key,n.open]));
-    const atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<100, scroll=container.scrollTop;
+    const viewport=container.closest('.mobile-chat-scroll')||container;
+    const atBottom=viewport.scrollHeight-viewport.scrollTop-viewport.clientHeight<100, scroll=viewport.scrollTop;
     const all=data.timeline||data.messages.map(m=>({id:m.id,type:m.role==='user'?'userMessage':'agentMessage',text:m.text,phase:m.phase,data:{}}));
     const fragment=document.createDocumentFragment();
     if(all.length>visible){const more=el('button','history-more','显示更早记录（还有 '+(all.length-visible)+' 条）');more.onclick=()=>{
-      const oldHeight=container.scrollHeight;visible+=120;render(data,container,loadImage);container.scrollTop=scroll+container.scrollHeight-oldHeight;
+      const oldHeight=viewport.scrollHeight;visible+=120;render(data,container,loadImage);viewport.scrollTop=scroll+viewport.scrollHeight-oldHeight;
     };fragment.append(more);}
     for(const item of all.slice(-visible))fragment.append(entry(item));
     if(!all.length)fragment.append(el('div','empty-small','暂无会话记录。'));
     container.replaceChildren(fragment);
-    imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:container,rootMargin:'300px'});
+    imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:viewport,rootMargin:'300px'});
     for(const frame of container.querySelectorAll('.message-picture'))if(frame.loadImage)imageObserver.observe(frame);
     for(const n of container.querySelectorAll('details[data-key]'))if(open.has(n.dataset.key))n.open=open.get(n.dataset.key);
-    container.scrollTop=atBottom||!container.dataset.loaded?container.scrollHeight:scroll;container.dataset.loaded='true';
+    viewport.scrollTop=atBottom||!container.dataset.loaded?viewport.scrollHeight:scroll;container.dataset.loaded='true';
     const runtime=data.runtime||{type:'unknown'}, meta=data.metadata||{};
     const activeItems=all.filter(i=>i.status==='inProgress'&&i.type!=='turn');
     const latest=activeItems.at(-1);

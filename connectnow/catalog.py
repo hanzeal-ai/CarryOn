@@ -47,7 +47,35 @@ class Catalog:
                 AND (COALESCE(NULLIF(name,''),title) LIKE ? OR cwd LIKE ?)
                 ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
                 ("%" + search + "%", "%" + search + "%", limit, offset)).fetchall()
-            return [dict(r) for r in rows]
+            rows = [dict(r) for r in rows]
+            self.classify_projects(conn, rows)
+            return rows
+
+    def classify_projects(self, conn, rows):
+        # Desktop projectless tasks have a working directory too. A directory
+        # alone does not make a task belong to a saved Codex project.
+        path = self.home / '.codex-global-state.json'
+        state = json.loads(path.read_text()) if path.exists() else {}
+        projectless = set(state.get('projectless-thread-ids', []))
+        assignments = state.get('thread-project-assignments', {})
+        roots = [Path(root).expanduser().absolute()
+                 for project in state.get('local-projects', {}).values()
+                 for root in project.get('rootPaths', [])]
+        roots.extend(Path(root).expanduser().absolute()
+                     for root in state.get('electron-saved-workspace-roots', []))
+        columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
+        native = dict(conn.execute('SELECT id,project_id FROM threads')) if 'project_id' in columns else {}
+        for row in rows:
+            tid = row['id']
+            if native.get(tid):
+                row['projectless'] = False
+            elif tid in projectless:
+                row['projectless'] = True
+            elif assignments.get(tid, {}).get('projectId'):
+                row['projectless'] = False
+            else:
+                cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
+                row['projectless'] = not (cwd and any(cwd.is_relative_to(root) for root in roots))
 
     def get(self, thread_id):
         valid_id(thread_id)

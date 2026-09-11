@@ -12,9 +12,9 @@ from .thread_status import project_status
 KINDS=('message','done','failed','approval')
 
 
-def project_identity(cwd):
-    path=str(Path(cwd).expanduser().absolute()) if cwd else ''
-    return hashlib.sha256(path.encode()).hexdigest(),Path(path).name if path else '独立会话'
+def project_identity(cwd, projectless=False):
+    path=str(Path(cwd).expanduser().absolute()) if cwd and not projectless else ''
+    return hashlib.sha256(path.encode()).hexdigest(),Path(path).name if path else '最近'
 
 
 class Workspace:
@@ -143,7 +143,7 @@ class Workspace:
         for record in records:
             body=json.loads(record[1]);tid=body['threadId']
             if tid in rows:
-                pid,_=project_identity(rows[tid].get('cwd'))
+                pid,_=project_identity(rows[tid].get('cwd'),rows[tid].get('projectless',False))
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
@@ -163,11 +163,11 @@ class Workspace:
             # Never preserve cached running/idle after a connection reset or unload.
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
-            pid,name=project_identity(row.get('cwd'))
+            pid,name=project_identity(row.get('cwd'),row.get('projectless',False))
             thread={**row,'projectId':pid,'status':status,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0)}
             threads.append(thread)
-            group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':row.get('cwd',''),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
+            group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('cwd',''),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
         return sorted(groups.values(),key=lambda g:(-bool(g['waiting']),-bool(g['running']),g['name'],g['id'])),threads
