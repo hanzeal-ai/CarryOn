@@ -101,48 +101,62 @@ def project_item(item, turn, index):
         title = ("手动" if item.get("source") == "manual" else "自动") + "压缩上下文"
     display_body = unwrap_user_message(body)[0] if kind in ("userMessage", "steeringUserMessage") else body
     return {"id": f"{turn.get('turnId')}:{item.get('id', index)}", "nativeId": item.get("id"),
+        "clientMessageId": item.get("clientUserMessageId", item.get("clientMessageId")),
         "turnId": turn.get("turnId"), "type": kind, "title": title, "status": status,
         "text": body, **({"displayText": display_body} if display_body != body else {}), "phase": item.get("phase"), "durationMs": item.get("durationMs"),
         "data": data, "artifacts": references(kind, data), "supported": kind in FIELDS}
 
 
-def project_timeline(turns, state):
+def project_turn(turn, position):
     entries, unsupported = [], set()
-    for position, turn in enumerate(turns):
-        tid = turn.get("turnId", str(position))
-        meta = pick(turn, "status turnStartedAtMs durationMs error diff")
-        meta.update(pick(turn.get("params", {}), "model effort"))
-        entries.append({"id": f"{tid}:turn", "turnId": tid, "type": "turn", "title": f"第 {position + 1} 轮",
-                        "status": turn.get("status"), "data": meta})
-        items = turn.get("items", [])
-        delegated_output = None
-        if not any(i.get("type") == "userMessage" for i in items):
-            inputs = turn.get("params", {}).get("input", [])
-            output = (turn.get("params", {}).get("toolOutput") or {}).get("output")
-            if not inputs and isinstance(output, str) and output.startswith("<codex_delegation>"):
-                match = re.search(r"<input>\s*([\s\S]*?)\s*</input>", output)
-                if match:
-                    inputs = [{"type":"text", "text":match[1]}]
-                    delegated_output = output
-            if inputs:
-                entries.append(project_item({"type": "userMessage", "id": "input", "content": inputs}, turn, -1))
-        for index, item in enumerate(items):
-            if delegated_output is not None and item.get("type") == "functionCallOutput" and item.get("output") == delegated_output:
-                continue  # The initial delegated input is displayed once as a user message.
-            if item.get("type") == "agentMessage" and item.get("phase") == "analysis":
-                continue
-            if item.get("type") == "hookPrompt":
-                continue  # Injected runtime instructions are not conversation display content.
-            entry = project_item(item, turn, index)
-            entries.append(entry)
-            if not entry["supported"]:
-                unsupported.add(entry["type"])
-        if turn.get("diff"):
-            entries.append({"id":f"{tid}:diff", "turnId":tid, "type":"turnDiff", "title":"本轮修改汇总",
-                            "data":{"diff":turn["diff"]}})
-        if turn.get("error"):
-            entries.append({"id":f"{tid}:error", "turnId":tid, "type":"error", "title":"本轮错误",
-                            "status":"failed", "data":{"error":turn["error"]}})
+    tid = turn.get("turnId", str(position))
+    meta = pick(turn, "status turnStartedAtMs durationMs error diff")
+    meta.update(pick(turn.get("params", {}), "model effort"))
+    entries.append({"id": f"{tid}:turn", "turnId": tid, "type": "turn", "title": f"第 {position + 1} 轮",
+                    "status": turn.get("status"), "data": meta})
+    items = turn.get("items", [])
+    delegated_output = None
+    if not any(i.get("type") == "userMessage" for i in items):
+        inputs = turn.get("params", {}).get("input", [])
+        output = (turn.get("params", {}).get("toolOutput") or {}).get("output")
+        if not inputs and isinstance(output, str) and output.startswith("<codex_delegation>"):
+            match = re.search(r"<input>\s*([\s\S]*?)\s*</input>", output)
+            if match:
+                inputs = [{"type":"text", "text":match[1]}]
+                delegated_output = output
+        if inputs:
+            entries.append(project_item({"type": "userMessage", "id": "input", "content": inputs}, turn, -1))
+    for index, item in enumerate(items):
+        if delegated_output is not None and item.get("type") == "functionCallOutput" and item.get("output") == delegated_output:
+            continue  # The initial delegated input is displayed once as a user message.
+        if item.get("type") == "agentMessage" and item.get("phase") == "analysis":
+            continue
+        if item.get("type") == "hookPrompt":
+            continue  # Injected runtime instructions are not conversation display content.
+        entry = project_item(item, turn, index)
+        entries.append(entry)
+        if not entry["supported"]:
+            unsupported.add(entry["type"])
+    if turn.get("diff"):
+        entries.append({"id":f"{tid}:diff", "turnId":tid, "type":"turnDiff", "title":"本轮修改汇总",
+                        "data":{"diff":turn["diff"]}})
+    if turn.get("error"):
+        entries.append({"id":f"{tid}:error", "turnId":tid, "type":"error", "title":"本轮错误",
+                        "status":"failed", "data":{"error":turn["error"]}})
+    return entries, unsupported
+
+
+def project_timeline(turns, state, turn_cache=None, offset=0):
+    entries, unsupported = [], set()
+    for position, turn in enumerate(turns, offset):
+        segment, unknown = (turn_cache.get(turn, position, project_turn) if turn_cache is not None
+                            else project_turn(turn, position))
+        entries.extend(segment)
+        unsupported.update(unknown)
+    # Question answers span turns. Their display projection may change even when
+    # the native question turn does not; never mutate cached segment entries.
+    entries = [dict(item) if (item['type'] in ('userMessage', 'steeringUserMessage') or
+               item.get('data', {}).get('delivery') == 'async') else item for item in entries]
     from .questions import project_questions
     project_questions(entries)
     from .operations import controls

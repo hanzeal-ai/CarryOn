@@ -3,6 +3,9 @@ const Timeline = (() => {
  function create(ids={runtime:'runtime',info:'conversation-info',source:'history-source'}) {
   let visible = 120, current = null, expanded = false, imageObserver = null;
   const imageCache = new Map();
+  let entryCache = new Map();
+  let loadEarlier=null,expandingHistory=false;
+  function configureHistory(callback){loadEarlier=callback;}
   const safeImage = url => typeof url==='string' && url.length<12000000 && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(url);
   function picture(article, part) {
     const frame=el('button','message-picture'),img=el('img','message-image'),status=el('span','image-status','正在加载图片…');
@@ -26,7 +29,7 @@ const Timeline = (() => {
         if(!frame.isConnected)return;
         const url=result.url||'data:'+result.mime+';base64,'+result.base64;
         if(!safeImage(url))throw Error('图片格式不受支持');
-        img.src=url;
+        img.src=url;delete frame.loadImage;
       } catch(error){if(frame.isConnected)status.textContent=error.message||'图片暂不可用';}
     };
   }
@@ -218,6 +221,20 @@ const Timeline = (() => {
     const atBottom=viewport.scrollHeight-viewport.scrollTop-viewport.clientHeight<100, scroll=viewport.scrollTop;
     const all=data.timeline||data.messages.map(m=>({id:m.id,type:m.role==='user'?'userMessage':'agentMessage',text:m.text,phase:m.phase,data:{}}));
     const fragment=document.createDocumentFragment();
+    const nextEntries=new Map();
+    if(data.historyWindow?.hasMore&&loadEarlier){
+      const more=el('button','history-more','加载更早记录');
+      more.disabled=expandingHistory;
+      more.onclick=async()=>{expandingHistory=true;more.disabled=true;visible+=120;try{await loadEarlier();}finally{expandingHistory=false;more.disabled=false;}};
+      fragment.append(more);
+    }
+    function renderEntry(item){
+      const cached=entryCache.get(item.id),signature=cached?.item===item?cached.signature:JSON.stringify(item);
+      // Question controls depend on current authorization as well as item content.
+      const reusable=!(item.asyncQuestions?.length);
+      const node=reusable&&cached?.signature===signature?cached.node:entry(item);
+      nextEntries.set(item.id,{signature,node,item});return node;
+    }
     if(all.length>visible){const more=el('button','history-more','显示更早记录（还有 '+(all.length-visible)+' 条）');more.onclick=()=>{
       const oldHeight=viewport.scrollHeight;visible+=120;render(data,container,loadImage);viewport.scrollTop=scroll+viewport.scrollHeight-oldHeight;
     };fragment.append(more);}
@@ -226,12 +243,13 @@ const Timeline = (() => {
       const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type)&&!item.artifacts?.length;
       if(activity){
         if(!group){group=el('details','activity-group');group.dataset.key=item.id+':group';group.open=expanded;const summary=el('summary');summary.append(el('span','activity-icon','›_'),el('span','activity-group-label'));group.append(summary);fragment.append(group);}
-        group.append(entry(item));
+        group.append(renderEntry(item));
         group.firstChild.querySelector('.activity-group-label').textContent='执行活动 · '+(group.children.length-1)+' 项';
-      }else{group=null;fragment.append(entry(item));}
+      }else{group=null;fragment.append(renderEntry(item));}
     }
-    if(!all.length)fragment.append(el('div','empty-small','暂无会话记录。'));
+    if(!all.length)fragment.append(typeof viewState==='function'?viewState(data.syncing?'正在同步会话…':'暂无会话记录',{loading:data.syncing===true,symbol:'chat'}):el('div','empty-small',data.syncing?'正在同步会话…':'暂无会话记录。'));
     container.replaceChildren(fragment);
+    entryCache=nextEntries;
     if(editing){const input=[...container.querySelectorAll('[data-question-key]')].find(n=>n.dataset.questionKey===editing.key);if(input&&!input.disabled){input.focus({preventScroll:true});input.setSelectionRange(editing.start,editing.end);}}
     imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:viewport,rootMargin:'300px'});
     for(const frame of container.querySelectorAll('.message-picture'))if(frame.loadImage)imageObserver.observe(frame);
@@ -240,11 +258,12 @@ const Timeline = (() => {
     const runtime=data.runtime||{type:'unknown'}, meta=data.metadata||{};
     const activeItems=all.filter(i=>i.status==='inProgress'&&i.type!=='turn');
     const latest=activeItems.at(-1);
-    const elapsed=all.filter(i=>i.type==='turn').reduce((sum,i)=>sum+(Number.isFinite(i.data?.durationMs)?i.data.durationMs:i.status==='inProgress'&&i.data?.turnStartedAtMs?Math.max(0,Date.now()-i.data.turnStartedAtMs):0),0);
+    const elapsed=(data.earlierDurationMs||0)+all.filter(i=>i.type==='turn').reduce((sum,i)=>sum+(Number.isFinite(i.data?.durationMs)?i.data.durationMs:i.status==='inProgress'&&i.data?.turnStartedAtMs?Math.max(0,Date.now()-i.data.turnStartedAtMs):0),0);
     document.getElementById(ids.runtime).textContent=[elapsed?'已执行 '+duration(elapsed):'',data.status?.label||labels[runtime.type]||runtime.type,
       runtime.type==='active'&&latest?latest.title:'',meta.latestModel,
       data.pendingRequests?.length?'有 '+data.pendingRequests.length+' 项待处理请求':''].filter(Boolean).join(' · ');
     const warnings=[];
+    if(data.syncing)warnings.push('已显示本地记录，正在同步原生历史');
     if(data.truncated)warnings.push('原生历史未完整加载');
     if(!data.timeline)warnings.push('旧历史回退：仅文字记录');
     if(data.coverage?.unsupportedTypes?.length)warnings.push('未适配事件：'+data.coverage.unsupportedTypes.join('、'));
@@ -253,8 +272,8 @@ const Timeline = (() => {
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }
   function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity, details.activity-group'))d.open=value;}}
-  function reset(){for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
-  return {render,reset,setExpanded,configureQuestions};
+  function reset(){for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
+  return {render,reset,setExpanded,configureQuestions,configureHistory};
  }
  return {...create(),create};
 })();

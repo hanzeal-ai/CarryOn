@@ -7,6 +7,58 @@ async function readApiResponse(response) {
     throw Error(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试');
   }
 }
+// Display-only cache bounded by both count and encoded bytes.
+class DisplayHistoryCache {
+  constructor(maxEntries=8,maxBytes=8*1024*1024){this.maxEntries=maxEntries;this.maxBytes=maxBytes;this.entries=new Map();this.bytes=0;}
+  get(key){const item=this.entries.get(key);if(!item)return;this.entries.delete(key);this.entries.set(key,item);return item.value;}
+  set(key,value){
+    const existing=this.entries.get(key);
+    if(existing&&(existing.value===value||(value.historyRevision&&existing.value.historyRevision===value.historyRevision))){this.get(key);return;}
+    this.delete(key);
+    const size=new TextEncoder().encode(JSON.stringify(value)).length;
+    if(size>this.maxBytes)return;
+    this.entries.set(key,{value,size});this.bytes+=size;
+    while(this.entries.size>this.maxEntries||this.bytes>this.maxBytes)this.delete(this.entries.keys().next().value);
+  }
+  delete(key){const item=this.entries.get(key);if(item){this.bytes-=item.size;this.entries.delete(key);}}
+  clear(){this.entries.clear();this.bytes=0;}
+}
+// Decode every wire update before render coalescing; a gap requires a fresh stream.
+class HistoryWire {
+  constructor(){this.scope=null;this.histories={};}
+  decode(packet){
+    const scope=JSON.stringify([packet.subscription,packet.threadId,packet.sideThreadId]);
+    if(scope!==this.scope||packet.status?.enabled===false){this.histories={};this.scope=scope;}
+    const result={...packet},next={...this.histories};
+    for(const field of ['history','sideHistory']){
+      const delta=packet[field+'Delta'];
+      if(delta!==undefined){
+        const previous=this.histories[field];
+        if(!delta||field in packet||!previous||delta.base!==previous.historyRevision)throw Error('历史版本缺口，正在重新同步');
+        const {start,delete:count,items,fields}=delta,timeline=previous.timeline,removed=delta.remove||[];
+        if(!Array.isArray(timeline)||!Number.isInteger(start)||!Number.isInteger(count)||start<0||count<0||start+count>timeline.length||!Array.isArray(items)||!fields||typeof fields.historyRevision!=='string'||!Array.isArray(removed)||removed.some(k=>typeof k!=='string'||['timeline','historyRevision'].includes(k)))throw Error('历史增量格式无效');
+        const retained={...previous};for(const key of removed)delete retained[key];
+        result[field]={...retained,...fields,timeline:[...timeline.slice(0,start),...items,...timeline.slice(start+count)]};
+        if(delta.messages!==undefined){
+          const m=delta.messages,old=previous.messages;
+          if(!Array.isArray(old)||!m||!Number.isInteger(m.start)||!Number.isInteger(m.delete)||m.start<0||m.delete<0||m.start+m.delete>old.length||!Array.isArray(m.items))throw Error('历史增量格式无效');
+          result[field].messages=[...old.slice(0,m.start),...m.items,...old.slice(m.start+m.delete)];
+        }
+        delete result[field+'Delta'];
+      }
+      if(result[field])next[field]=result[field];else delete next[field];
+    }
+    this.histories=next;return result;
+  }
+}
+
+function mergeOutgoingMessage(previous,update,live=false){
+  if(!previous||update.state==='acknowledged')return null;
+  // Live journal evidence can arrive before the HTTP admission response.
+  if(previous.live&&!live)return previous;
+  if(previous.updated&&update.updated&&update.updated<previous.updated)return previous;
+  return {...previous,...update,live:previous.live||live};
+}
 class ConnectNowClient {
   constructor({onUpdate, onDisconnect, onAuthError, onError}) {
     this.onUpdate = onUpdate;
@@ -24,6 +76,7 @@ class ConnectNowClient {
     this.delay = 500;
     this.selection = null;
     this.epoch = 0;
+    this.onSubmission = () => {};
   }
 
   restore(key) {
@@ -52,7 +105,13 @@ class ConnectNowClient {
     const requestId = pending.get(key) || crypto.randomUUID();
     pending.set(key, requestId);
     sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
-    const job = await this.request(path, {...body, requestId});
+    const scope=this.epoch;
+    const composing=path.endsWith('/compose');
+    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,state:'sending',begin:true});
+    let job;
+    try { job = await this.request(path, {...body, requestId}); }
+    catch(error){if(composing&&scope===this.epoch)this.onSubmission({id:requestId,threadId:path.split('/')[2],state:'uncertain'});throw error;}
+    if(composing&&scope===this.epoch)this.onSubmission({...job,id:requestId,threadId:path.split('/')[2]});
     // A known failed/uncertain operation keeps its ID for explicit reconciliation.
     if (!retainUncertain || (job.state !== 'failed' && job.state !== 'uncertain')) {
       pending.delete(key);
@@ -84,7 +143,7 @@ class ConnectNowClient {
   }
 
   subscribe(selection) {
-    this.selection = {...selection, type: 'subscribe', subscription: crypto.randomUUID()};
+    this.selection = {historyProtocol:1, historyLimit:40, ...selection, type: 'subscribe', subscription: crypto.randomUUID()};
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(this.selection));
     else this.connect();
     return this.selection.subscription;
@@ -96,6 +155,7 @@ class ConnectNowClient {
     const url = new URL('/api/stream', location.href);
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url);
+    const wire = new HistoryWire();
     this.socket = socket;
     const current = () => this.socket === socket;
     socket.onopen = () => {
@@ -107,9 +167,9 @@ class ConnectNowClient {
     socket.onmessage = async event => {
       if (!current()) return;
       try {
-        const data = JSON.parse(event.data);
+        const data = wire.decode(JSON.parse(event.data));
         if (data.type === 'update') await this.onUpdate(data, current);
-      } catch (error) { if (current()) this.onError(error); }
+      } catch (error) { if (current()) { this.onError(error); socket.close(); } }
     };
     socket.onclose = event => {
       if (!current()) return;

@@ -111,3 +111,55 @@ test('proxy HTML failures are actionable and retain the retry ID', async()=>{
   await assert.rejects(f.client.submit('message','thread','hello'),/HTTP 502/);
   assert.equal(f.requests.at(-1).body.requestId,id);
 });
+
+test('compose announces pending message before HTTP completes and preserves retry identity',async()=>{
+ const f=fixture(),events=[];f.client.onSubmission=e=>events.push(e);
+ let release;f.respond(()=>new Promise(resolve=>release=resolve));
+ const sending=f.client.submit('compose','thread','hello');
+ assert.equal(events[0].state,'sending');assert.equal(events[0].prompt,'hello');
+ release({ok:true,json:async()=>({id:events[0].id,state:'uncertain'})});await sending;
+ const retry=f.client.submit('compose','thread','hello');
+ assert.equal(events.at(-1).id,events[0].id);
+ release({ok:true,json:async()=>({id:events[0].id,state:'completed'})});await retry;
+ assert.equal(events.at(-1).threadId,'thread');assert.equal(events.at(-1).state,'completed');
+});
+
+test('live confirmation cannot be rolled back or recreated by delayed admission response',()=>{
+ const context=vm.createContext({TextEncoder});
+ vm.runInContext(fs.readFileSync('client.js','utf8')+'\nthis.merge=mergeOutgoingMessage;',context);
+ const start={id:'r',prompt:'hello',state:'sending'};
+ const confirmed=context.merge(start,{id:'r',state:'completed',clientMessageId:'native'},true);
+ assert.equal(context.merge(confirmed,{id:'r',state:'preparing'}).state,'completed');
+ assert.equal(context.merge(null,{id:'r',state:'preparing'}),null);
+ assert.equal(context.merge(confirmed,{id:'r',state:'acknowledged'},true),null);
+});
+
+test('display cache honors recency, byte budget and oversized entries',()=>{
+ const context=vm.createContext({TextEncoder});
+ vm.runInContext(fs.readFileSync('client.js','utf8')+'\nthis.Cache=DisplayHistoryCache;',context);
+ const cache=new context.Cache(2,100);
+ cache.set('a',{text:'a'});cache.set('b',{text:'b'});cache.get('a');cache.set('c',{text:'c'});
+ assert.equal(cache.get('b'),undefined);assert.equal(cache.get('a').text,'a');
+ cache.set('huge',{text:'x'.repeat(101)});assert.equal(cache.get('huge'),undefined);
+ assert(cache.bytes<=100);cache.clear();assert.equal(cache.bytes,0);
+});
+
+test('history deltas reconstruct ordered state and gaps reject before rendering',()=>{
+  const context=vm.createContext({});
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../client.js'),'utf8')+'\nglobalThis.wire=new HistoryWire();',context);
+  const base={type:'update',subscription:'a',threadId:'t',history:{historyRevision:'1',timeline:[{id:'a',text:'old'},{id:'b'}],messages:['old'],obsolete:true}};
+  context.wire.decode(base);
+  const next=context.wire.decode({type:'update',subscription:'a',threadId:'t',historyDelta:{base:'1',fields:{historyRevision:'2'},remove:['obsolete'],start:0,delete:1,items:[{id:'a',text:'new'}],messages:{start:0,delete:1,items:['new']}}});
+  assert.equal(next.history.timeline[0].text,'new');assert.equal(next.history.timeline[1].id,'b');
+  assert.equal(next.history.obsolete,undefined);assert.equal(next.history.messages[0],'new');
+  assert.throws(()=>context.wire.decode({subscription:'a',threadId:'t',historyDelta:{base:'wrong'}}),/版本缺口/);
+  assert.throws(()=>context.wire.decode({subscription:'b',threadId:'t',historyDelta:{base:'2'}}),/版本缺口/);
+});
+
+test('display cache uses history revision before serializing a newly decoded object',()=>{
+  const context=vm.createContext({TextEncoder});
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../client.js'),'utf8')+'\nglobalThis.cache=new DisplayHistoryCache();',context);
+  const first={historyRevision:'one',timeline:[]};context.cache.set('t',first);
+  context.cache.set('t',{historyRevision:'one',toJSON(){throw Error('unchanged revision must not be encoded');}});
+  assert.equal(context.cache.get('t'),first);
+});

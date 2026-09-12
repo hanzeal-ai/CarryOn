@@ -49,3 +49,46 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(changed.wait(1))
             self.assertTrue(ipc.events.flags[tid]['hasUnreadTurn'])
         finally:peer.close();reader.join(1);ipc.close()
+
+
+class SnapshotConcurrencyTests(unittest.TestCase):
+    def test_slow_thread_does_not_block_another_thread(self):
+        ipc = DesktopIPC('unused')
+        entered, release, fast = threading.Event(), threading.Event(), threading.Event()
+        def load(tid, owner=None):
+            if tid == 'slow':
+                entered.set(); release.wait(2)
+            else:
+                fast.set()
+            return 'owner', {'id':tid}
+        ipc._snapshot = load
+        slow = threading.Thread(target=ipc.snapshot, args=('slow',))
+        quick = threading.Thread(target=ipc.snapshot, args=('fast',))
+        slow.start()
+        try:
+            self.assertTrue(entered.wait(1)); quick.start()
+            self.assertTrue(fast.wait(.5), 'another thread waited behind complete history')
+        finally:
+            release.set(); slow.join(2); quick.join(2)
+
+    def test_sidebar_reuses_snapshot_after_waiting_for_same_thread(self):
+        ipc = DesktopIPC('unused')
+        ipc.owner = lambda *args, **kwargs: 'owner'
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def load(tid, owner=None):
+            calls.append(tid); entered.set(); release.wait(2)
+            with ipc.lock:
+                ipc.following[tid] = 'owner'
+                ipc.snapshots[tid] = (1, {'id':tid})
+            return 'owner', {'id':tid}
+        ipc._snapshot = load
+        first = threading.Thread(target=ipc.snapshot, args=('same',))
+        second = threading.Thread(target=ipc.sidebar_snapshot, args=('same',))
+        first.start()
+        try:
+            self.assertTrue(entered.wait(1)); second.start(); release.set()
+            first.join(2); second.join(2)
+            self.assertEqual(calls, ['same'])
+        finally:
+            release.set(); first.join(2); second.join(2)

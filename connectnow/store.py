@@ -25,9 +25,13 @@ class Journal:
             row = self.conn.execute("SELECT body FROM jobs WHERE id=?", (job_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
-    def list(self):
+    def list(self, limit=None):
         with self.lock:
-            return [json.loads(r[0]) for r in self.conn.execute("SELECT body FROM jobs ORDER BY created DESC")]
+            if limit is not None and (type(limit) is not int or limit < 0):
+                raise ValueError('Invalid journal limit')
+            query = "SELECT body FROM jobs ORDER BY created DESC"
+            rows = self.conn.execute(query) if limit is None else self.conn.execute(query + " LIMIT ?", (limit,))
+            return [json.loads(r[0]) for r in rows]
 
     def insert(self, job):
         with self.lock:

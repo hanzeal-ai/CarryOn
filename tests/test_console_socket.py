@@ -44,9 +44,42 @@ class ConsoleSocketTests(test_console.ConsoleTests):
         status, ws = self.socket(); self.assertEqual(status, 101)
         ws.send({'type':'subscribe', 'subscription':'test', 'threadId':T, 'threadIds':[T]})
         packet = ws.receive()
+        while packet['type'] == 'ping':
+            ws.send({'type':'pong'}); packet = ws.receive()
         self.assertEqual(packet['type'], 'update')
         self.assertEqual(packet['subscription'], 'test')
         return ws, packet
+
+    def test_continuous_updates_still_receive_heartbeats(self):
+        import threading
+        from unittest.mock import patch
+        from connectnow import console_socket
+        with patch.object(console_socket, 'HEARTBEAT_INTERVAL', .05), patch.object(console_socket, 'READ_TIMEOUT', .25):
+            self.connect_device()
+            ws, _ = self.subscribed()
+            device = self.server.devices['my-mac']
+            sid = next(iter(device.streams))
+            stop = threading.Event()
+            def emit():
+                while not stop.wait(.01):
+                    device.receive({'type':'event', 'streamId':sid, 'body':{'type':'update'}})
+            worker = threading.Thread(target=emit, daemon=True); worker.start()
+            try:
+                end = time.monotonic() + .8
+                updates = pings = 0
+                while time.monotonic() < end:
+                    packet = ws.receive()
+                    if packet['type'] == 'ping':
+                        pings += 1; ws.send({'type':'pong'})
+                    else:
+                        updates += 1
+                self.assertGreater(updates, 10)
+                self.assertGreater(pings, 3)
+                self.assertFalse(device.closed)
+            finally:
+                stop.set(); worker.join(1)
+                ws.handler.connection.shutdown(socket.SHUT_RDWR)
+                self.wait_for(lambda:not device.streams)
 
     def test_ws_auth_boundaries(self):
         self.login()
@@ -145,3 +178,61 @@ class ConsoleSocketTests(test_console.ConsoleTests):
         while packet['body'].get('workspaceRevision',0)<=before: packet=ws.receive()
         self.assertEqual(unread(),0)
         self.assertTrue(next(t for t in workspace.projection('binding:read-sync-test')[1] if t['id']==T)['actionable'])
+
+    def test_switch_subscription_on_same_socket_filters_old_stream(self):
+        self.connect_device();ws,first=self.subscribed()
+        self.assertTrue(first['resubscribe'])
+        device=self.server.devices['my-mac'];old=next(iter(device.streams))
+        ws.send({'type':'subscribe','subscription':'second','threadId':T,'threadIds':[]})
+        while True:
+            packet=ws.receive()
+            if packet['type']=='ping':ws.send({'type':'pong'});continue
+            if packet.get('subscription')=='second':break
+        self.assertGreater(packet['revision'],first['revision'])
+        self.assertEqual(packet['body']['subscription'],'second')
+        self.assertNotIn(old,device.streams)
+        self.assertEqual(len(device.streams),1)
+        self.assertEqual(len(self.server.console_streams),1)
+        for index in range(20):
+            ws.send({'type':'subscribe','subscription':f'rapid-{index}','threadId':T,'threadIds':[]})
+        while True:
+            packet=ws.receive()
+            if packet['type']=='ping':ws.send({'type':'pong'});continue
+            self.assertEqual(packet['type'],'update')
+            if packet.get('subscription')=='rapid-19':break
+        self.assertEqual(len(device.streams),1)
+        self.assertEqual(len(self.server.console_streams),1)
+
+    def test_window_and_delta_roundtrip_through_device_gateway_console(self):
+        from connectnow.history_cache import NativeSnapshot
+        from connectnow.history_wire import HistoryWire
+        from connectnow.patches import apply_patches
+        from test_performance_protocol import state
+        self.connect_device()
+        current=[state(1000)]
+        self.bridge.ipc.current=lambda tid:current[0]
+        _,ws=self.socket();ws.MAX_MESSAGE=32*1024*1024
+        ws.send({'type':'subscribe','subscription':'window','threadId':T,'historyProtocol':1,'historyLimit':40})
+        decoder=HistoryWire()
+        def receive():
+            while True:
+                packet=ws.receive()
+                if packet['type']=='ping':ws.send({'type':'pong'});continue
+                self.assertEqual(packet['type'],'update')
+                return packet['body']
+        first=receive();full=decoder.decode(first)
+        self.assertEqual(len(full['history']['timeline']),120)
+        self.assertTrue(full['history']['historyWindow']['hasMore'])
+        current[0]=NativeSnapshot(apply_patches(current[0],[{'op':'replace','path':['turns',999,'items',0,'text'],'value':'new streamed answer'}]))
+        self.bridge.notify()
+        delta=receive()
+        self.assertIn('historyDelta',delta)
+        changed=decoder.decode(delta)
+        self.assertEqual(changed['history']['timeline'][-1]['text'],'new streamed answer')
+        self.assertEqual(changed['history']['messages'][-1]['text'],'new streamed answer')
+        ws.send({'type':'subscribe','subscription':'earlier','threadId':T,'historyProtocol':1,'historyLimit':80})
+        while True:
+            packet=receive()
+            if packet.get('subscription')=='earlier':break
+        self.assertIn('history',packet)
+        self.assertEqual(len(decoder.decode(packet)['history']['timeline']),240)

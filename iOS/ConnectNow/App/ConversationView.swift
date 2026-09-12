@@ -10,6 +10,7 @@ struct ConversationView: View {
     @State private var modelInfo = false
     @State private var visibleCount = 120
     @State private var bottomVisible = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var photos: [PhotosPickerItem] = []
     private var images: [String] {
         get { model.draftImages }
@@ -23,8 +24,16 @@ struct ConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
-                        if model.history == .null { BlankState(text: model.connected ? "正在读取会话…" : "等待连接，保留输入内容", loading: model.connected) }
+                        if let failure = model.historyFailure, model.history == .null { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { model.retryHistory() }) }
+                        else if model.history == .null { BlankState(text: model.device?.value["online"].bool == false ? "工作区已离线" : "正在加载会话…", loading: model.device?.value["online"].bool != false, symbol: "wifi.slash") }
                         let timeline = groupedTimeline(model.history["timeline"].array)
+                        if let failure = model.historyFailure, model.history != .null {
+                            HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { model.retryHistory() } }
+                        }
+                        if model.history["historyWindow"]["hasMore"].bool == true {
+                            Button("加载更早记录") { visibleCount += 120; model.loadEarlierHistory() }.font(.caption).frame(minHeight: 44).disabled(!model.connected)
+                        }
+                        if model.historyFailure == nil && model.history["syncing"].bool == true && !timeline.isEmpty { Text("已显示本地记录，正在同步原生历史").font(.caption).foregroundStyle(Design.secondary) }
                         if timeline.count > visibleCount { Button("显示更早记录（还有 \(timeline.count - visibleCount) 条）") { visibleCount += 120 }.font(.caption).frame(minHeight: 44) }
                         ForEach(Array(timeline.suffix(visibleCount).enumerated()), id: \.element.stableID) { _, item in
                             if item["type"].text == "activityGroup" {
@@ -33,7 +42,7 @@ struct ConversationView: View {
                                 } label: { Label("执行活动 · \(item["items"].array.count) 项", systemImage: "terminal") }.font(.caption).tint(Design.secondary).disclosureGroupStyle(CompactActivityStyle())
                             } else { TimelineEntry(item: item, threadID: thread.id) }
                         }
-                        if model.history != .null && timeline.isEmpty { BlankState(text: "暂无会话记录") }
+                        if model.historyFailure == nil && model.history != .null && timeline.isEmpty && model.visibleOutgoing.isEmpty { BlankState(text: model.history["syncing"].bool == true ? "正在同步会话…" : "暂无会话记录", loading: model.history["syncing"].bool == true, symbol: "bubble.left.and.bubble.right") }
                         ForEach(model.history["controls"]["requests"].array, id: \.requestKey) { request in
                             NativeRequestView(request: request).id(request.requestKey)
                         }
@@ -45,11 +54,27 @@ struct ConversationView: View {
                                 ForEach(model.history["queue"]["messages"].array, id: \.stableID) { Text($0["text"].text).font(.caption).textSelection(.enabled) }
                             }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
                         }
-                        if model.state == "running" { HStack { ProgressView().controlSize(.mini); Text("正在继续处理").font(.caption) }.foregroundStyle(Design.secondary) }
+                        ForEach(model.visibleOutgoing, id: \.stableID) { item in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(item["prompt"].text.isEmpty ? "图片消息" : item["prompt"].text).textSelection(.enabled)
+                                let labels = ["sending": "发送中…", "preparing": "发送中…", "dispatching": "发送中…", "failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
+                                Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
+                                if item["state"].text == "failed" { Button("清除提示") { model.outgoing.removeValue(forKey: item["id"].text) }.font(.caption) }
+                            }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        if model.historyFailure == nil && model.state == "running" && !timeline.isEmpty && model.history["syncing"].bool != true { HStack { ProgressView().controlSize(.mini); Text("正在继续处理").font(.caption) }.foregroundStyle(Design.secondary) }
                         Color.clear.frame(height: 1).id("bottom")
                             .onAppear { bottomVisible = true; markRead() }.onDisappear { bottomVisible = false }
                     }.padding(.horizontal, 21).padding(.vertical, 20)
                 }.scrollDismissesKeyboard(.interactively)
+                    .overlay(alignment: .bottomTrailing) {
+                        if !bottomVisible && !model.history["timeline"].array.isEmpty {
+                            Button { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } } label: {
+                                Image(systemName: "arrow.down").font(.system(size: 18, weight: .medium)).frame(width: 44, height: 44)
+                            }.background(.regularMaterial, in: Circle()).overlay(Circle().stroke(Color.black.opacity(0.08)))
+                                .accessibilityLabel("回到最新消息").padding(12)
+                        }
+                    }
                     .onChange(of: model.historyRevision) { old, _ in
                         if bottomVisible || old == 0 { proxy.scrollTo("bottom", anchor: .bottom); markRead() }
                     }
@@ -85,7 +110,7 @@ struct ConversationView: View {
             } }
             .safeAreaInset(edge: .top, spacing: 0) {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(model.connectionLabel + executionDuration(model.history["timeline"].array, now: context.date))
+                    Text(model.connectionLabel + executionDuration(model.history["timeline"].array, earlier: model.history["earlierDurationMs"].int ?? 0, now: context.date))
                         .font(.caption2).foregroundStyle(Design.secondary).padding(5)
                 }
             }
@@ -186,7 +211,7 @@ struct MessageImage: View {
     var body: some View {
         Group {
             if let image { Button { showImage = true } label: { Image(uiImage: image).resizable().scaledToFill().frame(width: 88, height: 88).clipped() }.buttonStyle(.plain).accessibilityLabel("打开原图") }
-            else if let failure { Text(failure).font(.caption).foregroundStyle(Design.secondary) }
+            else if let failure { Button { self.failure = nil } label: { Label("重试", systemImage: "arrow.clockwise").font(.caption) }.accessibilityHint(failure) }
             else { ProgressView().task { await load() } }
         }.frame(width: 88, height: 88).clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black.opacity(0.12)))
@@ -239,8 +264,8 @@ private func groupedTimeline(_ items: [JSONValue]) -> [JSONValue] {
     }
     flush(); return result
 }
-private func executionDuration(_ items: [JSONValue], now: Date) -> String {
-    var elapsed = 0.0
+private func executionDuration(_ items: [JSONValue], earlier: Int = 0, now: Date) -> String {
+    var elapsed = Double(earlier)
     for item in items where item["type"].text == "turn" {
         if case .number(let duration) = item["data"]["durationMs"] { elapsed += duration }
         else if item["status"].text == "inProgress", case .number(let start) = item["data"]["turnStartedAtMs"] { elapsed += max(0, now.timeIntervalSince1970 * 1000 - start) }

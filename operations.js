@@ -29,7 +29,7 @@ const Operations = (() => {
     writable=canWrite;
     transport=api;notify=notice;
     const c=history.controls;
-    if(!c){reset();return;}
+    if(!c||history.syncing===true){reset();return;}
     const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite]);
     if(next===signature)return;
     window.MobileUI?.beforeOperationsRender();

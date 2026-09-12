@@ -21,7 +21,7 @@ def idle_snapshot(state):
         raise BridgeError("会话不是已确认的空闲状态，请等待任务结束或在 Codex App 查看")
 
 
-def snapshot_history(state):
+def snapshot_history(state, turn_cache=None, limit=None):
     """Render both legacy turns and the desktop's canonical paginated history."""
     canonical = state.get("turnHistory", {})
     complete = True
@@ -38,8 +38,12 @@ def snapshot_history(state):
         complete = history.get("isComplete", False)
     else:
         turns = state.get("turns", [])
+    total = len(turns)
+    offset = max(0, total - limit) if limit else 0
+    earlier_duration = sum(t.get("durationMs", 0) for t in turns[:offset] if isinstance(t.get("durationMs", 0), (int, float)))
+    turns = turns[offset:]
     messages, statuses = [], {}
-    for index, turn in enumerate(turns):
+    for index, turn in enumerate(turns, offset):
         turn_id = turn.get("turnId")
         params = turn.get("params", {})
         user_text = "\n".join(i.get("text", "") for i in params.get("input", []) if i.get("type") == "text")
@@ -68,7 +72,8 @@ def snapshot_history(state):
             statuses[turn_id] = {"status": turn.get("status", "unknown"), "text": final,
                 "createCalls": [i for i in turn.get("items", []) if i.get("type") == "mcpToolCall"
                     and i.get("server") == "codex_app" and i.get("tool") == "create_thread"]}
-    return {**project_timeline(turns, state),
+    return {**project_timeline(turns, state, turn_cache, offset),
+            **({"historyWindow": {"limit": limit, "total": total, "hasMore": offset > 0}, "earlierDurationMs": earlier_duration} if limit else {}),
             "status": project_status(state),
             "thread": {"id": state["id"], "title": state.get("title", ""), "cwd": state.get("cwd", "")},
             "messages": messages[-200:], "turns": statuses,
@@ -96,6 +101,8 @@ class Bridge:
         self.refreshing_jobs = set()
         self.realtime = None
         self.journal.on_change = self.notify
+        from .history_cache import HistoryCache
+        self.history_cache = HistoryCache()
 
     def open_stream(self):
         from .realtime import Realtime
@@ -153,6 +160,7 @@ class Bridge:
     def disable(self):
         with self.lock:
             self.enabled = False
+            self.history_cache.clear()
             self.generation += 1
             ipc, self.ipc = self.ipc, None
             if self.realtime is not None:
@@ -224,7 +232,7 @@ class Bridge:
                 self.side_scanned_at = time.monotonic() if self.generation == generation else 0
             self.notify()
 
-    def side_history(self, parent_id, side_id):
+    def side_history(self, parent_id, side_id, limit=None):
         valid_id(side_id)
         self.catalog.get(parent_id)
         ipc, generation = self.require()
@@ -239,7 +247,7 @@ class Bridge:
             raise ValueError('临时聊天关联已失效')
         with self.lock:
             self.check_generation(ipc, generation)
-        result = snapshot_history(state)
+        result = self.history_cache.project(state, snapshot_history, segmented=True, limit=limit)
         result['parentId'] = parent_id
         return result
 
@@ -261,18 +269,37 @@ class Bridge:
             self.check_generation(ipc, generation)
         return result
 
-    def history(self, thread_id):
+    def preview_history(self, thread_id):
+        """Persisted display only while the background native loader establishes authority."""
+        ipc, generation = self.require()
+        row = self.catalog.get(thread_id)
+        try:
+            result = dict(self.catalog.history(thread_id))
+        except (ValueError, OSError):
+            result = {'thread': {k: row.get(k, '') for k in ('id', 'title', 'cwd')}, 'messages': []}
+        result['timeline'] = [{'id': message['id'], 'turnId': message.get('turnId'),
+                               'type': 'userMessage' if message.get('role') == 'user' else 'agentMessage',
+                               'text': message.get('text', ''), 'data': {}} for message in result.get('messages', [])]
+        result.update(syncing=True, controls={}, runtime={'type': 'unknown'}, status={'state': 'unknown', 'label': '同步中'})
+        result['historyRevision'] = 'preview:' + hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            self.check_generation(ipc, generation)
+        return result
+
+    def history(self, thread_id, limit=None):
         self.catalog.get(thread_id)
         ipc, generation = self.require()
         try:
             state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
             if state is None:
                 _, state = ipc.snapshot(thread_id)
-            result = snapshot_history(state)
+            result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
             try:
                 result['queue'] = self.queue(thread_id)
+                result['historyRevision'] += ':' + result['queue']['fingerprint']
             except (ValueError, OSError):
                 result['queue'] = {'error': '无法读取原生排队消息，请稍后刷新'}
+                result['historyRevision'] += ':queue-unavailable'
         except IPCError as exc:
             if str(exc) != "no-client-found":
                 raise
@@ -315,7 +342,7 @@ class Bridge:
         if previous:
             if previous.get('composeFingerprint')!=fingerprint:raise BridgeError('requestId 已用于不同内容')
             return previous
-        _,state=ipc.snapshot(thread_id)
+        owner,state=ipc.snapshot(thread_id)
         with self.lock:
             self.check_generation(ipc,generation)
             if authorize:authorize()
@@ -328,7 +355,7 @@ class Bridge:
                 data.update(action='queue-add',queueFingerprint=self.queue(thread_id)['fingerprint'])
             else:
                 data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
-            return operate(self,thread_id,data,metadata,authorize)
+            return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state))
 
     def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None):
         from .images import validate_images
@@ -408,6 +435,27 @@ class Bridge:
             with self.lock:
                 self.refreshing_jobs.discard(job_id)
 
+    def turn_evidence(self, thread_id, turn_id):
+        """Read only the requested native turn; job tracking needs no display timeline."""
+        from .operations import turns
+        self.catalog.get(thread_id)
+        ipc, generation = self.require()
+        try:
+            state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
+            if state is None:
+                _, state = ipc.snapshot(thread_id)
+            native = next((turn for turn in reversed(turns(state)) if turn.get('turnId') == turn_id), None)
+            evidence = None if native is None else {
+                'status': native.get('status', 'unknown'),
+                'createCalls': [item for item in native.get('items', []) if item.get('type') == 'mcpToolCall'
+                                and item.get('server') == 'codex_app' and item.get('tool') == 'create_thread']}
+        except IPCError as exc:
+            if str(exc) != 'no-client-found': raise
+            evidence = self.catalog.history(thread_id).get('turns', {}).get(turn_id)
+        with self.lock:
+            self.check_generation(ipc, generation)
+        return evidence
+
     def _refresh_job(self, job_id):
         job = self.journal.get(job_id)
         if job is None:
@@ -415,10 +463,9 @@ class Bridge:
         if job["state"] not in ("accepted", "uncertain") or not job.get("turnId"):
             return job
         try:
-            history = self.history(job["threadId"])
+            turn = self.turn_evidence(job["threadId"], job["turnId"])
         except (ValueError, IPCError):
             return job  # Unavailable evidence is never interpreted as completion.
-        turn = history["turns"].get(job["turnId"])
         if not turn or turn["status"] not in ("completed", "failed", "interrupted"):
             return job
         if job["kind"] == "message":

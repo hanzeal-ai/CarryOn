@@ -112,3 +112,51 @@ test('changed selection ignores old WebSocket frames and session expiry stops re
  sockets[1].message({type:'error',status:401,error:'expired'});
  await new Promise(resolve=>setImmediate(resolve));assert.equal(client.token,'');assert.deepEqual(errors,['auth']);assert.equal(client.active,false);
 });
+
+test('heartbeat reply does not wait for slow update rendering',async()=>{
+ const {client,sockets}=fixture(async()=>ok({}));client.device='one';client.token='session';
+ let release;client.onUpdate=()=>new Promise(resolve=>release=resolve);
+ client.subscribe({threadId:'t',threadIds:[]});const ws=sockets[0];ws.open();
+ ws.message({type:'update',subscription:client.selection.subscription,revision:1,body:{type:'update'}});
+ await new Promise(resolve=>setImmediate(resolve));
+ ws.message({type:'ping'});
+ assert.equal(ws.sent.at(-1).type,'pong');
+ release();client.close();
+});
+
+test('advertised resubscribe reuses socket and drops previous subscription updates',async()=>{
+ const updates=[];const {client,sockets}=fixture(async()=>ok({}));client.device='one';client.token='session';
+ client.onUpdate=packet=>updates.push(packet);
+ const first=client.subscribe({threadId:'a',threadIds:[]});const socket=sockets[0];socket.open();
+ socket.readyState=1; // browser OPEN state; fixture's original tests omit readyState.
+ const Socket=socket.constructor;Socket.OPEN=1;
+ socket.message({type:'update',revision:1,subscription:first,resubscribe:true,body:{type:'update',threadId:'a'}});
+ await new Promise(resolve=>setImmediate(resolve));
+ const second=client.subscribe({threadId:'b',threadIds:[]});assert.equal(sockets.length,1);
+ assert.equal(socket.sent.at(-1).subscription,second);
+ socket.message({type:'update',revision:2,subscription:first,resubscribe:true,body:{type:'update',threadId:'old'}});
+ socket.message({type:'update',revision:3,subscription:second,resubscribe:true,body:{type:'update',threadId:'b'}});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(updates.map(p=>p.threadId),['a','b']);client.close();
+});
+
+test('slow rendering keeps only the newest complete projection',async()=>{
+ const updates=[];let release;const {client,sockets}=fixture(async()=>ok({}));client.device='one';client.token='session';
+ client.onUpdate=async packet=>{updates.push(packet.marker);if(packet.marker===1)await new Promise(resolve=>release=resolve);};
+ const id=client.subscribe({threadId:'a',threadIds:[]});const socket=sockets[0];socket.open();
+ for(let i=1;i<=50;i++)socket.message({type:'update',revision:i,subscription:id,body:{type:'update',marker:i}});
+ assert.deepEqual(updates,[1]);release();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(updates,[1,50]);client.close();
+});
+
+
+test('expanding the history window creates a new subscription on the same socket',async()=>{
+ const {client,sockets}=fixture(async()=>ok({}));client.device='mac';client.token='session';
+ const first=client.subscribe({threadId:'thread',historyLimit:40});const ws=sockets[0];ws.constructor.OPEN=1;ws.readyState=1;ws.open();
+ ws.message({type:'update',subscription:first,revision:1,resubscribe:true,body:{type:'update'}});
+ const next=client.subscribe({threadId:'thread',historyLimit:80});
+ assert.notEqual(next,first);assert.equal(sockets.length,1);assert.equal(client.selection.historyLimit,80);
+ const side=client.subscribe({threadId:'thread',historyLimit:80,sideHistoryLimit:120});
+ assert.notEqual(side,next);assert.equal(client.selection.historyLimit,80);assert.equal(client.selection.sideHistoryLimit,120);
+ client.close();
+});

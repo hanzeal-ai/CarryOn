@@ -76,7 +76,7 @@ class FakeBridge:
         self.realtime = None
         self.text = 'a'
         self.ipc = FakeIPC()
-        self.journal = SimpleNamespace(list=lambda: [])
+        self.journal = SimpleNamespace(list=lambda limit=None: [])
     def notify(self):
         with self.events:
             self.event_revision += 1
@@ -222,6 +222,27 @@ class WSTests(unittest.TestCase):
     def test_no_records_before_authentication(self):
         c,h=self.connect();c.settimeout(.1)
         with self.assertRaises(socket.timeout):c.recv(1)
+
+    def test_heartbeat_continues_while_history_is_loading(self):
+        from unittest.mock import patch
+        from connectnow import websocket
+        entered=threading.Event();release=threading.Event()
+        original=self.server.bridge.history
+        def history(tid):
+            entered.set();release.wait(2);return original(tid)
+        self.server.bridge.history=history
+        with patch.object(websocket,'HEARTBEAT_INTERVAL',.03):
+            c,_=self.connect();self.send(c,{'type':'auth','token':self.server.token})
+            self.send(c,{'type':'subscribe','threadId':THREAD,'subscription':'slow'})
+            try:
+                self.assertTrue(entered.wait(1))
+                pings=0
+                while pings < 2:
+                    opcode,data=self.receive(c)
+                    if opcode==9:pings+=1
+                    elif opcode==1:self.assertNotEqual(data.get('subscription'),'slow')
+            finally:
+                release.set()
 
 
 if __name__ == '__main__': unittest.main()

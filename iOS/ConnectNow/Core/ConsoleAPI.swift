@@ -112,11 +112,22 @@ public actor ConsoleAPI {
 
 
 /// One ordered read stream. Cancellation never retries a submitted operation.
-public final class ConsoleStream: Sendable {
+public final class ConsoleStream: @unchecked Sendable {
     private let task: URLSessionWebSocketTask
-    private let subscription: String
+    private let selectionLock = NSLock()
+    private var subscription: String
+    private var supportsResubscribe = false
+    private var historyWire = HistoryWireProjection()
+    public var canResubscribe: Bool { selectionLock.withLock { supportsResubscribe } }
     fileprivate init(task: URLSessionWebSocketTask, subscription: String) {
         self.task = task; self.subscription = subscription
+    }
+    public func resubscribe(_ selection: JSONValue) async throws {
+        let payload = try selection.setting("type", .string("subscribe")).encoded()
+        let text = String(decoding: payload, as: UTF8.self)
+        guard canResubscribe else { throw APIError("此服务端需要重新建立订阅") }
+        selectionLock.withLock { subscription = selection["subscription"].text }
+        try await task.send(.string(text))
     }
     public func next() async throws -> JSONValue {
         try await withTaskCancellationHandler {
@@ -132,9 +143,13 @@ public final class ConsoleStream: Sendable {
                 let packet = try JSONDecoder().decode(JSONValue.self, from: data)
                 if packet["type"].text == "ping" { try await task.send(.string("{\"type\":\"pong\"}")); continue }
                 if packet["type"].text == "error" { throw APIError(packet["error"].string ?? "实时订阅失败", status: packet["status"].int ?? 500) }
-                guard packet["type"].text == "update", packet["subscription"].text == subscription,
-                      packet["body"]["type"].text == "update" else { throw APIError("实时更新与当前订阅不匹配") }
-                return packet["body"]
+                guard packet["type"].text == "update", packet["body"]["type"].text == "update" else { throw APIError("实时更新格式无效") }
+                let body: JSONValue? = try selectionLock.withLock {
+                    guard packet["subscription"].text == subscription else { return nil }
+                    supportsResubscribe = packet["resubscribe"].bool == true
+                    return try historyWire.decode(packet["body"])
+                }
+                if let body { return body }
             }
         } onCancel: { self.close() }
     }

@@ -10,8 +10,10 @@ import struct
 import threading
 import time
 import uuid
+import weakref
 
 from .patches import apply_patches
+from .history_cache import NativeSnapshot
 
 
 class IPCError(Exception):
@@ -33,7 +35,7 @@ class DesktopIPC:
         self.lock = threading.RLock()
         self.write_lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
-        self.snapshot_lock = threading.Lock()
+        self.snapshot_locks = weakref.WeakValueDictionary()
         self.on_change = lambda: None
         self.on_read = lambda tid: None
         self.resyncing = set()
@@ -113,22 +115,36 @@ class DesktopIPC:
             "hostId": "local", "conversationId": thread_id}, version=1, timeout_ms=timeout_ms)
         return response["handledByClientId"]
 
+    def _snapshot_lock(self, thread_id):
+        with self.lock:
+            return self.snapshot_locks.setdefault(thread_id, threading.Lock())
+
     def snapshot(self, thread_id):
-        with self.snapshot_lock:
+        with self._snapshot_lock(thread_id):
             return self._snapshot(thread_id)
 
     def sidebar_snapshot(self, thread_id):
         # Discovery for unloaded threads must not hold the full-history lock.
+        with self.lock:
+            state = self.current(thread_id)
+            if state is not None and thread_id in self.following:
+                return self.following[thread_id], state
         owner = self.owner(thread_id, timeout_ms=1500)
-        with self.snapshot_lock:
+        with self._snapshot_lock(thread_id):
+            state = self.current(thread_id)
+            if state is not None:
+                return owner, state
             return self._snapshot(thread_id, owner)
 
     def _snapshot(self, thread_id, owner=None):
         owner = owner or self.owner(thread_id)
         with self.lock:
-            expired = [t for t in self.following if not self.watchers.get(t) and t != thread_id][:-3]
+            expired = [t for t in self.following if not self.watchers.get(t) and t != thread_id
+                       and not self._snapshot_lock(t).locked()][:-3]
         for old in expired:
             with self.lock:
+                if self.watchers.get(old) or self._snapshot_lock(old).locked():
+                    continue
                 old_owner = self.following.pop(old, None)
                 self.snapshots.pop(old, None)
             if old_owner:
@@ -245,7 +261,7 @@ class DesktopIPC:
                 state = change.get("conversationState")
                 if not isinstance(state, dict) or state.get("id") != thread_id:
                     return
-                self.snapshots[thread_id] = (revision, state)
+                self.snapshots[thread_id] = (revision, NativeSnapshot(state))
             elif change.get("type") == "patches":
                 try:
                     if not previous or previous[0] != change.get("baseRevision"):
@@ -253,7 +269,7 @@ class DesktopIPC:
                     state = apply_patches(previous[1], change["patches"])
                     if state.get("id") != thread_id:
                         raise ValueError("Thread changed")
-                    self.snapshots[thread_id] = (revision, state)
+                    self.snapshots[thread_id] = (revision, NativeSnapshot(state))
                 except (ValueError, KeyError, TypeError, IndexError):
                     self.snapshots.pop(thread_id, None)
                     resync = thread_id not in self.resyncing

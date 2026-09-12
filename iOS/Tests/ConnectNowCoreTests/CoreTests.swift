@@ -107,3 +107,42 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     let pending = PendingWrites(defaults: defaults)
     #expect(throws: APIError.self) { try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: .object([:])) }
 }
+
+@Test func outgoingLiveEvidenceIgnoresLateHTTPAndNeverRecreatesConfirmedMessage() {
+    let start: JSONValue = .object(["id": .string("r"), "prompt": .string("hello"), "state": .string("sending")])
+    let live = OutgoingMessageProjection.merge(start, .object(["state": .string("completed")]), live: true)
+    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("preparing")]))?["state"].text == "completed")
+    #expect(OutgoingMessageProjection.merge(nil, .object(["state": .string("preparing")])) == nil)
+    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("acknowledged")]), live: true) == nil)
+}
+
+@Test func displayCacheUsesRecencyAndEncodedByteLimit() {
+    var cache = DisplayHistoryCache(maxEntries: 2, maxBytes: 100)
+    cache.set("a", .string("a")); cache.set("b", .string("b"))
+    #expect(cache.get("a") == .string("a"))
+    cache.set("c", .string("c"))
+    #expect(cache.get("b") == nil)
+    #expect(cache.get("a") == .string("a"))
+    cache.set("huge", .string(String(repeating: "x", count: 200)))
+    #expect(cache.get("huge") == nil)
+    #expect(cache.bytes <= 100)
+    cache.clear(); #expect(cache.bytes == 0)
+}
+
+@Test func historyWireAppliesSpliceAndRejectsMissingBase() throws {
+    var wire = HistoryWireProjection()
+    let initial: JSONValue = .object(["subscription": .string("a"), "threadId": .string("t"), "history": .object([
+        "historyRevision": .string("1"), "timeline": .array([.object(["id": .string("a"), "text": .string("old")])]), "messages": .array([.string("old")]), "obsolete": .bool(true)])])
+    _ = try wire.decode(initial)
+    let update: JSONValue = .object(["subscription": .string("a"), "threadId": .string("t"), "historyDelta": .object([
+        "messages": .object(["start": .number(0), "delete": .number(1), "items": .array([.string("new")])]),
+        "base": .string("1"), "fields": .object(["historyRevision": .string("2")]), "remove": .array([.string("obsolete")]),
+        "start": .number(0), "delete": .number(1), "items": .array([.object(["id": .string("a"), "text": .string("new")])])])])
+    let result = try wire.decode(update)
+    #expect(result["history"]["timeline"].array.first?["text"].text == "new")
+    #expect(result["history"]["obsolete"] == .null)
+    #expect(result["history"]["messages"].array == [.string("new")])
+    #expect(throws: APIError.self) { _ = try wire.decode(update) }
+    var fresh = HistoryWireProjection()
+    #expect(throws: APIError.self) { _ = try fresh.decode(update) }
+}

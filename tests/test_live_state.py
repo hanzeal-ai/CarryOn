@@ -59,11 +59,11 @@ class LiveStateTests(unittest.TestCase):
         self.journal.insert({'id':'request-slow', 'fingerprint':'f', 'kind':'message',
             'threadId':T, 'created':time.time(), 'state':'accepted', 'turnId':'turn'})
         entered = threading.Event()
-        def history(_):
+        def evidence(*_):
             entered.set()
             if not self.release.wait(3): raise RuntimeError('test timeout')
-            return {'turns': {'turn': {'status': 'completed'}}}
-        self.bridge.history = Mock(side_effect=history)
+            return {'status': 'completed'}
+        self.bridge.turn_evidence = Mock(side_effect=evidence)
         first, second = self.open(), self.open()
         self.assertTrue(entered.wait(2))
         for index, session in enumerate((first, second)):
@@ -73,13 +73,13 @@ class LiveStateTests(unittest.TestCase):
             self.assertEqual(packet['jobs'][0]['state'], 'accepted')
             self.assertEqual(packet['threadStatuses'][T]['state'], 'idle')
         self.assertEqual(self.bridge.refresh_job('request-slow')['state'], 'accepted')
-        self.bridge.history.assert_called_once_with(T)
+        self.bridge.turn_evidence.assert_called_once_with(T, 'turn')
         self.release.set()
         deadline = time.monotonic() + 2
         while self.journal.get('request-slow')['state'] != 'completed' and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertEqual(second.update()[0]['jobs'][0]['state'], 'completed')
-        self.bridge.history.assert_called_once_with(T)
+        self.bridge.turn_evidence.assert_called_once_with(T, 'turn')
 
     def test_stale_subscription_and_revoked_snapshot_are_never_delivered(self):
         session = self.open()
@@ -105,3 +105,16 @@ class LiveStateTests(unittest.TestCase):
         self.assertIsNot(first.owner, second.owner)
         second.subscribe({'type':'subscribe', 'threadIds':[T], 'subscription':'new'})
         self.assertEqual(second.update()[0]['threadStatuses'][T]['state'], 'idle')
+
+    def test_slow_delivery_does_not_hold_bridge_authority_lock(self):
+        session=self.open();update=session.update();entered=threading.Event()
+        def send(packet):
+            entered.set();self.release.wait(2)
+        worker=threading.Thread(target=session.deliver,args=(update,send));worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            acquired=self.bridge.lock.acquire(timeout=.2)
+            self.assertTrue(acquired)
+            if acquired:self.bridge.lock.release()
+        finally:
+            self.release.set();worker.join(2)

@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .api import dispatch
@@ -22,6 +23,7 @@ class CloudConnector:
         self.bridge=bridge;self.path=Path(directory)/'cloud.json';self.binding_id=binding_id
         self.lock=threading.RLock();self.config={};self.worker=None;self.ws=None
         self.configure_lock=threading.Lock()
+        self.request_capacity=threading.BoundedSemaphore(4)
         self.cancel=threading.Event();self.connected=False;self.error=None
         if config is not None:
             self.config=dict(config);self.validate(self.config)
@@ -104,15 +106,42 @@ class CloudConnector:
 
     def session(self,ws,config,cancel,connection_cancel=None):
         streams={}
+        connection_cancel = connection_cancel or threading.Event()
+        requests = ThreadPoolExecutor(max_workers=4, thread_name_prefix='cloud-request')
+        capacity = self.request_capacity
+        def execute_request(message):
+            try:
+                if cancel.is_set() or connection_cancel.is_set():
+                    return
+                response = self.execute(message, config.get('control', False), connection_cancel)
+                if not cancel.is_set() and not connection_cancel.is_set():
+                    ws.send(response)
+            except (OSError, EOFError, ValueError):
+                connection_cancel.set()
+                try: close(ws)
+                except OSError: pass
+            finally:
+                capacity.release()
         def stream_writer(stream_id,subscription,closed):
             revision=-1
+            previous=None
+            from .history_wire import HistoryWire
+            wire=HistoryWire()
+            def send_packet(packet):
+                nonlocal previous
+                from .realtime import packet_signature
+                from .remote_scope import project_packet
+                body={**project_packet(packet,self.binding_id),
+                      'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}
+                signature=packet_signature(body)
+                if signature != previous:
+                    ws.send({'type':'event','streamId':stream_id,'body':wire.encode(body) if subscription.selection.get('historyProtocol') == 1 else body})
+                    previous=signature
             try:
                 while not cancel.is_set() and not closed.is_set():
                     revision=subscription.wait(revision)
                     if cancel.is_set() or closed.is_set():break
-                    from .remote_scope import project_packet
-                    subscription.deliver(subscription.update(),lambda packet:ws.send(
-                        {'type':'event','streamId':stream_id,'body':{**project_packet(packet,self.binding_id),'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}}))
+                    subscription.deliver(subscription.update(),send_packet)
             except (OSError,ValueError,BridgeError,IPCError):pass
             finally:subscription.close()
         try:
@@ -123,13 +152,18 @@ class CloudConnector:
                 if not isinstance(mid,str) or not ID.fullmatch(mid):raise ValueError('消息 ID 无效')
                 if kind=='ping':ws.send({'type':'pong','id':mid});continue
                 if kind=='request':
-                    ws.send(self.execute(message,config.get('control',False),connection_cancel));continue
+                    if capacity.acquire(blocking=False):
+                        future=requests.submit(execute_request, message)
+                        future.add_done_callback(lambda task: capacity.release() if task.cancelled() else None)
+                    else:
+                        ws.send({'type':'response','id':mid,'status':503,'body':{'error':'设备正忙，此请求未执行，请稍后重试'}})
+                    continue
                 if kind not in ('subscribe','unsubscribe'):raise ValueError('未知云端消息')
                 sid=message.get('streamId')
                 if not isinstance(sid,str) or not ID.fullmatch(sid):raise ValueError('streamId 无效')
                 if kind=='unsubscribe':
                     entry=streams.pop(sid,None)
-                    if entry:entry[1].set();entry[0].close();entry[2].join(2)
+                    if entry:entry[1].set();entry[0].close()
                     ws.send({'type':'response','id':mid,'status':200,'body':{'closed':True}});continue
                 try:self.bridge.require()
                 except BridgeError as exc:
@@ -144,13 +178,16 @@ class CloudConnector:
                 try:
                     selection=message.get('selection',{})
                     if not isinstance(selection,dict):raise ValueError('Invalid selection')
-                    sub.subscribe({**selection,'type':'subscribe','subscription':sid})
+                    sub.subscribe({**selection,'type':'subscribe','subscription':sid,
+                                   'historyProtocol':1 if selection.get('historyWire') == 1 else 0})
                 except (ValueError,TypeError) as exc:
                     if thread.ident is None:sub.close();streams.pop(sid,None)
                     ws.send({'type':'response','id':mid,'status':400,'body':{'error':'订阅参数无效'}});continue
                 ws.send({'type':'response','id':mid,'status':200,'body':{'streamId':sid}})
                 if thread.ident is None:thread.start()
         finally:
+            with self.bridge.lock: connection_cancel.set()
+            requests.shutdown(wait=False, cancel_futures=True)
             for sub,closed,thread in streams.values():closed.set();sub.close()
             for sub,closed,thread in streams.values():
                 if thread.ident is not None:thread.join(2)

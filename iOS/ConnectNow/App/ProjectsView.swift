@@ -32,7 +32,9 @@ struct RecordListView: View {
     @State private var records: [Record] = []
     @State private var total = 0
     @State private var offset = 0
-    @State private var loading = false
+    private enum LoadKind { case initial, refresh, more, background }
+    @State private var loadKind: LoadKind? = .initial
+    private var loading: Bool { loadKind != nil }
     @State private var failure: String?
     @State private var requestVersion = UUID()
     private var queryIdentity: String { model.scope + path + search }
@@ -43,25 +45,31 @@ struct RecordListView: View {
                     SearchField(text: $search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
                     if let create { Button(action: create) { Image(systemName: "plus").font(.system(size: 25)).frame(width: 44, height: 44) }.disabled(!model.canWrite).accessibilityLabel("新建会话") }
                 }.padding(.top, 12)
-                if let failure {
-                    VStack { Text(failure).font(.subheadline).foregroundStyle(Design.secondary); Button("重试") { Task { await load(reset: true) } }.frame(minHeight: 44) }.padding()
+                if records.isEmpty {
+                    if model.selectedDevice.isEmpty { BlankState(text: "请先选择工作区", symbol: "laptopcomputer") }
+                    else if loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
+                    else if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
+                    else if loadKind != .refresh {
+                        BlankState(text: search.isEmpty ? (path == "/api/activity" ? "暂无待处理事项" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
+                    }
+                } else if let failure {
+                    HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
                 }
-                if records.isEmpty && failure == nil { BlankState(text: loading ? "正在读取…" : "暂无\(isProjectList ? "项目" : "匹配的会话")", loading: loading) }
-                Paper {
+                if !records.isEmpty { Paper {
                     ForEach(records) { record in
                         Button { select(record) } label: {
                             if isProjectList { projectRow(record) } else { ThreadRow(record: record) }
                         }.buttonStyle(.plain)
                         if record.id != records.last?.id { Divider().padding(.leading, 16) }
                     }
-                }
-                if records.count < total {
-                    Button { Task { await load(reset: false) } } label: { if loading { ProgressView() } else { Text("加载更多（\(records.count)/\(total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
+                } }
+                if !records.isEmpty && records.count < total {
+                    Button { Task { await load(reset: false, kind: .more) } } label: { if loadKind == .more { ProgressView("加载更多…") } else { Text("加载更多（\(records.count)/\(total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
                 }
             }.padding(.horizontal, 20).padding(.bottom, 24)
-        }.scrollDismissesKeyboard(.interactively).refreshable { await load(reset: true) }
-            .task(id: queryIdentity) { records = []; await load(reset: true) }
-            .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true) } }
+        }.scrollDismissesKeyboard(.interactively).refreshable { await load(reset: true, kind: .refresh) }
+            .task(id: queryIdentity) { records = []; total = 0; offset = 0; await load(reset: true, debounce: !search.isEmpty) }
+            .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true, kind: .background) } }
     }
     private func projectRow(_ record: Record) -> some View {
         HStack(spacing: 14) {
@@ -85,12 +93,15 @@ struct RecordListView: View {
         if unread > 0 { CountPill(text: "\(unread) 未读", color: Design.blue) }
         if waiting + running + unread == 0 { CountPill(text: (record.value["unknown"].int ?? 0) > 0 ? "部分状态未知" : "暂无进行中的任务") }
     }
-    private func load(reset: Bool) async {
-        if !reset && loading { return }
+    private func load(reset: Bool, kind: LoadKind = .initial, debounce: Bool = false) async {
+        if (kind == .more || kind == .background) && loading { return }
+        guard !model.selectedDevice.isEmpty else { loadKind = nil; return }
         let version = UUID(); requestVersion = version
-        loading = true; failure = nil
-        defer { if requestVersion == version { loading = false } }
+        loadKind = kind; failure = nil
+        defer { if requestVersion == version { loadKind = nil } }
         do {
+            if debounce { try await Task.sleep(for: .milliseconds(300)) }
+            try Task.checkCancellation()
             let next = try await model.page(path + "?limit=50&offset=\(reset ? 0 : offset)&search=\(ConsoleAddress.component(search))&filter=all", key: key)
             guard version == requestVersion, !Task.isCancelled else { return }
             let old = reset ? [] : records

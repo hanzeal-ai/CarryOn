@@ -157,7 +157,7 @@ def permission_subset(granted, requested):
     return type(granted) is type(requested) and granted == requested
 
 
-def submit(bridge, thread_id, data, source=None, authorize=None):
+def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None):
     from .errors import BridgeError
     from .catalog import valid_id
     valid_id(thread_id)
@@ -186,14 +186,17 @@ def submit(bridge, thread_id, data, source=None, authorize=None):
         if source:job.update(source)
         bridge.journal.insert(job)
     import threading
-    threading.Thread(target=dispatch, args=(bridge, ipc, generation, job, data, authorize), daemon=True).start()
+    threading.Thread(target=dispatch, args=(bridge, ipc, generation, job, data, authorize, prepared), daemon=True).start()
     return job
 
 
-def dispatch(bridge, ipc, generation, job, data, authorize=None):
+def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
     sent = False
     try:
-        owner, state = ipc.snapshot(job['threadId'])
+        if prepared is not None and hasattr(ipc, 'current') and ipc.current(job['threadId']) is prepared[1]:
+            owner, state = prepared
+        else:
+            owner, state = ipc.snapshot(job['threadId'])
         if data['action'] in QUEUE_ACTIONS:
             state = {**state, 'nativeQueue': bridge.queue(job['threadId'])['messages']}
         method, version, params = build(data['action'], data, state)
@@ -204,6 +207,8 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None):
                 if authorize:authorize()
                 # Recheck streamed state immediately before writing, when available.
                 current = ipc.current(job['threadId']) if hasattr(ipc, 'current') else None
+                if prepared is not None and current is None:
+                    raise IPCError('会话状态正在重新同步，此请求未投递')
                 if data['action'] in QUEUE_ACTIONS:
                     current = {**(current or state), 'nativeQueue': bridge.queue(job['threadId'])['messages']}
                 if current is not None:
@@ -211,6 +216,10 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None):
                 bridge.journal.update(job['id'], state='dispatching')
                 sent = True
                 write()
+        if data['action'] == 'steer':
+            bridge.journal.update(job['id'], clientMessageId=params['clientUserMessageId'])
+        elif data['action'] == 'queue-add':
+            bridge.journal.update(job['id'], clientMessageId=params['state'][job['threadId']][-1]['id'])
         result = ipc.request(method, params, version, owner, guarded)['result']
         bridge.journal.update(job['id'], state='completed', result=result,
                               evidence='native-handler-response')

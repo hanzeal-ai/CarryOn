@@ -11,6 +11,20 @@ import threading
 
 from .errors import BridgeError
 
+HEARTBEAT_INTERVAL = 15
+
+
+def mask_payload(payload, mask):
+    """RFC 6455 XOR in bounded native integer operations, including partial tails."""
+    if len(mask) != 4:
+        raise ValueError('Invalid mask')
+    block = 65536
+    key = mask * (block // 4)
+    return b''.join((int.from_bytes(payload[offset:offset + block], 'little') ^
+                     int.from_bytes(key[:min(block, len(payload) - offset)], 'little')).to_bytes(
+                         min(block, len(payload) - offset), 'little')
+                    for offset in range(0, len(payload), block))
+
 
 class WebSocket:
     MAX_MESSAGE = 100000
@@ -31,7 +45,7 @@ class WebSocket:
             header = header[:1] + bytes([header[1] | 128]) + header[2:]
             mask = os.urandom(4)
             header += mask
-            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+            payload = mask_payload(payload, mask)
         with self.lock:
             self.handler.connection.sendall(header + payload)
 
@@ -62,7 +76,7 @@ class WebSocket:
                 raise ValueError('WebSocket request too large')
             mask = self.exact(4) if not self.client else None
             payload = self.exact(size)
-            if mask: payload = bytes(v ^ mask[i % 4] for i, v in enumerate(payload))
+            if mask: payload = mask_payload(payload, mask)
             if opcode == 8:
                 if len(payload) == 1: raise ValueError('Invalid close frame')
                 self.send(payload, 8)
@@ -107,18 +121,31 @@ def serve(handler):
     closed = threading.Event()
     session = None
     thread = None
+    heartbeat_thread = None
+
+    def heartbeat():
+        try:
+            while not closed.wait(HEARTBEAT_INTERVAL):
+                ws.send(b'heartbeat', 9)
+        except (OSError, ValueError):
+            closed.set()
+            try:
+                handler.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def writer():
         revision, previous = -1, None
+        from .history_wire import HistoryWire
+        wire = HistoryWire()
 
         def send(packet):
             nonlocal previous
-            signature = json.dumps(packet, ensure_ascii=False)
+            from .realtime import packet_signature
+            signature = packet_signature(packet)
             if signature != previous:
-                ws.send(packet)
+                ws.send(wire.encode(packet) if packet.get('historyProtocol') == 1 else packet)
                 previous = signature
-            else:
-                ws.send(b'heartbeat', 9)
 
         try:
             while not closed.is_set():
@@ -147,6 +174,8 @@ def serve(handler):
         session = handler.server.bridge.open_stream()
         thread = threading.Thread(target=writer, daemon=True)
         thread.start()
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
         while not closed.is_set():
             session.subscribe(ws.receive())
     except (OSError, EOFError, ValueError):
@@ -161,3 +190,5 @@ def serve(handler):
             pass
         if thread:
             thread.join(2)
+        if heartbeat_thread:
+            heartbeat_thread.join(2)

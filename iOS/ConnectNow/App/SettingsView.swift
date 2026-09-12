@@ -47,14 +47,18 @@ struct NotificationPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var values: [String: Bool] = [:]
     @State private var saving = false
+    @State private var loading = true
+    @State private var loadVersion = UUID()
     @State private var failure: String?
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let failure { Text(failure).foregroundStyle(.red); Button("重试") { Task { await load() } } }
-                    if values.isEmpty { BlankState(text: "正在读取…", loading: true) }
-                    else {
+                    if values.isEmpty {
+                        if loading { BlankState(text: "正在加载通知设置…", loading: true) }
+                        else { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load() } }) }
+                    } else {
+                        if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
                         Paper {
                             ForEach(["message", "done", "failed", "approval"], id: \.self) { key in
                                 Toggle(["message": "新消息", "done": "任务完成", "failed": "执行失败", "approval": "需要确认"][key]!, isOn: Binding(get: { values[key] ?? false }, set: { values[key] = $0 })).padding(16)
@@ -68,22 +72,26 @@ struct NotificationPreferencesView: View {
             }.background(Design.background).navigationTitle("消息通知").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("保存") { Task {
+                    ToolbarItem(placement: .confirmationAction) { Button { Task {
                         saving = true; defer { saving = false }
                         do { _ = try await model.deviceRequest("/api/notifications/preferences", body: .object(values.mapValues(JSONValue.bool))); dismiss() } catch { failure = error.localizedDescription }
-                    } }.disabled(values.count != 4 || saving) }
-                }.task { await load() }
+                    } } label: { if saving { ProgressView("保存中…") } else { Text("保存") } }.disabled(values.count != 4 || saving || loading) }
+                }.task(id: model.scope) { values = [:]; await load() }
         }
     }
     private func load() async {
+        let version = UUID(), scope = model.scope; loadVersion = version
+        loading = true; failure = nil
+        defer { if loadVersion == version { loading = false } }
         do {
             let result = try await model.deviceRequest("/api/notifications/preferences")
+            guard version == loadVersion, scope == model.scope, !Task.isCancelled else { return }
             var next: [String: Bool] = [:]
             for key in ["message", "done", "failed", "approval"] {
                 guard let value = result["preferences"][key].bool else { throw APIError("通知偏好格式不正确") }; next[key] = value
             }
             values = next; failure = nil
-        } catch { failure = error.localizedDescription }
+        } catch { if version == loadVersion && scope == model.scope && !Task.isCancelled { failure = error.localizedDescription } }
     }
 }
 struct ConnectionRequestsView: View {

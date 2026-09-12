@@ -167,11 +167,14 @@ struct RequestLogView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var records: [Record] = []
     @State private var failure: String?
+    @State private var loading = true
+    @State private var refreshing = false
+    @State private var version = UUID()
     @State private var confirmedJob: Record?
     var body: some View {
         NavigationStack {
             List {
-                if let failure { Text(failure).foregroundStyle(.red) }
+                if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load() } }) }
                 ForEach(records) { record in
                     DisclosureGroup(record.value["kind"].text + " · " + record.value["state"].text) {
                         Text(record.value.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -180,19 +183,27 @@ struct RequestLogView: View {
                         }
                     }
                 }
-                if records.isEmpty && failure == nil { Text("暂无请求记录") }
+                if records.isEmpty && failure == nil && !refreshing { BlankState(text: loading ? "正在加载请求记录…" : "暂无请求记录", loading: loading, symbol: "clock") }
                 Text("请求已登记不代表任务已完成。结果不确定时，请先在 Codex App 核对，保留原内容与请求编号。").font(.caption).foregroundStyle(Design.secondary)
             }.navigationTitle("请求记录").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-                .task { await load() }.refreshable { await load() }
+                .task { await load() }.refreshable { await load(refresh: true) }
                 .alert("确认已在 Codex App 核对实际结果？", isPresented: Binding(get: { confirmedJob != nil }, set: { if !$0 { confirmedJob = nil } })) {
                     Button("取消", role: .cancel) { confirmedJob = nil }
                     Button("已核对") { if let record = confirmedJob { Task { await model.confirmJob(record.value); await load() } }; confirmedJob = nil }
                 } message: { Text("这仅解除当前请求的待核对状态，不会重新发送任务，也不表示原任务执行成功。") }
         }
     }
-    private func load() async {
-        do { let value = try await model.deviceRequest("/api/jobs"); guard case .array(let items) = value["jobs"] else { throw APIError("请求记录格式不正确") }; records = try items.map(Record.init); model.reconcile(items); failure = nil } catch { failure = error.localizedDescription }
+    private func load(refresh: Bool = false) async {
+        let request = UUID(); version = request
+        refreshing = refresh; loading = !refresh; failure = nil
+        defer { if request == version { loading = false; refreshing = false } }
+        do {
+            let value = try await model.deviceRequest("/api/jobs")
+            guard request == version, !Task.isCancelled else { return }
+            guard case .array(let items) = value["jobs"] else { throw APIError("请求记录格式不正确") }
+            records = try items.map(Record.init); model.reconcile(items)
+        } catch { if request == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
 }
 struct SideChatsView: View {
@@ -201,23 +212,37 @@ struct SideChatsView: View {
     @State private var chats: [Record] = []
     @State private var detail: JSONValue?
     @State private var failure: String?
+    @State private var loading = true
+    @State private var readingID: String?
     var body: some View {
         NavigationStack {
             List {
-                if let failure { Text(failure).foregroundStyle(.red) }
-                ForEach(chats) { chat in Button(chat.title) { Task { await read(chat.id) } } }
-                if chats.isEmpty { Text("暂无已加载的临时聊天").foregroundStyle(Design.secondary) }
+                if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load() } }) }
+                ForEach(chats) { chat in Button { Task { await read(chat.id) } } label: { HStack { Text(chat.title); Spacer(); if readingID == chat.id { ProgressView() } } }.disabled(readingID != nil) }
+                if chats.isEmpty && failure == nil { BlankState(text: loading ? "正在查找临时聊天…" : "暂无临时聊天", loading: loading, symbol: "bubble.left.and.bubble.right") }
             }.navigationTitle("临时聊天 · 只读").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-                .task {
-                    guard let id = model.selectedThread?.id else { return }
-                    do { let value = try await model.deviceRequest("/api/side-chats?parentId=" + ConsoleAddress.component(id)); chats = try value["chats"].array.map(Record.init) } catch { failure = error.localizedDescription }
-                }
+                .task(id: model.scope) { await load() }
                 .sheet(isPresented: Binding(get: { detail != nil }, set: { if !$0 { detail = nil } })) { StructuredDetail(title: "临时聊天 · 只读", value: detail ?? .null) }
         }
     }
+    private func load() async {
+        guard let parent = model.selectedThread?.id else { loading = false; return }
+        loading = true; failure = nil
+        defer { loading = false }
+        do {
+            repeat {
+                let value = try await model.deviceRequest("/api/side-chats?parentId=" + ConsoleAddress.component(parent))
+                guard !Task.isCancelled, parent == model.selectedThread?.id else { return }
+                chats = try value["chats"].array.map(Record.init)
+                if value["scanning"].bool != true { break }
+                try await Task.sleep(for: .seconds(1))
+            } while !Task.isCancelled
+        } catch { if !Task.isCancelled { failure = error.localizedDescription } }
+    }
     private func read(_ id: String) async {
-        guard let parent = model.selectedThread?.id else { return }
+        guard let parent = model.selectedThread?.id, readingID == nil else { return }
+        readingID = id; failure = nil; defer { readingID = nil }
         do { detail = try await model.deviceRequest("/api/side-chats/\(ConsoleAddress.component(id))/history?parentId=" + ConsoleAddress.component(parent)) } catch { failure = error.localizedDescription }
     }
 }

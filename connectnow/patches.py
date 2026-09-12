@@ -3,7 +3,7 @@ from copy import deepcopy
 
 
 def apply_patches(state, patches):
-    result = deepcopy(state)
+    result = dict(state)
     if not isinstance(patches, list):
         raise ValueError('Invalid patches')
     for patch in patches:
@@ -15,8 +15,14 @@ def apply_patches(state, patches):
                 raise ValueError('Cannot remove root')
             result = deepcopy(patch['value'])
             continue
+        # Clone only ancestors being changed. Untouched native branches stay immutable
+        # and retain identity for projection caching. Failed patches never alter state.
         parent = result
         for key in path[:-1]:
+            child = parent[key]
+            if not isinstance(child, (dict, list)):
+                raise ValueError('Invalid patch target')
+            parent[key] = child.copy()
             parent = parent[key]
         key = path[-1]
         if isinstance(parent, list):

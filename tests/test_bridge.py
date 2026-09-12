@@ -108,7 +108,7 @@ class BridgeTests(unittest.TestCase):
         self.journal.insert({"id": "request-123", "fingerprint": "f", "kind": "create",
             "threadId": THREAD, "created": time.time(), "state": "accepted", "turnId": "turn-1",
             "expectedTitle": "test"})
-        self.bridge.history = lambda _: {"turns": {"turn-1": {"status": "completed", "text": "done"}}}
+        self.bridge.turn_evidence = lambda *_: {"status": "completed", "text": "done"}
         self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
     def test_restart_marks_dispatch_uncertain(self):
         self.journal.insert({"id": "request-123", "fingerprint": "f", "kind": "message",
@@ -128,7 +128,7 @@ class BridgeTests(unittest.TestCase):
             "prompt":"hello", "title":"title that the app may normalize"},
             "result":{"content":[{"type":"text","text":json.dumps({"threadId":CHILD,"hostId":"local"})}]}}
         turn = {"status":"completed", "text":"", "createCalls":[call]}
-        self.bridge.history = lambda _: {"turns":{"turn-1":turn}}
+        self.bridge.turn_evidence = lambda *_: turn
         call["arguments"]["prompt"] = "wrong prompt"
         self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
         call["arguments"]["prompt"] = "hello"
@@ -141,8 +141,8 @@ class BridgeTests(unittest.TestCase):
         self.journal.insert({"id":"request-123", "fingerprint":"f", "kind":"create",
             "threadId":THREAD, "created":time.time(), "state":"accepted", "turnId":"turn-1",
             "expectedTitle":"test"})
-        self.bridge.history = lambda _: {"turns":{"turn-1":{"status":"completed",
-            "text":'CONNECTNOW_RESULT '+json.dumps({"requestId":"request-123","threadId":CHILD})}}}
+        self.bridge.turn_evidence = lambda *_: {"status":"completed",
+            "text":'CONNECTNOW_RESULT '+json.dumps({"requestId":"request-123","threadId":CHILD})}
         self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
     def test_canonical_history_uses_native_order_and_final(self):
         turn = {"turnId": "t", "status": "completed", "params": {"input": [{"type":"text","text":"hello"}]},
@@ -159,14 +159,14 @@ class BridgeTests(unittest.TestCase):
             "threadId":THREAD, "created":time.time(), "state":"uncertain", "turnId":"t"})
         entered, resume = threading.Event(), threading.Event()
         results, errors = [], []
-        def history(_):
+        def evidence(*_):
             entered.set()
             if not resume.wait(3): raise RuntimeError('test timed out')
-            return {'turns': {'t': {'status': 'completed', 'createCalls': []}}}
+            return {'status': 'completed', 'createCalls': []}
         def refresh():
             try: results.append(self.bridge.refresh_job('request-race'))
             except Exception as exc: errors.append(exc)
-        self.bridge.history = history
+        self.bridge.turn_evidence = evidence
         worker = threading.Thread(target=refresh)
         worker.start()
         try:
@@ -204,6 +204,20 @@ class BridgeTests(unittest.TestCase):
         self.bridge.submit('message', 'request-wait', 'hello', THREAD)
         self.assertEqual(self.await_job('request-wait')['state'], 'failed')
         self.assertEqual(FakeIPC.sends, 0)
+
+    def test_job_evidence_does_not_build_display_history(self):
+        from unittest.mock import Mock
+        self.bridge.enable()
+        native={'id':THREAD,'turns':[{'turnId':str(i),'status':'completed','items':[]} for i in range(4000)]}
+        self.bridge.ipc.current=lambda tid:native
+        self.bridge.history=Mock(side_effect=AssertionError('display history must not be projected'))
+        self.journal.insert({'id':'request-evidence','fingerprint':'f','kind':'message',
+            'threadId':THREAD,'created':time.time(),'state':'accepted','turnId':'3999'})
+        self.assertEqual(self.bridge.refresh_job('request-evidence')['state'],'completed')
+        self.bridge.history.assert_not_called()
+        native={'id':THREAD,'turnHistory':{'kind':'canonical','history':{'entitiesByKey':{'key':{'turnId':'canonical','status':'interrupted','items':[]}},'islands':[{'entries':[{'value':'key'}]}]}}}
+        self.assertEqual(self.bridge.turn_evidence(THREAD,'canonical')['status'],'interrupted')
+        self.assertIsNone(self.bridge.turn_evidence(THREAD,'missing'))
 
 
 if __name__ == "__main__":

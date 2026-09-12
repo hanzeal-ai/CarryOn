@@ -125,3 +125,54 @@ class CloudTests(unittest.TestCase):
         self.wait(lambda:self.connector.status()['error'] is not None)
         self.assertFalse(self.connector.status()['connected'])
         self.assertEqual(self.call('GET','')[1]['online'],False)
+
+    def test_slow_requests_do_not_block_ping_and_inflight_is_bounded(self):
+        from queue import Queue
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        incoming=Queue();sent=Queue();release=threading.Event();entered=threading.Event()
+        def receive():
+            message=incoming.get(timeout=3)
+            if message is None:raise EOFError()
+            return message
+        ws=SimpleNamespace(receive=receive,send=sent.put)
+        def execute(message,control,connection_cancel):
+            entered.set();release.wait(2)
+            return {'type':'response','id':message['id'],'status':200,'body':{}}
+        self.connector.execute=Mock(side_effect=execute)
+        cancel=threading.Event();connection_cancel=threading.Event()
+        def run():
+            try:self.connector.session(ws,{},cancel,connection_cancel)
+            except EOFError:pass
+        worker=threading.Thread(target=run);worker.start()
+        try:
+            for i in range(5):incoming.put({'type':'request','id':str(i)})
+            self.assertTrue(entered.wait(1))
+            incoming.put({'type':'ping','id':'heartbeat'})
+            responses=[sent.get(timeout=1),sent.get(timeout=1)]
+            self.assertTrue(any(r.get('status')==503 for r in responses))
+            self.assertTrue(any(r.get('type')=='pong' for r in responses))
+            self.assertLessEqual(self.connector.execute.call_count,4)
+            incoming.put(None);worker.join(1)
+            self.assertTrue(connection_cancel.is_set())
+            release.set()
+        finally:
+            release.set()
+            if worker.is_alive():incoming.put(None)
+            worker.join(3)
+
+    def test_unchanged_native_snapshot_does_not_retransmit_history(self):
+        self.connect();self.bridge.enable()
+        native=self.bridge.ipc.current(T)
+        self.bridge.ipc.current=lambda tid:native
+        code,created=self.call('POST','/streams',{'threadId':T,'threadIds':[]})
+        self.assertEqual(code,200);sid=created['streamId']
+        device=self.gateway.devices['device-a']
+        self.wait(lambda:device.streams[sid]['revision']>0)
+        before=device.streams[sid]['revision']
+        for _ in range(20):self.bridge.notify();time.sleep(.005)
+        time.sleep(.2)
+        self.assertEqual(device.streams[sid]['revision'],before)
+        self.bridge.ipc.current=lambda tid:{**native,'title':'changed'}
+        self.bridge.notify()
+        self.wait(lambda:device.streams[sid]['revision']>before)

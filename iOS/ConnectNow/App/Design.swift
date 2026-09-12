@@ -33,7 +33,7 @@ struct SearchField: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Design.secondary)
-            TextField(placeholder, text: $text).font(.system(size: 16)).textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField(placeholder, text: $text).font(.system(size: 16)).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
             if !text.isEmpty { Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("清除搜索") }
         }.padding(.horizontal, 11).frame(minHeight: 40).background(Color.black.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
     }
@@ -41,9 +41,24 @@ struct SearchField: View {
 struct BlankState: View {
     let text: String
     var loading = false
+    var symbol = "tray"
+    var detail: String?
+    var retry: (() -> Void)?
     var body: some View {
-        VStack(spacing: 14) { if loading { ProgressView() }; Text(text).font(.subheadline).foregroundStyle(Design.secondary).multilineTextAlignment(.center) }
-            .frame(maxWidth: .infinity).padding(.vertical, 55)
+        Group {
+            if loading {
+                ProgressView { Text(text).font(.subheadline).foregroundStyle(Design.secondary) }
+                    .frame(maxWidth: .infinity).padding(.vertical, 55)
+            } else {
+                ContentUnavailableView {
+                    Label(text, systemImage: symbol)
+                } description: {
+                    if let detail { Text(detail) }
+                } actions: {
+                    if let retry { Button("重试", action: retry).buttonStyle(.bordered) }
+                }
+            }
+        }.accessibilityElement(children: .contain)
     }
 }
 struct SettingRow: View {

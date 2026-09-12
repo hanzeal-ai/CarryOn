@@ -8,38 +8,33 @@ struct WorkspaceSwitcher: View {
     @State private var details: Record?
     @State private var removal: Record?
     @State private var removed = false
-    @State private var revealed: String?
     var body: some View {
         NavigationStack {
             List {
                 ForEach(model.devices) { device in
-                    HStack(spacing: 0) {
-                        Button {
-                            if revealed == device.id { revealed = nil }
-                            else { model.switchDevice(device.id); dismiss() }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "laptopcomputer")
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(device.title).foregroundStyle(Design.ink).lineLimit(1)
-                                    Text(device.id == model.selectedDevice ? "当前使用" : device.value["online"].bool == true ? "在线" : "离线")
-                                        .font(.caption).foregroundStyle(device.id == model.selectedDevice ? Design.green : Design.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }.frame(maxWidth: .infinity, minHeight: 70).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                        if revealed == device.id {
-                            Button { removal = device } label: { Text("移除").font(.subheadline).frame(width: 56).frame(maxHeight: .infinity).background(.red).foregroundStyle(.white) }.buttonStyle(.plain)
-                            Button { details = device } label: { Text("详情").font(.subheadline).frame(width: 56).frame(maxHeight: .infinity).background(.gray).foregroundStyle(.white) }.buttonStyle(.plain)
-                        }
-                    }.frame(height: 70).disabled(model.removingDevice)
-                    .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
-                        guard abs(value.translation.width) > 45, abs(value.translation.width) > abs(value.translation.height) else { return }
-                        revealed = value.translation.width < 0 ? device.id : nil
-                    })
-                    .accessibilityAction(named: "移除") { removal = device }
-                    .accessibilityAction(named: "详情") { details = device }
-
+                    Button {
+                        model.switchDevice(device.id)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "laptopcomputer")
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(device.title).foregroundStyle(Design.ink).lineLimit(1)
+                                Text(device.id == model.selectedDevice ? "当前使用" : device.value["online"].bool == true ? "在线" : "离线")
+                                    .font(.caption).foregroundStyle(device.id == model.selectedDevice ? Design.green : Design.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }.frame(maxWidth: .infinity, minHeight: 70).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button { removal = device } label: {
+                            Label("移除", systemImage: "trash")
+                        }.tint(.red)
+                        Button { details = device } label: {
+                            Label("详情", systemImage: "info.circle")
+                        }.tint(.gray)
+                    }
+                    .disabled(model.removingDevice)
                 }
                 if model.devices.isEmpty { Text("暂无工作区").foregroundStyle(Design.secondary) }
             }

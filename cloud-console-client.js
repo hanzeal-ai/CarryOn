@@ -60,46 +60,64 @@ class CloudConsoleClient extends ConnectNowClient {
   }
   subscribe(selection) {
     const key=JSON.stringify([this.epoch,this.device,selection.threadId??null,
-      [...new Set(selection.threadIds||[])].sort(),selection.includeSideChats===true,selection.sideThreadId??null]);
+      [...new Set(selection.threadIds||[])].sort(),selection.includeSideChats===true,selection.sideThreadId??null,selection.historyLimit??40,selection.sideHistoryLimit??selection.historyLimit??40,selection.historyProtocol??1]);
     if(this.selection && this.selectionKey===key){
       this.connect();return this.selection.subscription;
     }
-    this.close();
+    const reuse=this.supportsResubscribe&&this.socket?.readyState===WebSocket.OPEN&&this.socketScope===JSON.stringify([this.epoch,this.device]);
+    if(!reuse)this.close();
     this.selectionKey=key;
-    this.selection={...selection,subscription:crypto.randomUUID()};
-    this.connect();return this.selection.subscription;
+    this.selection={historyProtocol:1,historyLimit:40,...selection,subscription:crypto.randomUUID()};
+    if(reuse)this.socket.send(JSON.stringify({type:'subscribe',...this.selection}));
+    else this.connect();
+    return this.selection.subscription;
   }
   connect() {
     if(this.removing||!this.token||!this.device||this.active)return;
-    if(!this.selection)this.selection={threadId:null,threadIds:[],subscription:crypto.randomUUID()};
+    if(!this.selection)this.selection={historyProtocol:1,historyLimit:40,threadId:null,threadIds:[],subscription:crypto.randomUUID()};
     this.active=true;
-    const generation=++this.loop,selection=this.selection;
+    const generation=++this.loop;
+    this.socketScope=JSON.stringify([this.epoch,this.device]);this.supportsResubscribe=false;
     const current=()=>this.loop===generation;
     const url=new URL('console/devices/'+encodeURIComponent(this.device)+'/ws',this.base);
     url.protocol=url.protocol==='https:'?'wss:':'ws:';
     const socket=new WebSocket(url);this.socket=socket;
-    let revision=0,chain=Promise.resolve();
+    let revision=0,pending=null,processing=false;
+    const wire=new HistoryWire();
+    const drain=async()=>{
+      if(processing)return;
+      processing=true;
+      try{
+        while(pending&&current()&&this.socket===socket){
+          const packet=pending;pending=null;
+          const selected=packet.subscription;
+          if(this.selection?.subscription!==selected)continue;
+          await this.onUpdate({...packet.body,subscription:selected},()=>current()&&this.socket===socket&&this.selection?.subscription===selected);
+        }
+      }catch(error){if(current()&&this.socket===socket){this.onError(error);socket.close();}}
+      finally{processing=false;}
+    };
     const heartbeat=()=>{clearTimeout(this.heartbeatTimer);this.heartbeatTimer=setTimeout(()=>{if(current())socket.close();},45000);};
-    socket.onopen=()=>{if(current()){heartbeat();socket.send(JSON.stringify({type:'subscribe',...selection}));}else socket.close();};
+    socket.onopen=()=>{if(current()){heartbeat();socket.send(JSON.stringify({type:'subscribe',...this.selection}));}else socket.close();};
     socket.onmessage=event=>{
       if(!current())return;heartbeat();
-      chain=chain.then(async()=>{
-        if(!current())return;
-        const packet=JSON.parse(event.data);
-        if(packet.type==='ping'){socket.send(JSON.stringify({type:'pong'}));return;}
-        if(packet.type==='error'){
-          if(packet.status===401){this.token='';this.close();this.onAuthError();return;}
-          throw Error(packet.error||'实时订阅失败');
-        }
-        if(packet.type!=='update'||packet.subscription!==selection.subscription||!Number.isInteger(packet.revision)||packet.revision<=revision)return;
-        if(!packet.body||packet.body.type!=='update')throw Error('实时更新格式无效');
-        revision=packet.revision;
-        await this.onUpdate({...packet.body,subscription:selection.subscription},current);
-      }).catch(error=>{if(current()){this.onError(error);socket.close();}});
+      let packet;
+      try{packet=JSON.parse(event.data);}catch(error){this.onError(error);socket.close();return;}
+      if(packet.type==='ping'){socket.send(JSON.stringify({type:'pong'}));return;}
+      if(packet.type==='error'){
+        if(packet.status===401){this.token='';this.close();this.onAuthError();return;}
+        this.onError(Error(packet.error||'实时订阅失败'));socket.close();return;
+      }
+      if(packet.type!=='update'||packet.subscription!==this.selection?.subscription||!Number.isInteger(packet.revision)||packet.revision<=revision)return;
+      if(!packet.body||packet.body.type!=='update'){this.onError(Error('实时更新格式无效'));socket.close();return;}
+      revision=packet.revision;this.supportsResubscribe=packet.resubscribe===true;
+      // Packets are complete projections: retain only the newest one while rendering.
+      try{pending={...packet,body:wire.decode({...packet.body,subscription:packet.subscription})};drain();}
+      catch(error){this.onError(error);socket.close();}
     };
     socket.onclose=async()=>{
       if(!current())return;
-      clearTimeout(this.heartbeatTimer);this.socket=null;this.active=false;this.onDisconnect({});
+      clearTimeout(this.heartbeatTimer);pending=null;this.socket=null;this.active=false;this.onDisconnect({});
       // Browsers do not expose HTTP handshake failures; distinguish expiry via HTTP.
       try{await this.consoleRequest('session');}catch(error){if(!this.token||!current())return;}
       if(current()&&this.token)this.timer=setTimeout(()=>this.connect(),2000);

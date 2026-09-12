@@ -82,7 +82,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/messages"):
         respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images"), **({"source":source,"authorize":authorize} if source else {})))
     elif method == "GET" and path == "/api/jobs":
-        jobs = [bridge.refresh_job(j["id"]) for j in bridge.journal.list()[:100]]
+        jobs = [bridge.refresh_job(j["id"]) for j in bridge.journal.list(limit=100)]
         respond(200, {"jobs": jobs})
     elif method == "GET" and path.startswith("/api/jobs/"):
         respond(200, bridge.refresh_job(path.split("/")[3]))

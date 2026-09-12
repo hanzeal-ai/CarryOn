@@ -15,8 +15,12 @@ import ConnectNowCore
     var selectedProject: Record?
     var activityCount: Int?
     var history: JSONValue = .null
+    var historyFailure: String?
+    var historyCache = DisplayHistoryCache()
+    var outgoing: [String: JSONValue] = [:]
     var readSequence = 0
     var historyRevision = 0
+    var historyLimit = 40
     var workspaceRevision = 0
     var requests: [Record] = []
     var requestHistory: [Record] = []
@@ -30,6 +34,8 @@ import ConnectNowCore
     private(set) var epoch = UUID()
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
+    private var liveStream: ConsoleStream?
+    private var selectionUpdate: Task<Void, Never>?
     private var directoryVersion = 0
     private var directoryUpdates: Task<Void, Never>?
     private let pending = PendingWrites()
@@ -78,11 +84,11 @@ import ConnectNowCore
         error = failure.localizedDescription
     }
     private func resetSession() {
-        epoch = UUID(); updates?.cancel(); directoryUpdates?.cancel()
+        epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
         let previous = api; api = nil
         Task { await previous?.invalidate() }
-        authenticated = false; connected = false; status = .null; history = .null
-        devices = []; selectedDevice = ""; selectedThread = nil; selectedProject = nil; activityCount = nil; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; credential = ""
+        authenticated = false; connected = false; status = .null; history = .null; historyFailure = nil
+        devices = []; selectedDevice = ""; selectedThread = nil; selectedProject = nil; activityCount = nil; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
     }
     func logout() async {
         guard let api else { return }
@@ -90,8 +96,8 @@ import ConnectNowCore
         catch { report(error) }
     }
     func switchDevice(_ id: String) {
-        epoch = UUID(); updates?.cancel(); directoryUpdates?.cancel()
-        selectedDevice = id; selectedThread = nil; selectedProject = nil; activityCount = nil; history = .null; status = .null
+        epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
+        selectedDevice = id; selectedThread = nil; selectedProject = nil; activityCount = nil; history = .null; historyFailure = nil; status = .null
         connected = false; readSequence = 0; workspaceRevision += 1
         startUpdates()
     }
@@ -109,16 +115,23 @@ import ConnectNowCore
         if selectedDevice == id { switchDevice(devices.first?.id ?? "") }
     }
     func open(_ thread: Record) {
-        selectedThread = thread; history = .null; readSequence = 0
-        updates?.cancel(); startStream()
+        historyLimit = 40; historyFailure = nil
+        selectedThread = thread; history = historyCache.get(scope + "\n" + thread.id) ?? .null; readSequence = 0
+        connected = false
+        updateSelection()
+    }
+    func retryHistory() { historyFailure = nil; updateSelection() }
+    func loadEarlierHistory() {
+        historyLimit = min(100000, historyLimit + 40)
+        updateSelection()
     }
     func closeThread() {
-        selectedThread = nil; history = .null; readSequence = 0
-        updates?.cancel(); startStream()
+        selectedThread = nil; history = .null; historyFailure = nil; readSequence = 0
+        updateSelection()
     }
     func setForeground(_ active: Bool) {
         foreground = active
-        updates?.cancel(); directoryUpdates?.cancel(); connected = false
+        updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); connected = false
         if active && authenticated { startUpdates() }
     }
     func console(_ route: String, body: JSONValue? = nil, method: String? = nil) async throws -> JSONValue {
@@ -173,38 +186,57 @@ import ConnectNowCore
             }
         }
     }
+    private func selection(_ threadID: String?) -> JSONValue {
+        .object(["threadId": threadID.map(JSONValue.string) ?? .null,
+                 "threadIds": .array([]), "historyProtocol": .number(1), "historyLimit": .number(Double(historyLimit)), "subscription": .string(UUID().uuidString)])
+    }
+    private func updateSelection() {
+        connected = false
+        guard let connection = liveStream, connection.canResubscribe else {
+            updates?.cancel(); liveStream?.close(); liveStream = nil; startStream(); return
+        }
+        let previous = selectionUpdate, generation = epoch, threadID = selectedThread?.id, limit = historyLimit
+        selectionUpdate = Task { [weak self] in
+            await previous?.value
+            guard let self, self.epoch == generation, self.selectedThread?.id == threadID, self.historyLimit == limit,
+                  self.liveStream === connection else { return }
+            do { try await connection.resubscribe(self.selection(threadID)) }
+            catch { connection.close(); self.report(error) }
+        }
+    }
     private func startStream() {
         guard !removingDevice, foreground, let client = api, !selectedDevice.isEmpty else { return }
-        let generation = epoch, deviceID = selectedDevice, threadID = selectedThread?.id
+        let generation = epoch, deviceID = selectedDevice
         updates = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, self.epoch == generation, self.selectedThread?.id == threadID else { return }
+                guard let self, self.epoch == generation else { return }
                 var stream: ConsoleStream?
                 do {
-                    let selection: JSONValue = .object(["threadId": threadID.map(JSONValue.string) ?? .null,
-                        "threadIds": .array([]), "subscription": .string(UUID().uuidString)])
-                    let connection = try await client.stream(deviceID: deviceID, selection: selection)
+                    let connection = try await client.stream(deviceID: deviceID, selection: self.selection(self.selectedThread?.id))
                     stream = connection
+                    try Task.checkCancellation()
+                    self.liveStream = connection
                     while !Task.isCancelled {
                         let packet = try await connection.next()
                         try Task.checkCancellation()
-                        guard self.epoch == generation, self.selectedThread?.id == threadID else { break }
-                        self.apply(packet, threadID: threadID)
+                        guard self.epoch == generation else { break }
+                        guard packet["threadId"].string == self.selectedThread?.id else { continue }
+                        self.apply(packet, threadID: self.selectedThread?.id)
                     }
                 } catch {
-                    if !Task.isCancelled && self.epoch == generation && self.selectedThread?.id == threadID {
+                    if !Task.isCancelled && self.epoch == generation {
                         self.connected = false
-                        // URLSession can hide a rejected WebSocket handshake behind a transport error.
                         var failure = error
                         if (error as? APIError)?.status != 401 {
                             do { _ = try await client.request("session") }
                             catch { if (error as? APIError)?.status == 401 { failure = error } }
                         }
-                        guard !Task.isCancelled, self.epoch == generation else { return }
+                        guard !Task.isCancelled, self.epoch == generation else { stream?.close(); return }
                         self.report(failure)
                     }
                 }
                 stream?.close()
+                if self.liveStream === stream { self.liveStream = nil }
                 if Task.isCancelled || self.epoch != generation { return }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
@@ -214,9 +246,16 @@ import ConnectNowCore
         status = packet["status"]; connected = true
         reconcile(packet["jobs"].array)
         if let revision = packet["workspaceRevision"].int, revision != workspaceRevision { workspaceRevision = revision }
-        if packet["error"].string != nil { history = .null; error = packet["error"].string; return }
+        if packet["error"].string != nil { historyFailure = packet["error"].string; return }
+        historyFailure = nil
         if let threadID, packet["threadId"].string == threadID, packet["history"].object != nil {
-            history = packet["history"]; readSequence = packet["readSequence"].int ?? 0; historyRevision += 1
+            let incoming = packet["history"]
+            let changed = incoming["historyRevision"].string.map { $0 != history["historyRevision"].string } ?? (incoming != history)
+            let sequence = packet["readSequence"].int ?? 0
+            if changed { history = incoming; historyCache.set(scope + "\n" + threadID, history) }
+            reconcileOutgoing()
+            if changed || sequence != readSequence { historyRevision += 1 }
+            readSequence = sequence
         }
     }
     func markDisplayed(threadID: String, sequence: Int) async {
@@ -230,7 +269,19 @@ import ConnectNowCore
         writing = true; defer { writing = false }
         do {
             let id = try pending.requestID(scope: capturedScope, target: target, path: path, body: body)
-            let result = try await deviceRequest(path, body: body.setting("requestId", .string(id)))
+            let composing = path.hasSuffix("/compose")
+            if composing {
+                outgoing[id] = .object(["id": .string(id), "threadId": .string(target), "scope": .string(capturedScope),
+                    "prompt": body["prompt"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
+                historyRevision += 1
+            }
+            let result: JSONValue
+            do { result = try await deviceRequest(path, body: body.setting("requestId", .string(id))) }
+            catch {
+                if composing, version == epoch, let item = outgoing[id] { outgoing[id] = OutgoingMessageProjection.merge(item, .object(["state": .string("uncertain")])) }
+                throw error
+            }
+            if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
             let state = result["state"].text
             guard ["preparing", "dispatching", "completed", "accepted", "inProgress"].contains(state) else {
@@ -241,9 +292,29 @@ import ConnectNowCore
         } catch { if version == epoch { report(error) }; return false }
     }
     func reconcile(_ jobs: [JSONValue]) {
+        for job in jobs { mergeOutgoing(job, live: true) }
         for job in jobs where ["accepted", "completed", "inProgress", "acknowledged"].contains(job["state"].text) {
             try? pending.resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
             try? pending.resolve(scope: scope, target: "new", requestID: job["id"].text)
+        }
+    }
+    var visibleOutgoing: [JSONValue] {
+        outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == selectedThread?.id }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
+    }
+    private func mergeOutgoing(_ job: JSONValue, live: Bool = false) {
+        let id = job["id"].text
+        guard let previous = outgoing[id], previous["scope"].text == scope else { return }
+        outgoing[id] = OutgoingMessageProjection.merge(previous, job, live: live)
+    }
+    private func reconcileOutgoing() {
+        for item in visibleOutgoing {
+            let messageID = item["clientMessageId"].string
+            let found = history["timeline"].array.contains { entry in
+                guard ["userMessage", "steeringUserMessage"].contains(entry["type"].text) else { return false }
+                return (messageID != nil && [entry["nativeId"].string, entry["clientMessageId"].string].contains(messageID)) ||
+                    (item["kind"].text == "message" && item["turnId"].string != nil && entry["turnId"] == item["turnId"])
+            } || history["queue"]["messages"].array.contains { messageID != nil && $0["id"].string == messageID }
+            if found { outgoing.removeValue(forKey: item["id"].text) }
         }
     }
     func confirmJob(_ job: JSONValue) async {

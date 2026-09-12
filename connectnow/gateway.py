@@ -53,7 +53,10 @@ class Device:
             elif message.get('type')=='event':
                 stream=self.streams.get(message.get('streamId'))
                 if stream:
-                    stream['revision']+=1;stream['body']=message.get('body');self.lock.notify_all()
+                    from .history_wire import HistoryWire
+                    decoder=stream.setdefault('decoder',HistoryWire())
+                    body=decoder.decode(message.get('body'))
+                    stream['revision']+=1;stream['body']=body;self.lock.notify_all()
             elif message.get('type')!='pong':raise ValueError('Invalid device message')
 
     def close(self):
@@ -133,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
                 with device.lock:
                     if len(device.streams)>=8:raise ValueError('最多 8 个订阅，请释放不再使用的订阅')
                     device.streams[sid]={'revision':0,'body':None}
-                try:response=device.call({'type':'subscribe','streamId':sid,'selection':selection})
+                try:response=device.call({'type':'subscribe','streamId':sid,'selection':{**selection,'historyWire':1}})
                 except BaseException:
                     with device.lock:device.streams.pop(sid,None)
                     raise
@@ -159,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
                         if device.closed:raise Offline()
                         record=device.streams.get(sid)
                         if record is None:self.reply(404,{'error':'订阅已关闭'});return
-                        result=dict(record)
+                        result={key:record[key] for key in ('revision','body')}
                     self.reply(200,result);return
             self.reply(404,{'error':'Not found'})
         except Offline:self.reply(503,{'error':'设备离线；未排队投递'})

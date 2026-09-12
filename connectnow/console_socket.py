@@ -1,4 +1,4 @@
-"""Cookie-authorized console WebSocket; device projections remain authoritative."""
+"""Cookie-authorized console WebSocket; subscriptions can change on one connection."""
 import socket
 import struct
 import threading
@@ -8,17 +8,20 @@ import uuid
 from .gateway import Offline, Uncertain
 from .websocket import WebSocket
 
+HEARTBEAT_INTERVAL = 15
+READ_TIMEOUT = 45
+
 
 def serve(handler, session_key, device_id):
     server = handler.server
     ws = WebSocket(handler)
     closed = threading.Event()
-    stream_id = uuid.uuid4().hex
     device = None
     writer = None
+    active = None  # (device stream ID, client subscription ID)
+    selection_lock = threading.Lock()
 
     def send(payload):
-        # Recheck authority before every delivery; never hold global locks during socket I/O.
         with server.auth_lock, server.lock:
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
@@ -36,37 +39,90 @@ def serve(handler, session_key, device_id):
             with device.lock:
                 device.lock.notify_all()
 
-    def pump(subscription):
-        revision = 0
-        last_sent = time.monotonic()
+    def release(context):
+        if context is not None:
+            server.release_stream(context[0])
+            with device.lock:
+                device.streams.pop(context[0], None)
+                device.lock.notify_all()
+
+    def subscribe(selection):
+        nonlocal active
+        if selection.get('type') != 'subscribe' or not isinstance(selection.get('subscription'), str) or not 1 <= len(selection['subscription']) <= 100:
+            raise ValueError('订阅参数无效')
+        with selection_lock:
+            previous, active = active, None
+        release(previous)
+        sid = uuid.uuid4().hex
+        with server.auth_lock, server.lock:
+            if server.sessions.get(session_key, 0) <= time.monotonic():
+                raise PermissionError('登录已过期，请重新登录')
+            if device_id not in server.config['devices'] or server.devices.get(device_id) is not device or device.closed:
+                raise Offline()
+            with device.lock:
+                if len(device.streams) >= 8:
+                    raise ValueError('最多 8 个订阅，请关闭不再使用的会话')
+                device.streams[sid] = {'revision': 0, 'body': None}
+            server.console_streams[sid] = {'device': device_id, 'session': session_key, 'last': time.monotonic()}
+        context = (sid, selection['subscription'], selection.get('historyProtocol') == 1)
+        try:
+            response = device.call({'type': 'subscribe', 'streamId': sid, 'selection': {**selection, 'historyWire': 1}})
+            if response['status'] != 200:
+                send({'type': 'error', 'status': response['status'], 'error': (response.get('body') or {}).get('error', '订阅失败')})
+                raise ValueError('订阅失败')
+            with selection_lock:
+                active = context
+            with device.lock:
+                device.lock.notify_all()
+        except BaseException:
+            release(context)
+            raise
+
+    def pump():
+        from .history_wire import HistoryWire
+        wire = HistoryWire()
+        seen = None
+        revision = delivery_revision = 0
+        last_ping = time.monotonic()
         try:
             while not closed.is_set():
-                with device.lock:
-                    record = device.streams.get(stream_id)
-                    if record and record['revision'] <= revision and not device.closed:
-                        device.lock.wait(1)
-                    if closed.is_set():
-                        break
-                    if device.closed:
-                        raise Offline()
-                    record = device.streams.get(stream_id)
-                    if record is None:
-                        raise PermissionError('订阅已失效')
-                    packet = dict(record)
+                with selection_lock:
+                    context = active
+                packet = None
+                if context is not None:
+                    if context != seen:
+                        seen, revision = context, 0
+                    with device.lock:
+                        if device.closed:
+                            raise Offline()
+                        record = device.streams.get(context[0])
+                        if record and record['revision'] <= revision:
+                            device.lock.wait(min(1, HEARTBEAT_INTERVAL))
+                        record = device.streams.get(context[0])
+                        if record:
+                            packet = dict(record)
+                    with selection_lock:
+                        if active != context:
+                            continue
+                        # Keep selection stable until its registration is checked.
+                        # Releasing the previous stream is a normal selection change.
+                        with server.auth_lock:
+                            entry = server.console_streams.get(context[0])
+                            if entry is None:
+                                raise PermissionError('订阅已失效')
+                            entry['last'] = time.monotonic()
+                    if packet and packet['revision'] > revision and isinstance(packet['body'], dict):
+                        delivery_revision += 1
+                        body = {**packet['body'], 'subscription': context[1]}
+                        send({'type': 'update', 'revision': delivery_revision, 'subscription': context[1],
+                              'resubscribe': True,
+                              'body': wire.encode(body) if context[2] else body})
+                        revision = packet['revision']
+                else:
+                    closed.wait(min(.1, HEARTBEAT_INTERVAL))
                 now = time.monotonic()
-                with server.auth_lock:
-                    if server.sessions.get(session_key, 0) <= now:
-                        raise PermissionError('登录已过期，请重新登录')
-                    entry = server.console_streams.get(stream_id)
-                    if entry is None:
-                        raise PermissionError('订阅已失效')
-                    entry['last'] = now
-                if packet['revision'] > revision and isinstance(packet['body'], dict):
-                    send({'type': 'update', 'revision': packet['revision'], 'subscription': subscription,
-                          'body': {**packet['body'], 'subscription': subscription}})
-                    revision = packet['revision']; last_sent = now
-                elif now - last_sent >= 15:
-                    send({'type': 'ping'}); last_sent = now
+                if now - last_ping >= HEARTBEAT_INTERVAL:
+                    send({'type': 'ping'}); last_ping = now
         except PermissionError as exc:
             try:
                 ws.send({'type': 'error', 'status': 401, 'error': str(exc)})
@@ -81,28 +137,21 @@ def serve(handler, session_key, device_id):
     try:
         handler.connection.settimeout(5)
         selection = ws.receive()
-        if selection.get('type') != 'subscribe' or not isinstance(selection.get('subscription'), str) or not 1 <= len(selection['subscription']) <= 100:
-            raise ValueError('订阅参数无效')
         with server.auth_lock, server.lock:
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
             device = server.devices.get(device_id)
             if device_id not in server.config['devices'] or device is None or device.closed:
                 raise Offline()
-            with device.lock:
-                if len(device.streams) >= 8:
-                    raise ValueError('最多 8 个订阅，请关闭不再使用的会话')
-                device.streams[stream_id] = {'revision': 0, 'body': None}
-            server.console_streams[stream_id] = {'device': device_id, 'session': session_key, 'last': time.monotonic()}
-        response = device.call({'type': 'subscribe', 'streamId': stream_id, 'selection': selection})
-        if response['status'] != 200:
-            send({'type': 'error', 'status': response['status'], 'error': (response.get('body') or {}).get('error', '订阅失败')})
-            return
-        handler.connection.settimeout(45)
-        writer = threading.Thread(target=pump, args=(selection['subscription'],), daemon=True)
+        handler.connection.settimeout(READ_TIMEOUT)
+        writer = threading.Thread(target=pump, daemon=True)
         writer.start()
+        subscribe(selection)
         while not closed.is_set():
-            if ws.receive().get('type') != 'pong':
+            message = ws.receive()
+            if message.get('type') == 'subscribe':
+                subscribe(message)
+            elif message.get('type') != 'pong':
                 raise ValueError('此连接仅用于订阅实时更新，提交操作请使用 HTTP')
     except (ValueError, PermissionError, Offline, Uncertain) as exc:
         try:
@@ -114,10 +163,8 @@ def serve(handler, session_key, device_id):
         pass
     finally:
         finish()
-        server.release_stream(stream_id)
-        # A replaced/revoked device may no longer be in the server registry.
-        if device is not None:
-            with device.lock:
-                device.streams.pop(stream_id, None)
+        with selection_lock:
+            previous, active = active, None
+        release(previous)
         if writer:
             writer.join(2)
