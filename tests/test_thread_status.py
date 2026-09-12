@@ -1,6 +1,6 @@
 import unittest
-from connectnow.bridge import idle_snapshot, BridgeError
-from connectnow.thread_status import project_status
+from carryon.bridge import idle_snapshot, BridgeError
+from carryon.thread_status import project_status
 
 
 class ThreadStatusTests(unittest.TestCase):

@@ -2,8 +2,8 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from connectnow.bridge import Bridge, BridgeError
-from connectnow.store import Journal
+from carryon.bridge import Bridge, BridgeError
+from carryon.store import Journal
 
 PARENT='11111111-1111-4111-8111-111111111111'
 CHILD='22222222-2222-4222-8222-222222222222'

@@ -25,7 +25,7 @@ function fixture(storage = new Map()) {
       onAuthError:()=>auth.push(true),onError:error=>{throw error;}}
   });
   vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../client.js'),'utf8')+
-    '\nglobalThis.client = new ConnectNowClient(callbacks);',context);
+    '\nglobalThis.client = new CarryOnClient(callbacks);',context);
   return {client:context.client,sockets,timers,requests,updates,disconnects,auth,storage,
     respond:fn=>{response=fn;}};
 }

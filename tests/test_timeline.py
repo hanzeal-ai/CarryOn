@@ -1,6 +1,6 @@
 import json
 import unittest
-from connectnow.bridge import snapshot_history
+from carryon.bridge import snapshot_history
 
 
 class TimelineTests(unittest.TestCase):

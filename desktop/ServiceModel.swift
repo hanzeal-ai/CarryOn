@@ -3,8 +3,8 @@ import AppKit
 
 struct CommandResult: Sendable { let code: Int32; let text: String }
 func cliExecutable() -> URL {
-    URL(fileURLWithPath: ProcessInfo.processInfo.environment["CONNECTNOW_DESKTOP_CLI"] ?? Bundle.main.executableURL!
-        .deletingLastPathComponent().appendingPathComponent("connectnow-service").path)
+    URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_DESKTOP_CLI"] ?? Bundle.main.executableURL!
+        .deletingLastPathComponent().appendingPathComponent("carryon-service").path)
 }
 func executeCLI(_ arguments: [String], directory: String) -> CommandResult {
     let process = Process(); process.executableURL = cliExecutable()
@@ -13,7 +13,7 @@ func executeCLI(_ arguments: [String], directory: String) -> CommandResult {
     do {
         try process.run(); let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
         return CommandResult(code: process.terminationStatus, text: String(data: data, encoding: .utf8) ?? "无法读取响应")
-    } catch { return CommandResult(code: 1, text: "无法运行 ConnectNow CLI：\(error.localizedDescription)") }
+    } catch { return CommandResult(code: 1, text: "无法运行 CarryOn CLI：\(error.localizedDescription)") }
 }
 struct CloudBinding: Identifiable { let id: String; let url: String; let connected: Bool; let control: Bool; let error: String }
 struct ServiceRecord: Identifiable, Equatable {
@@ -65,7 +65,7 @@ struct ServiceRecord: Identifiable, Equatable {
 }
 
 @MainActor final class SettingsModel: ObservableObject {
-    @Published var directory = ProcessInfo.processInfo.environment["CONNECTNOW_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ConnectNow").path
+    @Published var directory = ProcessInfo.processInfo.environment["CARRYON_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn").path
     @Published var services: [ServiceRecord] = []
     @Published var catalogError = ""
     @Published var running = false

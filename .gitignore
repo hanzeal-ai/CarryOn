@@ -5,7 +5,7 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-connectnow/web/
+carryon/web/
 
 .env
 .env.*

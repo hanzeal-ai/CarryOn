@@ -7,11 +7,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-cli = ROOT/'dist/connectnow/connectnow'
-helper = ROOT/'dist/ConnectNow.app/Contents/MacOS/connectnow-service'
-with tempfile.TemporaryDirectory(prefix='connectnow-desktop-') as temp:
+cli = ROOT/'dist/carryon/carryon'
+helper = ROOT/'dist/CarryOn.app/Contents/MacOS/carryon-service'
+with tempfile.TemporaryDirectory(prefix='carryon-desktop-') as temp:
     state = Path(temp).resolve()/'state'; state.mkdir(mode=0o700)
-    os.environ['CONNECTNOW_REGISTRY_DIR']=str(Path(temp)/'registry')
+    os.environ['CARRYON_REGISTRY_DIR']=str(Path(temp)/'registry')
     configs = {letter*32: {'enabled':False, 'url':f'wss://test-{letter}.invalid/device',
                'deviceId':f'test-{letter}', 'token':'test-only-'+'x'*40, 'control':False} for letter in ('a','b')}
     config = state/'cloud.json'
@@ -27,8 +27,8 @@ with tempfile.TemporaryDirectory(prefix='connectnow-desktop-') as temp:
                         '--state-dir',str(state)],check=True,timeout=30)
         subprocess.run([str(cli),'start','--no-open','--port','0','--codex-home',str(Path(temp)/'empty-codex'),
                         '--state-dir',str(second)],check=True,timeout=30)
-        env = dict(os.environ,CONNECTNOW_HOME=str(state),CONNECTNOW_DESKTOP_CLI=str(helper),
-                   CONNECTNOW_TEST_EXTERNAL_CLI=str(cli),CONNECTNOW_TEST_SECOND=str(second),CONNECTNOW_TEST_THIRD=str(Path(temp).resolve()/'third'))
+        env = dict(os.environ,CARRYON_HOME=str(state),CARRYON_DESKTOP_CLI=str(helper),
+                   CARRYON_TEST_EXTERNAL_CLI=str(cli),CARRYON_TEST_SECOND=str(second),CARRYON_TEST_THIRD=str(Path(temp).resolve()/'third'))
         subprocess.run([str(binary)],env=env,check=True,timeout=120)
     finally:
         for directory in [state,second,Path(temp)/'third']:

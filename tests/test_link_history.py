@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from connectnow.linking import LinkRequests
+from carryon.linking import LinkRequests
 
 class LinkHistoryTests(unittest.TestCase):
     def test_results_survive_restart_without_secrets_and_clear_preserves_requests(self):
@@ -37,7 +37,7 @@ class LinkHistoryTests(unittest.TestCase):
     def test_history_write_failure_does_not_change_authorization_and_clear_failure_keeps_history(self):
         with tempfile.TemporaryDirectory() as directory:
             links = LinkRequests(Path(directory) / 'history.json'); request = links.start('Mac')
-            with patch('connectnow.linking.save_json', side_effect=OSError('disk full')):
+            with patch('carryon.linking.save_json', side_effect=OSError('disk full')):
                 links.approve(request['id'], 'device')
                 self.assertEqual(links.poll(request['id'], request['secret']), 'device')
                 self.assertIsNotNone(links.history_error)

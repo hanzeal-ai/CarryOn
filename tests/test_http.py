@@ -3,13 +3,13 @@ from html.parser import HTMLParser
 import json
 import threading
 import unittest
-from connectnow.server import Server, Handler
+from carryon.server import Server, Handler
 
 
 class FakeBridge:
     def status(self): return {"enabled":False}
     def require(self):
-        from connectnow.bridge import BridgeError
+        from carryon.bridge import BridgeError
         raise BridgeError("disabled", 403)
 
 

@@ -1,14 +1,19 @@
-# ConnectNow
+# CarryOn
 
-连接你电脑上的 Codex App：通过本地浏览器控制台或自己的云端控制台查看会话、发送任务和使用 HTTP/WebSocket API。
+**换个设备，接着做。**
+
+Switch devices. Carry on.
+
+在另一台设备上继续处理电脑上的 AI 工作。当前连接 Codex App：通过本地浏览器控制台或自己的云端控制台查看会话、发送任务和使用 HTTP/WebSocket API。
 
 云端 example 已提供同进程控制台后端与设备连接模块，使用方法见 [云端控制台指南](docs/CONSOLE.md)。
 
-**普通用户：安装 ConnectNow.app，双击后自动打开本地控制台。开发者：`connectnow start`。** 安装包自带 Python，运行不需要 npm/pip 依赖。当前支持 macOS 路径，已记录的 Codex 内部 IPC 验证版本为 26.901.51231。
+**普通用户：安装 CarryOn.app，双击后自动打开本地控制台。开发者：`carryon start`。** 安装包自带 Python，运行不需要 npm/pip 依赖。当前支持 macOS 路径，已记录的 Codex 内部 IPC 验证版本为 26.901.51231。
 
 当前版本 0.2.0。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。
 
 - [GitHub Actions 与阿里云部署](deployment/README.md)：隔离网关、部署开关和回滚。
+- [品牌与升级说明](docs/BRANDING.md)：CarryOn 命名及升级步骤。
 - [安装与首次使用](docs/INSTALL.md)：应用、CLI、Python 包、升级、旧数据目录与排错。
 - [接入自定义云端控制台](docs/CLOUD.md)：出站 WSS、参考网关、设备凭证、后端示例和协议。
 - [本地 HTTP / WebSocket API](docs/API.md)：已有能力、请求状态与幂等契约。
@@ -18,17 +23,17 @@
 ## 快速使用
 
 ```sh
-connectnow start
-connectnow status
-connectnow open
-connectnow stop
+carryon start
+carryon status
+carryon open
+carryon stop
 ```
 
-源码开发者在项目根目录使用 `python3 -m connectnow start`。默认数据目录为 `~/Library/Application Support/ConnectNow`，可通过 `CONNECTNOW_HOME` 或命令后的 `--state-dir` 设置。旧源码项目 `.runtime` 不自动迁移，有历史请求时请按安装文档沿用原目录。
+源码开发者在项目根目录使用 `python3 -m carryon start`。默认数据目录为 `~/Library/Application Support/CarryOn`，可通过 `CARRYON_HOME` 或命令后的 `--state-dir` 设置。旧源码项目 `.runtime` 不自动迁移，有历史请求时请按安装文档沿用原目录。
 
-在 CLI 执行 `connectnow bridge on`，或在 ConnectNow 桌面端开启桥接。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
+在 CLI 执行 `carryon bridge on`，或在 CarryOn 桌面端开启桥接。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
 
-关闭页面不停止服务；使用桌面端「停止服务」或 CLI stop。重复启动复用同一个数据目录下的服务。ConnectNow 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
+关闭页面不停止服务；使用桌面端「停止服务」或 CLI stop。重复启动复用同一个数据目录下的服务。CarryOn 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
 
 CLI 和 macOS 桌面端共用同一数据目录和本机服务，设置双向可见。本地网页仅用于会话交互，不提供本机配置。参见[配置命令与桌面端](docs/CONFIGURATION.md)。
 
@@ -39,9 +44,9 @@ CLI 和 macOS 桌面端共用同一数据目录和本机服务，设置双向可
 CLI 提供云端控制台 HTTPS 地址即可申请连接，然后在云端「连接申请」核对确认：
 
 ```sh
-connectnow cloud connect --url https://你的云端域名/connectnow
-connectnow cloud status
-connectnow cloud disconnect
+carryon cloud connect --url https://你的云端域名/carryon
+carryon cloud status
+carryon cloud disconnect
 ```
 
 命令返回表示申请已提交，绑定由本地服务在云端确认后自动完成。无需输入一次性配对码或设备 Token。多实例时每条命令带上对应的 `--state-dir`。
@@ -77,9 +82,9 @@ connectnow cloud disconnect
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/test_client.js
-python3 -m compileall -q connectnow examples tests
+python3 -m compileall -q carryon examples tests
 ```
 
 Node 只用于开发测试，终端用户运行独立安装包不需要 Node。
 
-桌面端支持多个本地工作区：自动发现 CLI 服务，并提供启停、前台日志、诊断和云端配置。CLI 查看全部服务用 `connectnow services list`；新建和接入目录见 [配置说明](docs/CONFIGURATION.md)。
+桌面端支持多个本地工作区：自动发现 CLI 服务，并提供启停、前台日志、诊断和云端配置。CLI 查看全部服务用 `carryon services list`；新建和接入目录见 [配置说明](docs/CONFIGURATION.md)。

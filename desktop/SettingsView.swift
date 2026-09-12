@@ -63,7 +63,7 @@ import AppKit
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 23)).foregroundStyle(DesktopDesign.blue)
-                VStack(alignment: .leading, spacing: 3) { Text("ConnectNow").font(.system(size: 18, weight: .semibold)); Text("让工作，随处继续").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
+                VStack(alignment: .leading, spacing: 3) { Text("CarryOn").font(.system(size: 18, weight: .semibold)); Text("换个设备，接着做。").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
             }.padding(.horizontal, 23).padding(.top, 30).padding(.bottom, 32)
             HStack { Text("本地工作区").font(.system(size: 11, weight: .medium)); Spacer(); Text("\(model.services.filter(\.running).count) 个运行中").font(.system(size: 10)) }
                 .foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 12)
@@ -100,7 +100,7 @@ import AppKit
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
             Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28) }
-                .buttonStyle(.plain).foregroundStyle(DesktopDesign.secondary).help("刷新状态 · connectnow status").disabled(model.busy)
+                .buttonStyle(.plain).foregroundStyle(DesktopDesign.secondary).help("刷新状态 · carryon status").disabled(model.busy)
         }.padding(.horizontal, 30).padding(.vertical, 17)
     }
     private func tab(_ title: String, id: String) -> some View {
@@ -117,11 +117,11 @@ import AppKit
                     StatePill(label: model.running ? "服务运行中 · \(model.port)" : "服务未运行", active: model.running)
                     HStack(spacing: 10) {
                         if model.running {
-                            Button("打开会话") { Task { await model.perform(["open"]) } }.buttonStyle(AccentButton()).help("connectnow open")
-                            Button("停止服务") { stopping = true }.buttonStyle(QuietButton()).help("connectnow stop")
+                            Button("打开会话") { Task { await model.perform(["open"]) } }.buttonStyle(AccentButton()).help("carryon open")
+                            Button("停止服务") { stopping = true }.buttonStyle(QuietButton()).help("carryon stop")
                         } else {
-                            Button("启动服务") { Task { await model.perform(["start", "--no-open", "--port", model.port, "--codex-home", model.codexHome]) } }.buttonStyle(AccentButton()).help("后台启动 · connectnow start")
-                            Button("前台运行") { page = "logs"; Task { await model.serve() } }.buttonStyle(QuietButton()).help("在桌面端查看实时输出 · connectnow serve")
+                            Button("启动服务") { Task { await model.perform(["start", "--no-open", "--port", model.port, "--codex-home", model.codexHome]) } }.buttonStyle(AccentButton()).help("后台启动 · carryon start")
+                            Button("前台运行") { page = "logs"; Task { await model.serve() } }.buttonStyle(QuietButton()).help("在桌面端查看实时输出 · carryon serve")
                         }
                     }.padding(.top, 5).disabled(model.busy)
                 }.padding(25).frame(maxWidth: .infinity)
@@ -195,7 +195,7 @@ import AppKit
     private var diagnostics: some View {
         VStack(spacing: 0) {
             Paper {
-                SettingRow(icon: "waveform.path.ecg", title: "工作区诊断", detail: "检查本机环境、Codex 与当前服务") { Button("运行诊断") { Task { await model.diagnose() } }.buttonStyle(AccentButton()).disabled(model.busy).help("connectnow doctor") }
+                SettingRow(icon: "waveform.path.ecg", title: "工作区诊断", detail: "检查本机环境、Codex 与当前服务") { Button("运行诊断") { Task { await model.diagnose() } }.buttonStyle(AccentButton()).disabled(model.busy).help("carryon doctor") }
                 ForEach(["supportedPlatform", "ipcSocketAvailable", "databaseAvailable"], id: \.self) { key in
                     RowDivider()
                     SettingRow(icon: key == "ipcSocketAvailable" ? "cable.connector" : key == "databaseAvailable" ? "externaldrive" : "laptopcomputer", title: ["supportedPlatform":"系统支持", "ipcSocketAvailable":"Codex 连接", "databaseAvailable":"会话数据库"][key]!) {
@@ -224,7 +224,7 @@ import AppKit
         VStack(spacing: 0) {
             Paper {
                 SettingRow(icon: "terminal", title: "前台运行", detail: "服务输出显示在这里；退出桌面应用时停止前台服务。") {
-                    Button("前台启动") { Task { await model.serve() } }.buttonStyle(AccentButton()).disabled(model.running || model.busy).help("connectnow serve")
+                    Button("前台启动") { Task { await model.serve() } }.buttonStyle(AccentButton()).disabled(model.running || model.busy).help("carryon serve")
                 }
             }
             SectionCaption(title: "\(model.selectedName) · 实时输出")
@@ -240,7 +240,7 @@ import AppKit
     @ObservedObject var model: SettingsModel
     @Environment(\.dismiss) private var dismiss
     @State private var name = "新工作区"
-    @State private var path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ConnectNow/Workspaces/" + String(UUID().uuidString.prefix(8))).path
+    @State private var path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn/Workspaces/" + String(UUID().uuidString.prefix(8))).path
     @State private var port = "0"
     @State private var codex = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
     var body: some View {
@@ -277,7 +277,7 @@ import AppKit
         VStack(alignment: .leading, spacing: 20) {
             HStack { SymbolTile(name: "icloud", color: DesktopDesign.blue); Text("连接云端").font(.title2.weight(.semibold)) }
             Text("\(model.selectedName) · 发起连接申请").font(.system(size: 13)).foregroundStyle(DesktopDesign.secondary)
-            TextField("https://你的云端地址/connectnow", text: $url).textFieldStyle(.roundedBorder)
+            TextField("https://你的云端地址/carryon", text: $url).textFieldStyle(.roundedBorder)
             Toggle("允许远程控制", isOn: $control).toggleStyle(.switch)
             Text("默认只读。申请后，在云端核对确认码并确认连接。").font(.caption).foregroundStyle(DesktopDesign.secondary)
             if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }

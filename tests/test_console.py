@@ -6,11 +6,11 @@ import time
 import unittest
 from pathlib import Path
 
-from connectnow.console import ConsoleServer, public_url
-from connectnow.cloud import CloudConnector
-from connectnow.bridge import Bridge
-from connectnow.store import Journal
-from connectnow.pairing import redeem
+from carryon.console import ConsoleServer, public_url
+from carryon.cloud import CloudConnector
+from carryon.bridge import Bridge
+from carryon.store import Journal
+from carryon.pairing import redeem
 from test_cloud import Catalog, IPC, T
 
 class ConsoleTests(unittest.TestCase):
@@ -104,24 +104,24 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(self.call('POST','/console/redeem',{'code':code},False)[0],403)
         page=self.call('GET','/example.html')[1]
         self.assertIn(b'console-mode.js',page)
-        self.assertIn(b'CONNECTNOW_CLOUD=true',self.call('GET','/console-mode.js')[1]);self.assertIn(b'cloud-console-client.js',page)
+        self.assertIn(b'CARRYON_CLOUD=true',self.call('GET','/console-mode.js')[1]);self.assertIn(b'cloud-console-client.js',page)
         self.assertNotIn(b'c'*40,page)
         self.assertEqual(self.call('GET','/gateway.json')[0],404)
     def test_proxy_prefix_assets_and_secure_cookie(self):
-        self.server.public_url='https://console.test/connectnow'
-        self.server.origin='https://console.test';self.server.prefix='/connectnow'
+        self.server.public_url='https://console.test/carryon'
+        self.server.origin='https://console.test';self.server.prefix='/carryon'
         result=self.call('POST','/console/login',{'token':'c'*40},'https://console.test')
         self.assertEqual(result[0],200)
-        self.assertIn('; Secure',result[2]);self.assertIn('Path=/connectnow/console/',result[2])
+        self.assertIn('; Secure',result[2]);self.assertIn('Path=/carryon/console/',result[2])
         page=self.call('GET','/example.html',origin=False)[1]
-        self.assertIn(b'src="/connectnow/app.js"',page)
-        self.assertIn(b'src="/connectnow/mobile-ui.js"',page)
-        self.assertIn(b'href="/connectnow/mobile.css"',page)
+        self.assertIn(b'src="/carryon/app.js"',page)
+        self.assertIn(b'src="/carryon/mobile-ui.js"',page)
+        self.assertIn(b'href="/carryon/mobile.css"',page)
         for asset in ('mobile-ui.js', 'mobile.css'):
             status, content, _ = self.call('GET', '/' + asset, origin=False)
             self.assertEqual(status, 200)
             self.assertTrue(content)
-        self.assertIn(b'src="/connectnow/console-mode.js"',page)
+        self.assertIn(b'src="/carryon/console-mode.js"',page)
     def test_early_offline_response_does_not_poison_next_http_request(self):
         self.login()
         c=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)

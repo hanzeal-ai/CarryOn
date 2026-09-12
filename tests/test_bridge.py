@@ -6,9 +6,9 @@ import time
 import unittest
 from pathlib import Path
 
-from connectnow.bridge import Bridge, BridgeError, snapshot_history
-from connectnow.ipc import IPCError
-from connectnow.store import Journal
+from carryon.bridge import Bridge, BridgeError, snapshot_history
+from carryon.ipc import IPCError
+from carryon.store import Journal
 
 THREAD = "11111111-1111-4111-8111-111111111111"
 CHILD = "22222222-2222-4222-8222-222222222222"
@@ -142,7 +142,7 @@ class BridgeTests(unittest.TestCase):
             "threadId":THREAD, "created":time.time(), "state":"accepted", "turnId":"turn-1",
             "expectedTitle":"test"})
         self.bridge.turn_evidence = lambda *_: {"status":"completed",
-            "text":'CONNECTNOW_RESULT '+json.dumps({"requestId":"request-123","threadId":CHILD})}
+            "text":'CARRYON_RESULT '+json.dumps({"requestId":"request-123","threadId":CHILD})}
         self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
     def test_canonical_history_uses_native_order_and_final(self):
         turn = {"turnId": "t", "status": "completed", "params": {"input": [{"type":"text","text":"hello"}]},

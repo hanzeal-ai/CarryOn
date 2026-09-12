@@ -2,9 +2,9 @@
 import json
 import statistics
 import time
-from connectnow.bridge import snapshot_history
-from connectnow.history_cache import HistoryCache
-from connectnow.realtime import packet_signature
+from carryon.bridge import snapshot_history
+from carryon.history_cache import HistoryCache
+from carryon.realtime import packet_signature
 
 state={'id':'11111111-1111-4111-8111-111111111111','threadRuntimeStatus':{'type':'idle'},'requests':[],
        'turns':[{'turnId':str(i),'status':'completed','params':{'input':[{'type':'text','text':'request '*30}]},

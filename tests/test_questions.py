@@ -1,7 +1,7 @@
 import json
 import unittest
-from connectnow.bridge import snapshot_history
-from connectnow.questions import OPEN, CLOSE, reply_answers
+from carryon.bridge import snapshot_history
+from carryon.questions import OPEN, CLOSE, reply_answers
 
 
 class AsyncQuestionTests(unittest.TestCase):
@@ -60,8 +60,8 @@ class AsyncQuestionComposeTests(unittest.TestCase):
 
     def test_answer_uses_steering_once_without_interrupt_or_approval(self):
         from test_operations import state, T
-        from connectnow.remote_scope import scoped_dispatch
-        from connectnow.errors import BridgeError
+        from carryon.remote_scope import scoped_dispatch
+        from carryon.errors import BridgeError
         native = state('active')
         self.bridge.ipc.snapshot = lambda tid: ('owner', native)
         self.bridge.ipc.current = lambda tid: native

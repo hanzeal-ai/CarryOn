@@ -1,27 +1,27 @@
 # CLI 与桌面端配置
 
-ConnectNow CLI 和 macOS 桌面端是同一套本机服务的两个操作界面。默认均使用 `~/Library/Application Support/ConnectNow`；CLI 指定 `--state-dir` 或 `CONNECTNOW_HOME` 时，桌面端需选择同一目录。配置由服务写入，桌面端定期刷新服务状态，不维护另一份连接或权限配置。
+CarryOn CLI 和 macOS 桌面端是同一套本机服务的两个操作界面。默认均使用 `~/Library/Application Support/CarryOn`；CLI 指定 `--state-dir` 或 `CARRYON_HOME` 时，桌面端需选择同一目录。配置由服务写入，桌面端定期刷新服务状态，不维护另一份连接或权限配置。
 
 本地网页提供会话查看和交互；云端网页仍负责管理员确认连接申请、设备撤销和会话交互。本机服务配置只能通过 CLI 或桌面端修改。浏览器即使持有本机 Token，也不能调用本机配置写接口。
 
 | 配置 | CLI | 桌面端 |
 |---|---|---|
-| 启动服务 | `connectnow start --no-open` | 启动服务 |
-| 停止服务 | `connectnow stop` | 停止服务 |
-| 服务状态 | `connectnow status` | 顶部服务状态 |
-| 桥接 | `connectnow bridge on/off/status` | 连接本机 Codex |
-| 远程待机 | `connectnow standby on/off/status` | 远程待机 |
-| 连接云端 | `connectnow cloud connect --url https://云端地址` | 云端连接，申请连接 |
-| 查询绑定 | `connectnow cloud status` | 云端连接列表 |
-| 查询申请 | `connectnow cloud link-status` | 云端申请结果 |
-| 允许控制 | `connectnow cloud control --binding-id ID --allow-control` | 对应绑定的允许远程控制 |
-| 改为只读 | `connectnow cloud control --binding-id ID --read-only` | 关闭对应绑定的允许远程控制 |
-| 解除绑定 | `connectnow cloud disconnect --binding-id ID` | 对应绑定的解除绑定 |
-| 控制会话 | `connectnow controller set --thread-id ID` | 创建任务的控制会话 |
-| 本机通知偏好 | `connectnow notifications status` / `set --no-message --done --failed --approval` | 本机会话通知 |
-| 查看控制会话 | `connectnow controller status` | 当前控制会话 ID |
+| 启动服务 | `carryon start --no-open` | 启动服务 |
+| 停止服务 | `carryon stop` | 停止服务 |
+| 服务状态 | `carryon status` | 顶部服务状态 |
+| 桥接 | `carryon bridge on/off/status` | 连接本机 Codex |
+| 远程待机 | `carryon standby on/off/status` | 远程待机 |
+| 连接云端 | `carryon cloud connect --url https://云端地址` | 云端连接，申请连接 |
+| 查询绑定 | `carryon cloud status` | 云端连接列表 |
+| 查询申请 | `carryon cloud link-status` | 云端申请结果 |
+| 允许控制 | `carryon cloud control --binding-id ID --allow-control` | 对应绑定的允许远程控制 |
+| 改为只读 | `carryon cloud control --binding-id ID --read-only` | 关闭对应绑定的允许远程控制 |
+| 解除绑定 | `carryon cloud disconnect --binding-id ID` | 对应绑定的解除绑定 |
+| 控制会话 | `carryon controller set --thread-id ID` | 创建任务的控制会话 |
+| 本机通知偏好 | `carryon notifications status` / `set --no-message --done --failed --approval` | 本机会话通知 |
+| 查看控制会话 | `carryon controller status` | 当前控制会话 ID |
 
-表中的 `on/off/status` 表示三个独立子命令，例如 `connectnow bridge on`。多绑定时，权限修改和解除绑定必须选择绑定 ID；只有一个绑定时可省略。新连接默认只读，授权控制需显式加 `--allow-control` 或在桌面端勾选。
+表中的 `on/off/status` 表示三个独立子命令，例如 `carryon bridge on`。多绑定时，权限修改和解除绑定必须选择绑定 ID；只有一个绑定时可省略。新连接默认只读，授权控制需显式加 `--allow-control` 或在桌面端勾选。
 
 连接命令返回表示申请已提交，云端管理员核对确认后本地服务自动绑定。`link-status` 的 state 为 idle、pending、bound、expired 或 failed；failed 显示失败原因，bound 不代表 Codex 桥接必然开启，需结合 bridgeEnabled 与当前 `bridge status`。此申请状态是当前服务进程的投影，重启后申请失效，已保存绑定继续保留。
 
@@ -59,10 +59,10 @@ ConnectNow CLI 和 macOS 桌面端是同一套本机服务的两个操作界面�
 前台服务由桌面进程持有，输出显示在「运行日志」，退出应用时停止；后台服务独立运行。关闭窗口与退出应用不同。
 
 ```sh
-connectnow services list
-connectnow services add --name "工作区 B" --state-dir "$HOME/.connectnow/b" --port 0
-connectnow start --state-dir "$HOME/.connectnow/b" --port 0 --no-open
-connectnow cloud connect --state-dir "$HOME/.connectnow/b" --url https://你的云端地址/connectnow
+carryon services list
+carryon services add --name "工作区 B" --state-dir "$HOME/.carryon/b" --port 0
+carryon start --state-dir "$HOME/.carryon/b" --port 0 --no-open
+carryon cloud connect --state-dir "$HOME/.carryon/b" --url https://你的云端地址/carryon
 ```
 
-服务启动后自动登记。旧 CLI 已启动的服务通过当前用户的进程参数发现，再用已有 Token 和实例校验确认。停止的已登记目录保留在列表中，未运行且从未登记的旧目录需要手动添加。注册表 `~/Library/Application Support/ConnectNow/services.json` 只存目录、名称和启动参数；在线状态始终由实际服务确认，配置仍保存在各自目录中。无法确认但留有服务记录时显示「暂不可用」。
+服务启动后自动登记。旧 CLI 已启动的服务通过当前用户的进程参数发现，再用已有 Token 和实例校验确认。停止的已登记目录保留在列表中，未运行且从未登记的旧目录需要手动添加。注册表 `~/Library/Application Support/CarryOn/services.json` 只存目录、名称和启动参数；在线状态始终由实际服务确认，配置仍保存在各自目录中。无法确认但留有服务记录时显示「暂不可用」。

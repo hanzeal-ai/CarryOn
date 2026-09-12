@@ -9,24 +9,24 @@ from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
-from connectnow import maintenance as m
-from connectnow.cli import main
+from carryon import maintenance as m
+from carryon.cli import main
 
 
 class MaintenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name).resolve()
-        self.old=self.root/'old';self.old.mkdir();self.binary=self.old/'connectnow';self.binary.write_text('old')
-        self.link=self.root/'bin/connectnow';self.link.parent.mkdir();self.link.symlink_to(self.binary)
+        self.old=self.root/'old';self.old.mkdir();self.binary=self.old/'carryon';self.binary.write_text('old')
+        self.link=self.root/'bin/carryon';self.link.parent.mkdir();self.link.symlink_to(self.binary)
         self.releases=self.root/'releases'
 
     def tearDown(self):self.temp.cleanup()
 
-    def archive(self,extras=(),script=b'#!/bin/sh\nprintf "0.3.0\\n"\n'):
-        package=self.root/'ConnectNow-0.3.0-macos-arm64-cli.tar.gz'
+    def archive(self,extras=(),script=b'#!/bin/sh\nprintf "0.3.0\\n"\n',brand='CarryOn'):
+        package=self.root/f'{brand}-0.3.0-macos-arm64-cli.tar.gz'
         with tarfile.open(package,'w:gz') as f:
-            for name,kind,content in [('connectnow',tarfile.DIRTYPE,b''),('connectnow/_internal',tarfile.DIRTYPE,b''),
-                                      ('connectnow/connectnow',tarfile.REGTYPE,script),*extras]:
+            for name,kind,content in [('carryon',tarfile.DIRTYPE,b''),('carryon/_internal',tarfile.DIRTYPE,b''),
+                                      ('carryon/carryon',tarfile.REGTYPE,script),*extras]:
                 item=tarfile.TarInfo(name);item.type=kind;item.mode=0o755
                 if kind==tarfile.REGTYPE:item.size=len(content);f.addfile(item,io.BytesIO(content))
                 elif kind==tarfile.SYMTYPE:item.linkname=content;f.addfile(item)
@@ -42,6 +42,13 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(self.link.resolve(),target)
         self.assertEqual(old,str(self.binary));self.assertEqual(self.binary.read_text(),'old')
         self.assertEqual((state/'cloud.json').read_text(),'private-config')
+
+    def test_old_brand_package_is_rejected_without_changing_entry(self):
+        package=self.archive(brand='ConnectNow')
+        with patch.object(m.sys,'platform','darwin'),patch.object(m.platform,'machine',return_value='arm64'):
+            with self.assertRaisesRegex(ValueError,'名称或架构'):
+                m.install(package,self.link,self.releases)
+        self.assertEqual(self.link.resolve(),self.binary)
 
     def test_checksum_failure_does_not_change_entry(self):
         package=self.archive();package.write_bytes(package.read_bytes()+b'corrupted')
@@ -65,10 +72,10 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_archive_rejects_path_escape_external_links_duplicates_and_devices(self):
         attacks=[('../outside',tarfile.REGTYPE,b'bad'),('/tmp/outside',tarfile.REGTYPE,b'bad'),
-                 ('connectnow/escape',tarfile.SYMTYPE,'../../outside'),
-                 ('connectnow/escape',tarfile.SYMTYPE,'/tmp/outside'),
-                 ('connectnow/CONNECTNOW',tarfile.REGTYPE,b'bad'),
-                 ('connectnow/device',tarfile.CHRTYPE,b'')]
+                 ('carryon/escape',tarfile.SYMTYPE,'../../outside'),
+                 ('carryon/escape',tarfile.SYMTYPE,'/tmp/outside'),
+                 ('carryon/CARRYON',tarfile.REGTYPE,b'bad'),
+                 ('carryon/device',tarfile.CHRTYPE,b'')]
         for index,attack in enumerate(attacks):
             with self.subTest(attack=attack):
                 package=self.archive([attack]);directory=self.root/f'unpack-{index}';directory.mkdir()
@@ -76,10 +83,10 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse((self.root/'outside').exists())
 
     def test_internal_framework_symlinks_are_supported(self):
-        package=self.archive([('._connectnow',tarfile.REGTYPE,b'metadata'),('connectnow/._install.sh',tarfile.REGTYPE,b'metadata'),('connectnow/_internal/python',tarfile.REGTYPE,b'runtime'),
-                              ('connectnow/_internal/Python.framework',tarfile.SYMTYPE,'python')])
+        package=self.archive([('._carryon',tarfile.REGTYPE,b'metadata'),('carryon/._install.sh',tarfile.REGTYPE,b'metadata'),('carryon/_internal/python',tarfile.REGTYPE,b'runtime'),
+                              ('carryon/_internal/Python.framework',tarfile.SYMTYPE,'python')])
         directory=self.root/'unpack';directory.mkdir();m.extract(package,directory)
-        self.assertEqual((directory/'connectnow/_internal/Python.framework').read_bytes(),b'runtime')
+        self.assertEqual((directory/'carryon/_internal/Python.framework').read_bytes(),b'runtime')
 
     def test_uninstall_only_removes_own_link(self):
         with patch.object(m,'current_link',return_value=self.link),redirect_stdout(io.StringIO()) as output:
@@ -93,15 +100,15 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_check_does_not_install_or_require_a_running_service(self):
         with patch.object(m,'latest',return_value=('99.0.0','bundle',{})),patch.object(m,'install') as install, \
-                patch('connectnow.cli.running') as running,redirect_stdout(io.StringIO()):
+                patch('carryon.cli.running') as running,redirect_stdout(io.StringIO()):
             self.assertEqual(main(['update','--check']),0)
             install.assert_not_called();running.assert_not_called()
-        with patch.object(m,'uninstall',return_value=0),patch('connectnow.cli.running') as running:
+        with patch.object(m,'uninstall',return_value=0),patch('carryon.cli.running') as running:
             self.assertEqual(main(['uninstall']),0);running.assert_not_called()
 
     def test_latest_requires_official_matching_assets(self):
         prefix=f'https://github.com/{m.REPOSITORY}/releases/download/v0.3.0/'
-        name='ConnectNow-0.3.0-macos-arm64-cli.tar.gz'
+        name='CarryOn-0.3.0-macos-arm64-cli.tar.gz'
         data={'tag_name':'v0.3.0','draft':False,'prerelease':False,'assets':[
               {'name':name,'browser_download_url':prefix+name},
               {'name':'SHA256SUMS','browser_download_url':prefix+'SHA256SUMS'}]}
@@ -134,7 +141,7 @@ class MaintenanceTests(unittest.TestCase):
     def test_failed_restart_rolls_back_entry_and_both_original_services(self):
         rows=self.rows();target=self.root/'new'
         with patch.object(m,'stop_service') as stop,patch.object(m,'start_service',side_effect=['new-id',ValueError('failed'),'old-two','old-one']) as start, \
-                patch('connectnow.cli.running',return_value=None):
+                patch('carryon.cli.running',return_value=None):
             with self.assertRaisesRegex(ValueError,'已恢复原入口'):m.activate(target,self.link,str(self.binary),'0.3.0',rows)
         self.assertEqual(self.link.resolve(),self.binary)
         self.assertEqual(start.call_args_list[-1].args,(rows[0],str(self.binary),'0.2.0'))
@@ -143,14 +150,14 @@ class MaintenanceTests(unittest.TestCase):
     def test_rollback_failure_is_reported(self):
         rows=self.rows()[:1]
         with patch.object(m,'stop_service'),patch.object(m,'start_service',side_effect=ValueError('failed')), \
-                patch('connectnow.cli.running',return_value=None):
+                patch('carryon.cli.running',return_value=None):
             with self.assertRaisesRegex(ValueError,'恢复未完成'):m.activate(self.root/'new',self.link,str(self.binary),'0.3.0',rows)
         self.assertEqual(self.link.resolve(),self.binary)
 
     def test_snapshot_does_not_include_stopped_services(self):
         rows=self.rows()
-        with patch('connectnow.services.list_services',return_value={'services':[{**rows[0],'running':True},{**rows[1],'running':False}]}), \
-                patch('connectnow.cli.call',return_value=rows[0]['status']), \
+        with patch('carryon.services.list_services',return_value={'services':[{**rows[0],'running':True},{**rows[1],'running':False}]}), \
+                patch('carryon.cli.call',return_value=rows[0]['status']), \
                 patch.object(m.subprocess,'check_output',return_value=str(self.binary)+'\n'):
             self.assertEqual(len(m.service_snapshots()),1)
 
@@ -164,7 +171,7 @@ class MaintenanceTests(unittest.TestCase):
     def test_start_preserves_disabled_bridge_and_original_arguments(self):
         row=self.rows()[1];Path(row['directory']).mkdir()
         info={'pid':42,'instanceId':'new','version':'0.3.0'}
-        with patch('connectnow.cli.running',side_effect=[None,info]),patch('connectnow.cli.call',return_value=row['status']) as call, \
+        with patch('carryon.cli.running',side_effect=[None,info]),patch('carryon.cli.call',return_value=row['status']) as call, \
                 patch.object(m.subprocess,'Popen') as popen:
             popen.return_value.pid=42
             self.assertEqual(m.start_service(row,self.binary,'0.3.0'),'new')
@@ -175,14 +182,14 @@ class MaintenanceTests(unittest.TestCase):
     def test_stop_failure_keeps_entry_and_running_service(self):
         row=self.rows()[0]
         with patch.object(m,'stop_service',side_effect=ValueError('stop failed')),patch.object(m,'start_service') as start, \
-                patch('connectnow.cli.running',return_value=row['service']):
+                patch('carryon.cli.running',return_value=row['service']):
             with self.assertRaisesRegex(ValueError,'stop failed'):m.activate(self.root/'new',self.link,str(self.binary),'0.3.0',[row])
         self.assertEqual(self.link.resolve(),self.binary);start.assert_not_called()
 
     def test_start_restores_controller_before_disabling_bridge(self):
         row=self.rows()[1];row['status']['controllerId']='thread-123';Path(row['directory']).mkdir()
-        with patch('connectnow.cli.running',side_effect=[None,{'pid':42,'instanceId':'new','version':'0.3.0'}]), \
-                patch('connectnow.cli.call',return_value=row['status']) as call,patch.object(m.subprocess,'Popen') as popen:
+        with patch('carryon.cli.running',side_effect=[None,{'pid':42,'instanceId':'new','version':'0.3.0'}]), \
+                patch('carryon.cli.call',return_value=row['status']) as call,patch.object(m.subprocess,'Popen') as popen:
             popen.return_value.pid=42;m.start_service(row,self.binary,'0.3.0')
         self.assertEqual([(c.args[1],c.args[2]) for c in call.call_args_list[:-1]],
             [('/bridge',{'enabled':True}),('/controller',{'threadId':'thread-123'}),('/bridge',{'enabled':False})])

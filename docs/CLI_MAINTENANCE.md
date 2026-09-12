@@ -1,17 +1,17 @@
 # CLI 更新与卸载
 
 ```sh
-connectnow update --check     # 检查官方最新正式发布，不安装
-connectnow update             # 下载对应 macOS 架构的 CLI，校验并切换命令入口
-connectnow update --package /路径/ConnectNow-0.3.0-macos-arm64-cli.tar.gz
-connectnow uninstall          # 移除 CLI 命令入口
+carryon update --check     # 检查官方最新正式发布，不安装
+carryon update             # 下载对应 macOS 架构的 CLI，校验并切换命令入口
+carryon update --package /路径/CarryOn-0.3.0-macos-arm64-cli.tar.gz
+carryon uninstall          # 移除 CLI 命令入口
 ```
 
-在线更新读取 `hanzeal-ai/ConnectNow` 的 GitHub Releases。发布必须提供当前架构的 `ConnectNow-版本-macos-arm64-cli.tar.gz` 或 `x86_64` 包，以及 `SHA256SUMS`。无法访问发布、缺少资源、校验不匹配或新程序版本检查失败时，不切换现有 CLI。在线更新只采用更高的正式版本；需要每次正式发布递增版本号。
+在线更新读取 `hanzeal-ai/CarryOn` 的 GitHub Releases。发布必须提供当前架构的 `CarryOn-版本-macos-arm64-cli.tar.gz` 或 `x86_64` 包，以及 `SHA256SUMS`。无法访问发布、缺少资源、校验不匹配或新程序版本检查失败时，不切换现有 CLI。在线更新只采用更高的正式版本；需要每次正式发布递增版本号。
 
 本地更新用于已下载或内部构建的安装包，包的同一目录必须包含 `SHA256SUMS`，并与本机架构匹配。只使用可信来源的安装包及校验文件；本地方式允许同版本构建的替换。`update --check` 不可与 `--package` 混用。
 
-更新针对通过安装器建立的 CLI 符号链接。新版本安装在 `~/.local/share/connectnow-releases/` 下，通过原子替换符号链接切换入口，旧版本保留。源码运行和 Python 包安装不会被这个命令替换，请使用原来的包管理方式。
+更新针对通过安装器建立的 CLI 符号链接。新版本安装在 `~/.local/share/carryon-releases/` 下，通过原子替换符号链接切换入口，旧版本保留。源码运行和 Python 包安装不会被这个命令替换，请使用原来的包管理方式。
 
 ## 与桌面端和后台的关系
 

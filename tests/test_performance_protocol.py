@@ -2,12 +2,12 @@ import json
 import os
 import unittest
 from unittest.mock import Mock
-from connectnow.websocket import mask_payload
-from connectnow.patches import apply_patches
-from connectnow.history_cache import HistoryCache, NativeSnapshot, TurnCache
-from connectnow.bridge import snapshot_history
-from connectnow.history_wire import HistoryWire
-from connectnow.gateway import Device
+from carryon.websocket import mask_payload
+from carryon.patches import apply_patches
+from carryon.history_cache import HistoryCache, NativeSnapshot, TurnCache
+from carryon.bridge import snapshot_history
+from carryon.history_wire import HistoryWire
+from carryon.gateway import Device
 
 
 def state(turns=100):
@@ -103,7 +103,7 @@ class PerformanceProtocolTests(unittest.TestCase):
     def test_preview_does_not_wait_for_native_full_history(self):
         import threading
         from types import SimpleNamespace
-        from connectnow.realtime import Subscription
+        from carryon.realtime import Subscription
         native=Mock();native.current.return_value=None
         bridge=SimpleNamespace(lock=threading.RLock(),status=lambda:{'enabled':True},require=lambda:(native,1),
             journal=SimpleNamespace(list=lambda limit=None:[]),

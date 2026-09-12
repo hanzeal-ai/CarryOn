@@ -8,10 +8,10 @@ from unittest.mock import Mock, patch
 import urllib.request
 import urllib.error
 
-from connectnow.standby import RemoteStandby
-from connectnow.api import dispatch
-from connectnow.errors import BridgeError
-from connectnow.server import Server, Handler
+from carryon.standby import RemoteStandby
+from carryon.api import dispatch
+from carryon.errors import BridgeError
+from carryon.server import Server, Handler
 
 
 class StandbyTests(unittest.TestCase):
@@ -20,8 +20,8 @@ class StandbyTests(unittest.TestCase):
         self.standby = RemoteStandby(self.temp.name)
         self.process = Mock()
         self.process.poll.return_value = None
-        self.patches = [patch('connectnow.standby.Path.is_file',return_value=True), patch('connectnow.standby.sys.platform', 'darwin'),
-                        patch('connectnow.standby.subprocess.Popen', return_value=self.process),
+        self.patches = [patch('carryon.standby.Path.is_file',return_value=True), patch('carryon.standby.sys.platform', 'darwin'),
+                        patch('carryon.standby.subprocess.Popen', return_value=self.process),
                         patch.object(RemoteStandby, 'power_source', return_value='ac')]
         for p in self.patches:p.start()
 
@@ -35,7 +35,7 @@ class StandbyTests(unittest.TestCase):
         self.assertIsNone(self.standby.process)
         result=self.standby.configure(True)
         self.assertTrue(result['effective'])
-        from connectnow.standby import subprocess
+        from carryon.standby import subprocess
         self.assertEqual(subprocess.Popen.call_args.args[0], ['/usr/bin/caffeinate','-s','-w',str(os.getpid())])
         self.assertEqual(self.standby.path.stat().st_mode & 0o777,0o600)
         with patch.object(RemoteStandby,'power_source',return_value='battery'):
@@ -57,12 +57,12 @@ class StandbyTests(unittest.TestCase):
     def test_invalid_unsupported_failed_process_and_save_failure(self):
         for value in (1, 'true', None):
             with self.assertRaises(ValueError):self.standby.configure(value)
-        with patch('connectnow.standby.sys.platform','linux'):
+        with patch('carryon.standby.sys.platform','linux'):
             with self.assertRaises(ValueError):self.standby.configure(True)
-        with patch('connectnow.standby.subprocess.Popen',side_effect=OSError):
+        with patch('carryon.standby.subprocess.Popen',side_effect=OSError):
             with self.assertRaises(ValueError):self.standby.configure(True)
         self.assertFalse(self.standby.enabled)
-        with patch('connectnow.standby.save_json',side_effect=OSError):
+        with patch('carryon.standby.save_json',side_effect=OSError):
             with self.assertRaises(OSError):self.standby.configure(True)
         self.assertFalse(self.standby.enabled);self.assertIsNone(self.standby.process)
         self.standby.configure(True);self.process.poll.return_value=1

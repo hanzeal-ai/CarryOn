@@ -2,11 +2,11 @@
 import json
 import statistics
 import time
-from connectnow.bridge import snapshot_history
-from connectnow.history_cache import HistoryCache, NativeSnapshot
-from connectnow.history_wire import HistoryWire
-from connectnow.patches import apply_patches
-from connectnow.websocket import mask_payload
+from carryon.bridge import snapshot_history
+from carryon.history_cache import HistoryCache, NativeSnapshot
+from carryon.history_wire import HistoryWire
+from carryon.patches import apply_patches
+from carryon.websocket import mask_payload
 
 
 def median(fn, count=9):

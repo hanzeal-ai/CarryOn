@@ -36,7 +36,7 @@ Web/iOS 默认订阅最近 40 轮；服务端返回 `historyWindow.limit/total/h
 - `python3 -m unittest discover -s tests -q`：238 项通过；最后拆分主/临时聊天窗口后，14 项相关回归再次通过。覆盖真实本地设备→网关→console socket 的窗口/增量往返、授权、断连与重订阅。
 - `node --test tests/test_*.js`：36 项通过，包含迟到响应、修订号缓存、增量重建与窗口变化的订阅识别。
 - `swift test --package-path iOS`：11 项通过，包含增量替换、删除字段、messages 同步和缺口拒绝。
-- `tests/check_realtime_ui.cjs`：真实 Chromium、模拟 HTTP/WS。即时回显、去重、DOM 复用、缓存切换、断线禁写、真实前端增量解码、扩大历史窗口、缺口重连及完整恢复均通过。运行时指定已安装的 `PLAYWRIGHT_MODULE` 和源码静态预览 `CONNECTNOW_UI_URL`。
+- `tests/check_realtime_ui.cjs`：真实 Chromium、模拟 HTTP/WS。即时回显、去重、DOM 复用、缓存切换、断线禁写、真实前端增量解码、扩大历史窗口、缺口重连及完整恢复均通过。运行时指定已安装的 `PLAYWRIGHT_MODULE` 和源码静态预览 `CARRYON_UI_URL`。
 - `./iOS/scripts/compile-device.sh` 和不签名 Xcode iphoneos 构建通过；检查应用为 arm64 iOS 可执行文件。
 - Python 编译、JS 语法和最终差异空白检查通过。日志位于 `.runtime/performance-*.log`。
 

@@ -5,11 +5,11 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from connectnow.bridge import Bridge
-from connectnow.events import Events
-from connectnow.queue import message
-from connectnow.server import Handler, Server
-from connectnow.store import Journal
+from carryon.bridge import Bridge
+from carryon.events import Events
+from carryon.queue import message
+from carryon.server import Handler, Server
+from carryon.store import Journal
 from test_operations import IPC, T, state
 
 U='22222222-2222-4222-8222-222222222222'
@@ -57,7 +57,7 @@ class FixtureCatalog:
 if __name__=='__main__':
     with tempfile.TemporaryDirectory() as d:
         b=Bridge('unused',FixtureCatalog(),Journal(Path(d)/'jobs.sqlite'),FixtureIPC);b.enable()
-        s=Server(('127.0.0.1',8770),Handler);s.bridge=b;s.token='connectnow-local-smoke';s.allowed_hosts={'127.0.0.1:8770'}
-        print('Isolated fixture: http://127.0.0.1:8770/example.html#token=connectnow-local-smoke',flush=True)
+        s=Server(('127.0.0.1',8770),Handler);s.bridge=b;s.token='carryon-local-smoke';s.allowed_hosts={'127.0.0.1:8770'}
+        print('Isolated fixture: http://127.0.0.1:8770/example.html#token=carryon-local-smoke',flush=True)
         try:s.serve_forever()
         finally:b.disable();s.server_close()

@@ -7,11 +7,11 @@ import time
 import unittest
 from pathlib import Path
 
-from connectnow.bridge import Bridge
-from connectnow.cloud import CloudConnector
-from connectnow.cloud_wire import endpoint
-from connectnow.gateway import Gateway
-from connectnow.store import Journal
+from carryon.bridge import Bridge
+from carryon.cloud import CloudConnector
+from carryon.cloud_wire import endpoint
+from carryon.gateway import Gateway
+from carryon.store import Journal
 
 T='11111111-1111-4111-8111-111111111111'
 
@@ -74,7 +74,7 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(response.status,200)
         result=json.loads(response.read());c.close()
         self.assertEqual(set(result),{'service','version','release'})
-        self.assertEqual(result['service'],'connectnow-gateway')
+        self.assertEqual(result['service'],'carryon-gateway')
     def test_read_scope_device_isolation_and_closed_bridge(self):
         self.connect()
         self.assertEqual(self.call('GET','',device='device-b')[0],401)

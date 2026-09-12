@@ -18,7 +18,7 @@ iOS 空态使用 `ContentUnavailableView`，加载使用 `ProgressView`。两端
 
 ```sh
 PLAYWRIGHT_MODULE=/path/to/playwright \
-CONNECTNOW_UI_URL=http://127.0.0.1:8989/example.html \
+CARRYON_UI_URL=http://127.0.0.1:8989/example.html \
 node tests/check_loading_ui.cjs
 ```
 

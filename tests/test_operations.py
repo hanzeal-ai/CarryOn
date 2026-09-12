@@ -5,10 +5,10 @@ import time
 import unittest
 from pathlib import Path
 
-from connectnow.bridge import Bridge, BridgeError
-from connectnow.ipc import IPCError
-from connectnow.operations import METHODS, REQUEST_METHODS, build, controls, digest, submit
-from connectnow.store import Journal
+from carryon.bridge import Bridge, BridgeError
+from carryon.ipc import IPCError
+from carryon.operations import METHODS, REQUEST_METHODS, build, controls, digest, submit
+from carryon.store import Journal
 
 T = '11111111-1111-4111-8111-111111111111'
 

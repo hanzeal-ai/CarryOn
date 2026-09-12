@@ -10,10 +10,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from connectnow.ipc import DesktopIPC
-from connectnow.patches import apply_patches
-from connectnow.server import Server, Handler
-from connectnow.websocket import WebSocket
+from carryon.ipc import DesktopIPC
+from carryon.patches import apply_patches
+from carryon.server import Server, Handler
+from carryon.websocket import WebSocket
 
 THREAD = '01a08062-8ff1-75c1-a426-299b4c0a31f7'
 
@@ -60,13 +60,13 @@ class FakeIPC:
     def unwatch(self, tid): pass
     def current(self, tid): return self.states.get(tid)
     def snapshot(self, tid):
-        from connectnow.ipc import IPCError
+        from carryon.ipc import IPCError
         raise IPCError('no-client-found')
     sidebar_snapshot = snapshot
 
 
 class FakeBridge:
-    from connectnow.bridge import Bridge
+    from carryon.bridge import Bridge
     open_stream = Bridge.open_stream
     def __init__(self):
         self.events = threading.Condition()
@@ -196,7 +196,7 @@ class WSTests(unittest.TestCase):
     def test_cross_origin_rejected_before_upgrade(self):
         c,h=self.connect('https://evil.example');self.assertIn(b'403',h)
     def test_coordination_events_push_flags_and_queue(self):
-        from connectnow.events import Events
+        from carryon.events import Events
         bridge=self.server.bridge;ipc=bridge.ipc
         ipc.lock=threading.RLock();ipc.following={THREAD:'owner'};ipc.on_change=bridge.notify
         ipc.events=Events(ipc)
@@ -225,7 +225,7 @@ class WSTests(unittest.TestCase):
 
     def test_heartbeat_continues_while_history_is_loading(self):
         from unittest.mock import patch
-        from connectnow import websocket
+        from carryon import websocket
         entered=threading.Event();release=threading.Event()
         original=self.server.bridge.history
         def history(tid):

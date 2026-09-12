@@ -93,8 +93,8 @@ function notice(text) {
   $('notice').textContent = text; $('notice').hidden = false;
   clearTimeout(noticeTimer); noticeTimer = setTimeout(() => $('notice').hidden = true, 6500);
 }
-const cloudMode = window.CONNECTNOW_CLOUD === true;
-const client = new (cloudMode ? CloudConsoleClient : ConnectNowClient)({
+const cloudMode = window.CARRYON_CLOUD === true;
+const client = new (cloudMode ? CloudConsoleClient : CarryOnClient)({
   onUpdate: receiveUpdate,
   onDisconnect: streamDisconnected,
   onAuthError: () => { historyCache.clear();outgoingMessages.clear(); $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('console-code-dialog').close();$('console-pair-code').textContent='';$('link-dialog').close();$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;} },
@@ -542,7 +542,7 @@ async function init(){
     };
     $('console-pair-device').onclick=async()=>{
       try{const p=await client.consoleRequest('pairing',{deviceId:client.device});
-        $('console-pair-command').textContent='connectnow start\nconnectnow cloud pair --url '+p.publicUrl+(p.publicUrl.startsWith('http:')?' --dev-local':'');
+        $('console-pair-command').textContent='carryon start\ncarryon cloud pair --url '+p.publicUrl+(p.publicUrl.startsWith('http:')?' --dev-local':'');
         $('console-pair-code').textContent=p.code;$('console-code-dialog').showModal();
       }catch(e){notice(e.message);}
     };

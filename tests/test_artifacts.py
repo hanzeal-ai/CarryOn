@@ -2,10 +2,10 @@ import base64
 from pathlib import Path
 import tempfile
 import unittest
-from connectnow.artifacts import references, read_artifact
-from connectnow.images import image_id
-from connectnow.errors import BridgeError
-from connectnow.bridge import snapshot_history
+from carryon.artifacts import references, read_artifact
+from carryon.images import image_id
+from carryon.errors import BridgeError
+from carryon.bridge import snapshot_history
 
 
 class ArtifactTests(unittest.TestCase):

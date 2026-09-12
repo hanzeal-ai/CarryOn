@@ -35,7 +35,7 @@ iOS 真机边缘返回、空白点击、系统 Quick Look、后台恢复，以�
 
 2026-09-12：图片切换到 `ImageLightbox.swift` 中的 UIKit overFullScreen 查看器，保留会话作为蒙层底部背景。使用 UIScrollView 处理缩放；纵向关闭手势仅在适配尺寸且单指向下时启用。取消拖动会回弹，关闭可用点击蒙层、右上角按钮或 VoiceOver 退出手势。尊重系统减少动态效果设置。
 
-独立构建目录 `/tmp/connectnow-lightbox-products` 的 iphoneos arm64 未签名完整 App 构建通过；无已启动模拟器，真机缩放/手势和视觉体验仍需验收。当前只修改 iOS 图片预览及对应说明，文件 Quick Look 未替换。
+独立构建目录 `/tmp/carryon-lightbox-products` 的 iphoneos arm64 未签名完整 App 构建通过；无已启动模拟器，真机缩放/手势和视觉体验仍需验收。当前只修改 iOS 图片预览及对应说明，文件 Quick Look 未替换。
 
 ## 工作区抽屉与连接申请（2026-09-12）
 

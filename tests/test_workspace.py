@@ -2,10 +2,10 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
-from connectnow.bridge import Bridge
-from connectnow.store import Journal
-from connectnow.workspace import Workspace,project_identity
-from connectnow.remote_scope import scoped_dispatch
+from carryon.bridge import Bridge
+from carryon.store import Journal
+from carryon.workspace import Workspace,project_identity
+from carryon.remote_scope import scoped_dispatch
 from test_cloud import IPC,T
 
 U='22222222-2222-4222-8222-222222222222'
@@ -109,7 +109,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def native_read_event(self, **overrides):
         import threading
-        from connectnow.events import Events
+        from carryon.events import Events
         ipc=self.bridge.ipc
         if not hasattr(ipc,'events'):
             ipc.lock=threading.RLock();ipc.following={};ipc.events=Events(ipc)

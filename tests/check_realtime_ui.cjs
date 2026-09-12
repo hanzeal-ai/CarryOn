@@ -4,9 +4,9 @@ const assert=require('node:assert/strict');
  const browser=await chromium.launch();const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGEERROR',e.stack)});let authenticated=true;
  let finishCompose, socketCount=0,sendWire,activeSelection;
- const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/ConnectNow',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/ConnectNow',unread:false}];
- const projects=[{id:'p1',name:'ConnectNow',cwd:'/workspace/ConnectNow',total:12,waiting:1,running:2,unread:3,unknown:0},{id:'p2',name:'MarkFix',cwd:'/workspace/MarkFix',total:8,waiting:0,running:0,unread:1,unknown:0}];
- await page.addInitScript(()=>{window.CONNECTNOW_CLOUD=true;});
+ const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/CarryOn',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/CarryOn',unread:false}];
+ const projects=[{id:'p1',name:'CarryOn',cwd:'/workspace/CarryOn',total:12,waiting:1,running:2,unread:3,unknown:0},{id:'p2',name:'MarkFix',cwd:'/workspace/MarkFix',total:8,waiting:0,running:0,unread:1,unknown:0}];
+ await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const req=route.request(),u=new URL(req.url());let data={},status=200;
   if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true},{id:'other',name:'工作室 Mac',online:false}]};}
@@ -31,7 +31,7 @@ const assert=require('node:assert/strict');
   sendWire=body=>socket.send(JSON.stringify({type:"update",revision:++revision,resubscribe:true,subscription:activeSelection.subscription,body:{...body,subscription:activeSelection.subscription,threadId:activeSelection.threadId,status:{enabled:true,controllerId:"t2",remoteControl:true}}}));
   socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')activeSelection=selection;if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
  });
- await page.goto(process.env.CONNECTNOW_UI_URL||'http://127.0.0.1:8989/example.html');
+ await page.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8989/example.html');
  await page.locator('#mobile-session-list .project-row').first().click();
  await page.locator('.session').first().click();
  await page.evaluate(async()=>{

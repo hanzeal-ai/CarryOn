@@ -7,9 +7,9 @@ const assert=require('node:assert/strict');
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  let gate=null,failPreferences=false,projectCalls=0;
- const project={id:'p',name:'ConnectNow',total:2};
+ const project={id:'p',name:'CarryOn',total:2};
  const thread={id:'t',title:'加载状态验证',cwd:'/workspace',status:{state:'idle'}};
- await page.addInitScript(()=>{window.CONNECTNOW_CLOUD=true;});
+ await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const url=new URL(route.request().url());let data={},status=200;
   if(url.pathname.endsWith('/session'))data={devices:[{id:'mac',name:'Mac',online:true}]};
@@ -31,7 +31,7 @@ const assert=require('node:assert/strict');
  });
  await page.routeWebSocket('**/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,remoteControl:true,controllerId:'t'}}}));});});
  function hold(path){let release,entered;const promise=new Promise(r=>release=r),started=new Promise(r=>entered=r);gate={path,promise,entered};return {release,started};}
- const base=process.env.CONNECTNOW_UI_URL||'http://127.0.0.1:8989/example.html';
+ const base=process.env.CARRYON_UI_URL||'http://127.0.0.1:8989/example.html';
  await page.goto(base);await page.locator('#mobile-session-list .project-row').waitFor();
  let slow=hold('/api/projects');await page.evaluate(()=>{window.refreshResult=loadThreads();});await slow.started;
  assert.equal(await page.locator('#mobile-session-list .loading-spinner').count(),1);

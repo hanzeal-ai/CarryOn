@@ -7,7 +7,7 @@ ASSETS=('example.html','app.js','notification-client.js','client.js','timeline.j
 class Build(build_py):
     def run(self):
         super().run()
-        target=Path(self.build_lib)/'connectnow/web'
+        target=Path(self.build_lib)/'carryon/web'
         target.mkdir(parents=True,exist_ok=True)
         for name in ASSETS:self.copy_file(name,str(target/name))
 setup(cmdclass={'build_py':Build})

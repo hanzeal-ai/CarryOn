@@ -8,15 +8,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from connectnow.bridge import Bridge
-from connectnow.cloud import CloudConnector
-from connectnow.cloud_manager import CloudManager
-from connectnow.console import ConsoleServer
-from connectnow.errors import BridgeError
-from connectnow.pairing import LocalLink
-from connectnow.paths import save_json
-from connectnow.remote_scope import scoped_dispatch, project_packet, request_key
-from connectnow.store import Journal
+from carryon.bridge import Bridge
+from carryon.cloud import CloudConnector
+from carryon.cloud_manager import CloudManager
+from carryon.console import ConsoleServer
+from carryon.errors import BridgeError
+from carryon.pairing import LocalLink
+from carryon.paths import save_json
+from carryon.remote_scope import scoped_dispatch, project_packet, request_key
+from carryon.store import Journal
 from test_cloud import Catalog, IPC, T
 
 
@@ -170,7 +170,7 @@ class MultiCloudTests(unittest.TestCase):
             if status!=200:raise ValueError(str(result))
             return result
         # TLS itself is covered by test_cloud_tls. The credential flow uses real HTTP.
-        with patch.object(link,'request',side_effect=transport), patch('connectnow.pairing.LocalLink.poll', wraps=link.poll):
+        with patch.object(link,'request',side_effect=transport), patch('carryon.pairing.LocalLink.poll', wraps=link.poll):
             # Use a mocked configure to avoid treating loopback HTTP as production WSS.
             with patch.object(self.managers[0],'configure',return_value={'enabled':True}) as configure:
                 request=link.start('https://console.test',False)
@@ -232,7 +232,7 @@ class ManagerUnitTests(unittest.TestCase):
         import subprocess,sys
         with tempfile.TemporaryDirectory() as directory:
             config=Path(directory)/'gateway.json'
-            result=subprocess.run([sys.executable,'-m','connectnow.console','configure','--config',str(config),'--public-url','https://console.test'],capture_output=True,text=True)
+            result=subprocess.run([sys.executable,'-m','carryon.console','configure','--config',str(config),'--public-url','https://console.test'],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             data=json.loads(config.read_text());self.assertEqual(data['devices'],{})
             self.assertNotIn(data['consoleToken'],result.stdout+result.stderr)

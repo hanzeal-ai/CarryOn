@@ -59,18 +59,18 @@ function mergeOutgoingMessage(previous,update,live=false){
   if(previous.updated&&update.updated&&update.updated<previous.updated)return previous;
   return {...previous,...update,live:previous.live||live};
 }
-class ConnectNowClient {
+class CarryOnClient {
   constructor({onUpdate, onDisconnect, onAuthError, onError}) {
     this.onUpdate = onUpdate;
     this.onDisconnect = onDisconnect;
     this.onAuthError = onAuthError;
     this.onError = onError;
     const fragment = new URLSearchParams(location.hash.slice(1));
-    this.token = fragment.get('token') || sessionStorage.getItem('connectnow-token') || '';
+    this.token = fragment.get('token') || sessionStorage.getItem('carryon-token') || '';
     if (fragment.has('token')) history.replaceState(null, '', location.pathname);
-    if (this.token) sessionStorage.setItem('connectnow-token', this.token);
-    this.pending = this.restore('connectnow-pending');
-    this.operations = this.restore('connectnow-operations');
+    if (this.token) sessionStorage.setItem('carryon-token', this.token);
+    this.pending = this.restore('carryon-pending');
+    this.operations = this.restore('carryon-operations');
     this.socket = null;
     this.timer = null;
     this.delay = 500;
@@ -129,7 +129,7 @@ class ConnectNowClient {
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob(kind === 'create' ? '/threads' : '/threads/' + target + (kind==='compose'?'/compose':'/messages'),
-      {prompt,...(images.length?{images}:{})}, key, this.pending, 'connectnow-pending',kind==='compose');
+      {prompt,...(images.length?{images}:{})}, key, this.pending, 'carryon-pending',kind==='compose');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
@@ -139,7 +139,7 @@ class ConnectNowClient {
     if (!isCurrent()) throw Error('当前会话已改变，请重新操作');
     const key = Array.from(new Uint8Array(bytes), v => v.toString(16).padStart(2, '0')).join('');
     return this.requestJob('/threads/' + target + '/operations', {action, ...fields},
-      key, this.operations, 'connectnow-operations', true);
+      key, this.operations, 'carryon-operations', true);
   }
 
   subscribe(selection) {
@@ -193,7 +193,7 @@ class ConnectNowClient {
     this.epoch++;
     this.selection = null;
     this.token = token.trim();
-    sessionStorage.setItem('connectnow-token', this.token);
+    sessionStorage.setItem('carryon-token', this.token);
     this.delay = 500;
   }
 }

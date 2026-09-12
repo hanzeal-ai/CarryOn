@@ -7,13 +7,13 @@
 - `PYTHONPATH=tests python3 -m unittest test_console_socket test_console test_cloud test_realtime`：37 项通过。包含真实 socket 握手、Origin/Cookie/设备范围校验、查询参数拒绝、初始快照、事件即时推送、桥接关闭推送、非法订阅、禁止 socket 写操作、注销/过期/设备撤销、断线重连及订阅回收。
 - `node --test tests/test_console_client.js tests/test_client.js tests/test_device_removal.js`：21 项通过。包含订阅去重、旧连接迟到帧隔离、修订号去重、认证失效、设备移除期间停止重连及既有提交幂等。
 - `swift test --package-path iOS`：8 项通过，包含部署前缀对应的 WSS 地址与既有 Cookie/提交记录行为。
-- `xcodebuild -project iOS/ConnectNow.xcodeproj -target ConnectNow -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR=/tmp/connectnow-ws-ios OBJROOT=/tmp/connectnow-ws-objects build`：成功。
+- `xcodebuild -project iOS/CarryOn.xcodeproj -target CarryOn -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR=/tmp/carryon-ws-ios OBJROOT=/tmp/carryon-ws-objects build`：成功。
 - 本地浏览器实际登录并显示“只读连接”；使用测试云端与测试设备，无真实 Codex 写入。
 - `git diff --check`：通过。
 
 ## 验证限制与发布门禁
 
-浏览器会话目录显示“接口不存在”：当前 `connectnow/api.py` 的项目/动态工作区路由仅在 `not remote` 时分发，远程请求随后被白名单拒绝。此既有路由问题不属于本次 WS 修改，但阻碍完整浏览器会话操作验收。不要将此次传输测试当作提交到原生 Codex 再返回 UI 的时延验收。
+浏览器会话目录显示“接口不存在”：当前 `carryon/api.py` 的项目/动态工作区路由仅在 `not remote` 时分发，远程请求随后被白名单拒绝。此既有路由问题不属于本次 WS 修改，但阻碍完整浏览器会话操作验收。不要将此次传输测试当作提交到原生 Codex 再返回 UI 的时延验收。
 
 iOS 尚未做真机网络切换、后台恢复、TLS 代理与持续连接验证。未部署；客户端需要与新增 WS 路由的云端版本一起发布。
 

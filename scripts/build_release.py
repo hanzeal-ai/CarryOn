@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
-from connectnow import __version__
+from carryon import __version__
 
 
 def run(*args):subprocess.run(args,cwd=ROOT,check=True)
@@ -22,18 +22,18 @@ def main():
     out=ROOT/'dist';work=ROOT/'build';out.mkdir(exist_ok=True);work.mkdir(exist_ok=True)
     assets=['example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','style.css','mobile.css','mobile-ui.js']
     common=[sys.executable,'-m','PyInstaller','--noconfirm','--log-level','WARN',
-        '--paths',str(ROOT),'--collect-data','connectnow','--collect-submodules','connectnow',
+        '--paths',str(ROOT),'--collect-data','carryon','--collect-submodules','carryon',
         '--workpath',str(work),'--specpath',str(work),'--distpath',str(out)]
-    for name in assets:common += ['--add-data',str(ROOT/name)+':connectnow/web']
-    identity=os.environ.get('CONNECTNOW_SIGN_IDENTITY')
+    for name in assets:common += ['--add-data',str(ROOT/name)+':carryon/web']
+    identity=os.environ.get('CARRYON_SIGN_IDENTITY')
     if identity:common+=['--codesign-identity',identity]
-    run(*common,'--name','connectnow','--onedir',str(ROOT/'packaging/cli_entry.py'))
+    run(*common,'--name','carryon','--onedir',str(ROOT/'packaging/cli_entry.py'))
     # Recreate the generated bundle before replacing its executable with the native UI.
-    if (out/'ConnectNow.app').exists():shutil.rmtree(out/'ConnectNow.app')
-    run(*common,'--name','ConnectNow','--windowed','--osx-bundle-identifier','local.connectnow.desktop',str(ROOT/'packaging/cli_entry.py'))
-    app=out/'ConnectNow.app'
-    executable=app/'Contents/MacOS/ConnectNow'
-    executable.rename(executable.with_name('connectnow-service'))
+    if (out/'CarryOn.app').exists():shutil.rmtree(out/'CarryOn.app')
+    run(*common,'--name','CarryOn','--windowed','--osx-bundle-identifier','local.carryon.desktop',str(ROOT/'packaging/cli_entry.py'))
+    app=out/'CarryOn.app'
+    executable=app/'Contents/MacOS/CarryOn'
+    executable.rename(executable.with_name('carryon-service'))
     run('xcrun','swiftc','-parse-as-library','-swift-version','5','-target',platform.machine()+'-apple-macos13.0',
         *map(str,sorted((ROOT/'desktop').glob('*.swift'))),'-o',str(executable))
     import plistlib
@@ -42,22 +42,22 @@ def main():
     info['CFBundleShortVersionString']=__version__;info['CFBundleVersion']=__version__
     info_path.write_bytes(plistlib.dumps(info))
     run('codesign','--force','--deep','--sign',identity or '-',str(app))
-    arch=platform.machine();prefix=f'ConnectNow-{__version__}-macos-{arch}'
-    shutil.copy2(ROOT/'scripts/install.sh',out/'connectnow/install.sh')
-    shutil.copy2(ROOT/'README.md',out/'connectnow/README.md')
-    shutil.copytree(ROOT/'docs',out/'connectnow/docs',dirs_exist_ok=True)
-    shutil.copy2(ROOT/'docs/INSTALL.md',out/'connectnow/安装说明.md')
-    run('tar','-czf',str(out/(prefix+'-cli.tar.gz')),'-C',str(out),'connectnow')
-    stage=work/'dmg';stage.mkdir(exist_ok=True)
-    if (stage/'ConnectNow.app').exists():shutil.rmtree(stage/'ConnectNow.app')
-    shutil.copytree(out/'ConnectNow.app',stage/'ConnectNow.app',symlinks=True)
+    arch=platform.machine();prefix=f'CarryOn-{__version__}-macos-{arch}'
+    shutil.copy2(ROOT/'scripts/install.sh',out/'carryon/install.sh')
+    shutil.copy2(ROOT/'README.md',out/'carryon/README.md')
+    shutil.copytree(ROOT/'docs',out/'carryon/docs',dirs_exist_ok=True)
+    shutil.copy2(ROOT/'docs/INSTALL.md',out/'carryon/安装说明.md')
+    run('tar','-czf',str(out/(prefix+'-cli.tar.gz')),'-C',str(out),'carryon')
+    stage=work/'carryon-dmg';stage.mkdir(exist_ok=True)
+    if (stage/'CarryOn.app').exists():shutil.rmtree(stage/'CarryOn.app')
+    shutil.copytree(out/'CarryOn.app',stage/'CarryOn.app',symlinks=True)
     if not (stage/'Applications').is_symlink():(stage/'Applications').symlink_to('/Applications')
     shutil.copy2(ROOT/'docs/INSTALL.md',stage/'安装说明.md')
     dmg=out/(prefix+'.dmg')
     if dmg.exists():dmg.unlink()
-    run('hdiutil','create','-volname','ConnectNow','-srcfolder',str(stage),'-format','UDZO',str(dmg))
+    run('hdiutil','create','-volname','CarryOn','-srcfolder',str(stage),'-format','UDZO',str(dmg))
     run(sys.executable,'-m','build','--outdir',str(out))
-    artifacts=sorted(p for p in out.iterdir() if p.suffix in ('.dmg','.whl') or p.name.endswith('.tar.gz'))
+    artifacts=sorted(p for p in out.iterdir() if p.name == f'carryon_local-{__version__}-py3-none-any.whl' or p.name in (prefix+'.dmg',prefix+'-cli.tar.gz'))
     (out/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in artifacts))
     print(json.dumps({'version':__version__,'architecture':arch,'developerSigned':bool(identity),
         'notarized':False,'artifacts':[str(p) for p in artifacts]},indent=2))

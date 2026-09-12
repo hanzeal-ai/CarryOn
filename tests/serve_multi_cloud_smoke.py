@@ -9,12 +9,12 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from connectnow.bridge import Bridge
-from connectnow.cloud_manager import CloudManager
-from connectnow.console import ConsoleServer
-from connectnow.pairing import LocalLink
-from connectnow.server import Handler,Server
-from connectnow.store import Journal
+from carryon.bridge import Bridge
+from carryon.cloud_manager import CloudManager
+from carryon.console import ConsoleServer
+from carryon.pairing import LocalLink
+from carryon.server import Handler,Server
+from carryon.store import Journal
 from serve_operations_smoke import FixtureIPC,FixtureCatalog
 
 
@@ -52,7 +52,7 @@ def main():
             for index in range(2):
                 local_dir=root/f'local-{index}';local_dir.mkdir()
                 bridge=Bridge('unused',FixtureCatalog(),Journal(local_dir/'jobs.sqlite'),FixtureIPC)
-                from connectnow.workspace import Workspace
+                from carryon.workspace import Workspace
                 bridge.workspace=Workspace(bridge);bridge.workspace.catalog_refresh();bridge.workspace.start()
                 bridge.enable();bridges.append(bridge)
                 local=Server(('127.0.0.1',0),Handler);local.bridge=bridge;local.token='fixture-local-0123456789abcdef'

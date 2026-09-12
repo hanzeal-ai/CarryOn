@@ -3,7 +3,7 @@ import socket
 import struct
 import threading
 import unittest
-from connectnow.ipc import DesktopIPC, IPCError
+from carryon.ipc import DesktopIPC, IPCError
 
 
 class ProtocolTests(unittest.TestCase):

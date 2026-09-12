@@ -29,8 +29,8 @@
 ## 独立运行证据
 
 - `swift test`：8 个 Swift Testing 用例全部通过，覆盖地址与 Cookie、UUID 路径、分页、结构化审批、请求编号跨重启与设备隔离、损坏记录失败关闭、提交草稿的范围隔离。
-- `xcodebuild -project ConnectNow.xcodeproj -target ConnectNow -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build`：最终源码构建成功。
-- 最终产物 `build/Debug-iphoneos/ConnectNow.app` 已检查：Mach-O arm64，`MinimumOSVersion` 为 17.0，Bundle Identifier 为 `com.hanzeal.connectnow`。
+- `xcodebuild -project CarryOn.xcodeproj -target CarryOn -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build`：最终源码构建成功。
+- 最终产物 `build/Debug-iphoneos/CarryOn.app` 已检查：Mach-O arm64，`MinimumOSVersion` 为 17.0，Bundle Identifier 为 `com.hanzeal.carryon`。
 - `git diff --check -- iOS`：未发现空白错误。
 
 ## 未验收边界与恢复

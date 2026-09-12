@@ -1,10 +1,10 @@
 /* Browser session -> console backend -> embedded device connection module. */
-class CloudConsoleClient extends ConnectNowClient {
+class CloudConsoleClient extends CarryOnClient {
   constructor(options) {
     super(options);
     this.token='';
     this.base=new URL('.',document.querySelector('script[src$="/cloud-console-client.js"]').src);
-    this.device=sessionStorage.getItem('connectnow-cloud-device')||'';
+    this.device=sessionStorage.getItem('carryon-cloud-device')||'';
     this.loop=0;this.active=false;
   }
   async consoleRequest(path,body,method) {
@@ -34,8 +34,8 @@ class CloudConsoleClient extends ConnectNowClient {
     } catch(error){this.token='';throw error;}
   }
   setStorage() {
-    sessionStorage.setItem('connectnow-cloud-device',this.device);
-    const scope='connectnow-cloud:'+this.base.href+':'+this.device+':';
+    sessionStorage.setItem('carryon-cloud-device',this.device);
+    const scope='carryon-cloud:'+this.base.href+':'+this.device+':';
     if(this.storageScope===scope)return;
     this.storageScope=scope;
     this.pending=this.restore(this.storageScope+'pending');
@@ -56,7 +56,7 @@ class CloudConsoleClient extends ConnectNowClient {
   }
   requestJob(path,body,key,pending,storageKey,retainUncertain=false) {
     return super.requestJob(path,body,key,pending,
-      this.storageScope+(storageKey==='connectnow-pending'?'pending':'operations'),retainUncertain);
+      this.storageScope+(storageKey==='carryon-pending'?'pending':'operations'),retainUncertain);
   }
   subscribe(selection) {
     const key=JSON.stringify([this.epoch,this.device,selection.threadId??null,

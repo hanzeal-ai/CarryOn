@@ -21,7 +21,7 @@ import Foundation
         precondition(model.bindings.first(where: {$0.id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})?.control == false)
         // An external CLI writes the same service; a desktop refresh must observe it.
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CONNECTNOW_TEST_EXTERNAL_CLI"]!)
+        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_TEST_EXTERNAL_CLI"]!)
         process.arguments = ["cloud", "control", "--binding-id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--read-only", "--state-dir", model.directory]
         let pipe = Pipe(); process.standardOutput = pipe; process.standardError = pipe
         try process.run(); let result = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
@@ -29,7 +29,7 @@ import Foundation
         await model.refresh()
         precondition(model.bindings.first(where: {$0.id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})?.control == false)
         let firstDirectory = model.directory
-        let secondDirectory = ProcessInfo.processInfo.environment["CONNECTNOW_TEST_SECOND"]!
+        let secondDirectory = ProcessInfo.processInfo.environment["CARRYON_TEST_SECOND"]!
         guard let second = model.services.first(where: {$0.directory == secondDirectory}),
               let first = model.services.first(where: {$0.directory == firstDirectory}) else { fatalError("Missing workspace") }
         precondition(first.running && second.running && first.port != second.port)
@@ -51,7 +51,7 @@ import Foundation
         await reopened.refresh()
         precondition(!reopened.running && reopened.port == String(second.port) && reopened.codexHome == second.codexHome)
         // Desktop-created foreground workspace uses the same catalog and terminates independently.
-        let added = await model.add(name: "第三个工作区", path: ProcessInfo.processInfo.environment["CONNECTNOW_TEST_THIRD"]!, port: "0", codex: model.codexHome)
+        let added = await model.add(name: "第三个工作区", path: ProcessInfo.processInfo.environment["CARRYON_TEST_THIRD"]!, port: "0", codex: model.codexHome)
         precondition(added)
         await model.serve()
         for _ in 0..<20 {

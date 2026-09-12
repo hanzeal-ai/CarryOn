@@ -16,7 +16,7 @@ import AppKit
             window.display()
             if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                 view.cacheDisplay(in: view.bounds, to: bitmap)
-                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CONNECTNOW_PREVIEW_OUTPUT"]!))
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_PREVIEW_OUTPUT"]!))
             }
             app.terminate(nil)
         }

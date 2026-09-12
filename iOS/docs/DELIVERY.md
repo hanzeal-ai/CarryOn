@@ -20,7 +20,7 @@
 
 2026-09-12，本机 Xcode 26.6（17F113）、Swift 6.3.3、iOS SDK 26.5。
 
-- `xcodebuild -target ConnectNow -sdk iphoneos ARCHS=arm64 CODE_SIGNING_ALLOWED=NO ... build`：最终变更后再次完成 Debug .app 构建，BUILD SUCCEEDED。
+- `xcodebuild -target CarryOn -sdk iphoneos ARCHS=arm64 CODE_SIGNING_ALLOWED=NO ... build`：最终变更后再次完成 Debug .app 构建，BUILD SUCCEEDED。
 - `scripts/compile-device.sh`：Swift 6 严格并发模式编译与链接。Mach-O arm64，LC_BUILD_VERSION platform IOS、minos 17.0、sdk 26.5。
 - `swift test --package-path iOS`：8 项测试通过；覆盖 HTTPS 地址/Origin/目录前缀、UUID 路径、Cookie 会话与过期、403、结构化审批、分页汇总、未知请求跨重启编号、正文变更禁止新编号、跨设备隔离、在途发送后原草稿清理、持久记录损坏拒绝写入。
 - `plutil -lint`：工程 plist 语法通过。

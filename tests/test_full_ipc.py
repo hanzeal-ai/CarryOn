@@ -5,12 +5,12 @@ import threading
 import unittest
 from pathlib import Path
 
-from connectnow.catalog import Catalog
-from connectnow.contracts import SCHEMAS, settings, validate
-from connectnow.events import VERSIONS
-from connectnow.ipc import DesktopIPC
-from connectnow.operations import build, controls, digest
-from connectnow.queue import message, projection, transform
+from carryon.catalog import Catalog
+from carryon.contracts import SCHEMAS, settings, validate
+from carryon.events import VERSIONS
+from carryon.ipc import DesktopIPC
+from carryon.operations import build, controls, digest
+from carryon.queue import message, projection, transform
 from test_operations import state, T
 
 

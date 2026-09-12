@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 def main():
-    parser = argparse.ArgumentParser(description='ConnectNow 外部调用示例')
+    parser = argparse.ArgumentParser(description='CarryOn 外部调用示例')
     parser.add_argument('--base', default='http://127.0.0.1:8769')
     parser.add_argument('--token-file', type=Path,
         default=Path(__file__).resolve().parents[1] / '.runtime/token')
@@ -28,7 +28,7 @@ def main():
         command.add_argument('--request-id', required=True,
             help='调用前保存；网络失败重试时沿用同一个 ID')
     args = parser.parse_args()
-    token = os.environ.get('CONNECTNOW_TOKEN') or args.token_file.read_text().strip()
+    token = os.environ.get('CARRYON_TOKEN') or args.token_file.read_text().strip()
     body = None
     if args.command == 'status':
         path = '/status'

@@ -4,13 +4,13 @@ import unittest
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from connectnow.cli import start
+from carryon.cli import start
 from unittest.mock import Mock, patch
 import test_console
-from connectnow.linking import LinkRequests
-from connectnow.pairing import LocalLink
-from connectnow.cloud import CloudConnector
-from connectnow.timeline import project_item
+from carryon.linking import LinkRequests
+from carryon.pairing import LocalLink
+from carryon.cloud import CloudConnector
+from carryon.timeline import project_item
 
 
 class LinkTests(unittest.TestCase):
@@ -30,13 +30,13 @@ class LinkTests(unittest.TestCase):
         bridge=Mock();local=LocalLink(cloud,bridge)
         with patch.object(local,'request',side_effect=[{'id':'first-id','secret':'s'*40,'verification':'ABC123'},
                 {'id':'second-id','secret':'t'*40,'verification':'DEF456'}, {'deviceId':'my-mac','token':'d'*40}]):
-            first=local.start('https://example.test/connectnow',False)
-            second=local.start('https://example.test/connectnow',True)
+            first=local.start('https://example.test/carryon',False)
+            second=local.start('https://example.test/carryon',True)
             self.assertNotIn('secret',second);self.assertNotIn('t'*40,json.dumps(second))
             with self.assertRaises(ValueError):local.poll(first['id'])
             local.poll(second['id'])
             self.assertTrue(cloud.configure.call_args.args[0]['control'])
-            self.assertEqual(cloud.configure.call_args.args[0]['url'],'wss://example.test/connectnow/device')
+            self.assertEqual(cloud.configure.call_args.args[0]['url'],'wss://example.test/carryon/device')
             bridge.enable.assert_called_once()
             with self.assertRaises(ValueError):local.poll(second['id'])
 
@@ -55,9 +55,9 @@ class LinkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             args=SimpleNamespace(state_dir=Path(directory),port=0,codex_home=Path(directory),no_open=True)
             info={'version':'test','port':1234}
-            with patch('connectnow.cli.running',return_value=info), patch('connectnow.cli.call') as call:
+            with patch('carryon.cli.running',return_value=info), patch('carryon.cli.call') as call:
                 self.assertEqual(start(args),0);call.assert_not_called()
-            with patch('connectnow.cli.running',side_effect=[None,info]), patch('connectnow.cli.subprocess.Popen'), patch('connectnow.cli.call',side_effect=[{'enabled':True},OSError('Codex closed')]) as call:
+            with patch('carryon.cli.running',side_effect=[None,info]), patch('carryon.cli.subprocess.Popen'), patch('carryon.cli.call',side_effect=[{'enabled':True},OSError('Codex closed')]) as call:
                 self.assertEqual(start(args),0)
                 self.assertEqual(call.call_args.args[1:],('/bridge',{'enabled':True}))
 
@@ -117,7 +117,7 @@ class LinkStatusTests(unittest.TestCase):
         import urllib.error
         for text,expected in [('连接申请已拒绝','连接申请已拒绝'),('untrusted secret text','云端连接授权失败或已过期，请重新发起连接')]:
             failure=urllib.error.HTTPError('https://example.test',400,'Bad Request',{},io.BytesIO(json.dumps({'error':text}).encode()))
-            with patch('connectnow.pairing.urllib.request.build_opener') as build:
+            with patch('carryon.pairing.urllib.request.build_opener') as build:
                 build.return_value.open.side_effect=failure
                 with self.assertRaises((PermissionError,ValueError)) as result:
                     LocalLink.request('https://example.test','poll',{})

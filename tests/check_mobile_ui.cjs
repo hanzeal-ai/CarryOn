@@ -11,9 +11,9 @@ const assert=require('node:assert/strict');
   for(const [actual,expected]of pairs){const a=await page.locator(actual).first().boundingBox(),b=await reference.locator(expected).first().boundingBox();assert(a&&b,actual+' exists');for(const key of ['x','y','width','height'])assert(Math.abs(a[key]-(b[key]+(key==='y'?yOffset:0)))<=2,actual+' '+key+': '+a[key]+' vs '+b[key]);visualChecks.push(actual);}
  }
  const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGEERROR',e.stack)});let authenticated=true;
- const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/ConnectNow',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/ConnectNow',unread:false}];
- const projects=[{id:'p1',name:'ConnectNow',cwd:'/workspace/ConnectNow',total:12,waiting:1,running:2,unread:3,unknown:0},{id:'p2',name:'MarkFix',cwd:'/workspace/MarkFix',total:8,waiting:0,running:0,unread:1,unknown:0}];
- await page.addInitScript(()=>{window.CONNECTNOW_CLOUD=true;});
+ const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/CarryOn',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/CarryOn',unread:false}];
+ const projects=[{id:'p1',name:'CarryOn',cwd:'/workspace/CarryOn',total:12,waiting:1,running:2,unread:3,unknown:0},{id:'p2',name:'MarkFix',cwd:'/workspace/MarkFix',total:8,waiting:0,running:0,unread:1,unknown:0}];
+ await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const req=route.request(),u=new URL(req.url());let data={},status=200;
   if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true},{id:'other',name:'工作室 Mac',online:false}]};}
@@ -33,7 +33,7 @@ const assert=require('node:assert/strict');
   else if(u.pathname.includes('/streams/')&&req.method()==='GET'){await new Promise(r=>setTimeout(r,1000));data={revision:1};}
   await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
  });
- await page.goto((process.env.CONNECTNOW_UI_URL||'http://127.0.0.1:8892/example.html'));
+ await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html'));
  await page.locator('#mobile-session-list .project-row').first().waitFor();
  await page.screenshot({path:'.runtime/mobile-projects.png'});await compare('tasks',[['.mobile-list-page .toolbar','.toolbar'],['.search','.search'],['#mobile-session-list .project-row','.project-row'],['.bottom-nav','.bottom-nav']]);
  await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await compare('new',[['#create-dialog .toolbar','.toolbar'],['#create-dialog .group','.feature-page .group'],['#create-dialog .production-composer','.composer'],['#create-dialog .input-shell','.input-shell']]);
@@ -104,11 +104,11 @@ const assert=require('node:assert/strict');
  await page.setViewportSize({width:1440,height:1000});await page.waitForTimeout(100);assert(await page.locator('main>aside').isVisible());assert(await page.locator('.conversation').isVisible());assert(!(await page.locator('.bottom-nav').isVisible()));await page.screenshot({path:'.runtime/mobile-desktop-regression.png'});
  await page.setViewportSize({width:320,height:640});await page.waitForTimeout(100);await page.evaluate(()=>MobileUI.show('projects'));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('.bottom-nav').getByRole('button',{name:'设置',exact:true}).click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.locator('#pairing').waitFor();await page.setViewportSize({width:390,height:844});await page.screenshot({path:'.runtime/mobile-login.png'});assert(!(await page.locator('.bottom-nav').isVisible()));await reference.evaluate(()=>{loggedIn=false;render()});await compare('login',[['.login-symbol','.login-symbol'],['#token','[name=token]'],['#pair','#login-form .primary']]);
- await page.setViewportSize({width:1280,height:900});await page.goto((process.env.CONNECTNOW_UI_URL||'http://127.0.0.1:8892/example.html')+'?mobile=1');await page.waitForFunction(()=>document.body.classList.contains('mobile-ready'));assert.equal(await page.locator('#mobile-shell').evaluate(el=>el.getBoundingClientRect().width),430);
+ await page.setViewportSize({width:1280,height:900});await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html')+'?mobile=1');await page.waitForFunction(()=>document.body.classList.contains('mobile-ready'));assert.equal(await page.locator('#mobile-shell').evaluate(el=>el.getBoundingClientRect().width),430);
  await page.evaluate(()=>{fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'waiting'},controls:{settings:{},requests:[{id:'preview-question',fingerprint:'preview-fingerprint',action:'user-input',params:{questions:[{id:'q1',question:'移动预览问题'}]}}]},pendingRequests:[{id:'preview-question'}],queue:{messages:[]}};Operations.render(fixture,'t1',client,notice,true);});
  assert.equal(await page.locator('#requests textarea').count(),1);assert(!(await page.locator('#question-dialog').isVisible()));
  const local=await browser.newPage({viewport:{width:390,height:844}});local.on('pageerror',e=>errors.push(e.message));
- await local.addInitScript(()=>sessionStorage.setItem('connectnow-token','mock-local-token'));
+ await local.addInitScript(()=>sessionStorage.setItem('carryon-token','mock-local-token'));
  await local.routeWebSocket('**/api/stream',()=>{});
  await local.route('**/api/**',route=>{const path=new URL(route.request().url()).pathname;let data={};
   if(path==='/api/status')data={enabled:true,controllerId:'t2'};
@@ -118,7 +118,7 @@ const assert=require('node:assert/strict');
   else if(path==='/api/notifications')data={events:[],nextSequence:0};
   return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
  });
- await local.goto(process.env.CONNECTNOW_UI_URL||'http://127.0.0.1:8892/example.html');
+ await local.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html');
  await local.locator('#mobile-session-list .project-row').first().waitFor();
  await local.locator('.bottom-nav').getByRole('button',{name:'设置',exact:true}).click();
  assert(!(await local.locator('.cloud-settings').isVisible()));assert(!(await local.locator('#bridge').isVisible()));assert.equal(await local.locator('.workspace-settings').getByText('本机设置',{exact:true}).count(),0);

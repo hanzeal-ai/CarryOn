@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import test_console
 from test_cloud import T
-from connectnow.pairing import redeem
-from connectnow.websocket import WebSocket
+from carryon.pairing import redeem
+from carryon.websocket import WebSocket
 
 
 class ConsoleSocketTests(test_console.ConsoleTests):
@@ -53,7 +53,7 @@ class ConsoleSocketTests(test_console.ConsoleTests):
     def test_continuous_updates_still_receive_heartbeats(self):
         import threading
         from unittest.mock import patch
-        from connectnow import console_socket
+        from carryon import console_socket
         with patch.object(console_socket, 'HEARTBEAT_INTERVAL', .05), patch.object(console_socket, 'READ_TIMEOUT', .25):
             self.connect_device()
             ws, _ = self.subscribed()
@@ -153,8 +153,8 @@ class ConsoleSocketTests(test_console.ConsoleTests):
 
     def test_native_read_pushes_revision_and_clears_remote_projection(self):
         import threading
-        from connectnow.events import Events
-        from connectnow.workspace import Workspace
+        from carryon.events import Events
+        from carryon.workspace import Workspace
         from test_workspace import Native
         self.bridge.ipc_factory=Native
         self.connector.binding_id='read-sync-test'
@@ -204,9 +204,9 @@ class ConsoleSocketTests(test_console.ConsoleTests):
         self.assertEqual(len(self.server.console_streams),1)
 
     def test_window_and_delta_roundtrip_through_device_gateway_console(self):
-        from connectnow.history_cache import NativeSnapshot
-        from connectnow.history_wire import HistoryWire
-        from connectnow.patches import apply_patches
+        from carryon.history_cache import NativeSnapshot
+        from carryon.history_wire import HistoryWire
+        from carryon.patches import apply_patches
         from test_performance_protocol import state
         self.connect_device()
         current=[state(1000)]

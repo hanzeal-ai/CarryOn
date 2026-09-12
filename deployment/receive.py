@@ -14,8 +14,8 @@ import time
 import urllib.request
 import zipfile
 
-BASE=Path('/opt/connectnow')
-UNIT='connectnow-gateway.service'
+BASE=Path('/opt/carryon')
+UNIT='carryon-gateway.service'
 
 def validate_wheel(data):
     archive=zipfile.ZipFile(io.BytesIO(data))
@@ -25,11 +25,11 @@ def validate_wheel(data):
     for entry in entries:
         path=PurePosixPath(entry.filename)
         if (path.is_absolute() or '..' in path.parts or '\\' in entry.filename or not path.parts
-            or not (path.parts[0]=='connectnow' or re.fullmatch(r'connectnow_local-[0-9.]+\.dist-info',path.parts[0]))
+            or not (path.parts[0]=='carryon' or re.fullmatch(r'carryon_local-[0-9.]+\.dist-info',path.parts[0]))
             or (entry.external_attr>>16)&0o170000==0o120000 or entry.filename in names):
             raise ValueError('Unsafe wheel member')
         names.add(entry.filename)
-    if 'connectnow/gateway.py' not in names:raise ValueError('Gateway missing')
+    if 'carryon/gateway.py' not in names:raise ValueError('Gateway missing')
     return archive
 
 def switch(target):
@@ -65,10 +65,10 @@ def main():
         temporary=Path(tempfile.mkdtemp(prefix='.prepare-',dir=BASE/'releases'))
         try:
             archive.extractall(temporary)
-            (temporary/'release.env').write_text('CONNECTNOW_RELEASE='+release+'\n')
+            (temporary/'release.env').write_text('CARRYON_RELEASE='+release+'\n')
             for path in temporary.rglob('*'):path.chmod(0o755 if path.is_dir() else 0o644)
             temporary.chmod(0o755)
-            subprocess.run(['/usr/bin/python3.11','-B','-c','import connectnow.gateway'],cwd=temporary,check=True,timeout=15)
+            subprocess.run(['/usr/bin/python3.11','-B','-c','import carryon.gateway'],cwd=temporary,check=True,timeout=15)
             temporary.rename(destination)
         finally:
             if temporary.exists():shutil.rmtree(temporary)

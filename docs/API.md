@@ -2,7 +2,7 @@
 
 Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,000 字节；会话消息及云端转发消息请求最多 900,000 字节。
 
-每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/ConnectNow/token`）；普通启动日志不输出 Token，`connectnow open` 自动配对页面。所有调用方共享一个桥接开关、控制会话选择和请求日志；当前不是多租户 API。
+每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/CarryOn/token`）；普通启动日志不输出 Token，`carryon open` 自动配对页面。所有调用方共享一个桥接开关、控制会话选择和请求日志；当前不是多租户 API。
 
 ## 路由
 
@@ -166,7 +166,7 @@ Token 不放在 URL。随后发送订阅，`subscription` 是客户端生成的�
 
 `threadIds` 可省略，最多 100 个 UUID；即使 `threadId: null`，仍可订阅侧边栏状态。开启桥接时响应包含 `threadStatuses: {"UUID":{"state":"running","label":"执行中"}}`。状态有 running、idle、waiting、notLoaded、error、loading、unknown，分别表示执行中、空闲、待处理、未加载、运行异常、检测中、状态未知。
 
-状态取自原生 threadRuntimeStatus 和待处理请求，不从更新时间、最后一条消息或 ConnectNow 投递日志推断。同一桥接的页面订阅共享原生 watch 与后台发现，关闭一个页面不会撤销其他页面仍需的 watch。请求核验由共享后台执行，WS 写线程只读取保存的请求状态。首次后台读取快照，最多同时进行 4 个 owner 查询；后续原生事件通过同一 WS 推送。未加载/暂不可查的会话每 30 秒重试发现。首次查找需要时间，不保证所有会话立即就绪；关闭桥接停止订阅，网页断线时立即将徽标置为状态未知。
+状态取自原生 threadRuntimeStatus 和待处理请求，不从更新时间、最后一条消息或 CarryOn 投递日志推断。同一桥接的页面订阅共享原生 watch 与后台发现，关闭一个页面不会撤销其他页面仍需的 watch。请求核验由共享后台执行，WS 写线程只读取保存的请求状态。首次后台读取快照，最多同时进行 4 个 owner 查询；后续原生事件通过同一 WS 推送。未加载/暂不可查的会话每 30 秒重试发现。首次查找需要时间，不保证所有会话立即就绪；关闭桥接停止订阅，网页断线时立即将徽标置为状态未知。
 
 页面默认订阅当前搜索结果的前 100 条；超过时明确提示订阅范围，可通过搜索缩小范围。数量统计只针对这些列表会话，不代表整个 Codex 的全局运行总数。
 
@@ -210,9 +210,9 @@ Token 不放在 URL。随后发送订阅，`subscription` 是客户端生成的�
 | user-input | nativeRequestId、requestFingerprint、answers | answers 为 questionId → 字符串数组，必须覆盖当前全部问题 |
 | mcp-response | nativeRequestId、requestFingerprint、response | response: {action: accept/decline/cancel, content?: object/null}；原生安全校验继续生效 |
 
-设置支持 `approvalPolicy`、`approvalsReviewer`、`collaborationMode`、`cwd`、`effort`、`model`、`multiAgentMode`、`permissions`、`personality`、`sandboxPolicy`、`serviceTier`、`summary` 以及桌面层 `activePermissionProfile`。字段省略保持不变，null 按原生语义处理。模型、effort、serviceTier 的实际可用值由 App 决定；不在 ConnectNow 中硬编码模型能力。`multiAgentMode` 在当前原生 schema 标为 deprecated/ignored，接入不代表该字段仍生效。
+设置支持 `approvalPolicy`、`approvalsReviewer`、`collaborationMode`、`cwd`、`effort`、`model`、`multiAgentMode`、`permissions`、`personality`、`sandboxPolicy`、`serviceTier`、`summary` 以及桌面层 `activePermissionProfile`。字段省略保持不变，null 按原生语义处理。模型、effort、serviceTier 的实际可用值由 App 决定；不在 CarryOn 中硬编码模型能力。`multiAgentMode` 在当前原生 schema 标为 deprecated/ignored，接入不代表该字段仍生效。
 
-契约保存于 `connectnow/native_contracts.json`，来自本机 App 所带 codex 的 `app-server generate-json-schema --experimental`；activePermissionProfile 来自桌面 j9t/N9t 处理逻辑。仅接受已知字段，嵌套结构、枚举和必填项均校验；`permissions` 或 `activePermissionProfile` 与 `sandboxPolicy` 不可同时指定。cwd 使用绝对路径。ConnectNow 不自行猜测权限配置 ID。
+契约保存于 `carryon/native_contracts.json`，来自本机 App 所带 codex 的 `app-server generate-json-schema --experimental`；activePermissionProfile 来自桌面 j9t/N9t 处理逻辑。仅接受已知字段，嵌套结构、枚举和必填项均校验；`permissions` 或 `activePermissionProfile` 与 `sandboxPolicy` 不可同时指定。cwd 使用绝对路径。CarryOn 不自行猜测权限配置 ID。
 
 
 `GET /api/threads/{id}/history` 和 WS history 中新增 `controls`：activeTurnId、lastTurnId、lastUserText、settings、requests。每个可回应请求包含 id（保留原生数字/字符串类型）、action、method、fingerprint、params、decisions（可提交的完整审批值）。回应必须原样携带 id 和 fingerprint，后端重新获取原生快照，校验请求仍存在、方法匹配、内容未变。未适配的请求继续使用 Codex App。
@@ -243,7 +243,7 @@ Token 不放在 URL。随后发送订阅，`subscription` 是客户端生成的�
 
 队列可以在执行中或空闲时管理；执行时机由 Codex 原生调度器决定。新增消息使用原生 id/text/context/cwd/createdAt 结构；编辑和重排保留已有附件及其他上下文。存在需原生确认的 untrusted app input 时不会移除标记来绕过确认。
 
-指纹不匹配将拒绝投递；ConnectNow 内的操作串行并且不自动重试。原生接口是整组队列替换，没有原子 CAS：即使写入前再次检查，仍不能完全避免另一 App 窗口恰好同时改队列。不要同时在两个界面编辑队列；有冲突或结果不明应重新读取并人工核对，而不是盲目重放。
+指纹不匹配将拒绝投递；CarryOn 内的操作串行并且不自动重试。原生接口是整组队列替换，没有原子 CAS：即使写入前再次检查，仍不能完全避免另一 App 窗口恰好同时改队列。不要同时在两个界面编辑队列；有冲突或结果不明应重新读取并人工核对，而不是盲目重放。
 
 ```json
 {"requestId":"queue-request-001","action":"queue-add","queueFingerprint":"从 queue 接口获取","prompt":"当前任务结束后继续检查测试结果"}
@@ -299,7 +299,7 @@ WS update 新增 `catalogRevision` 和 `threadFlags`（仅当前订阅目录）�
 
 example 支持选择或粘贴图片、预览与移除，浏览器将图片转成 JPEG，长边最多 1600 像素并压缩至传输限制以内。透明区域以白色填充；需要保留原始细节时可先裁剪关注区域。图片可单独发送，也可附带文字。新建会话暂不附图，先进入会话后发送。
 
-图片按原生 `UserInput {type: "image", url: dataURL}` 交给 Codex，不接收外部 URL 或本地文件路径，不建立公开图片链接。图片内容参与幂等指纹计算；相同 requestId 对应的文字或图片改变都会被拒绝。浏览器会话存储和 ConnectNow 请求日志不存图片内容，原生会话仍按 Codex 的历史规则保存消息。
+图片按原生 `UserInput {type: "image", url: dataURL}` 交给 Codex，不接收外部 URL 或本地文件路径，不建立公开图片链接。图片内容参与幂等指纹计算；相同 requestId 对应的文字或图片改变都会被拒绝。浏览器会话存储和 CarryOn 请求日志不存图片内容，原生会话仍按 Codex 的历史规则保存消息。
 
 
 ### 会话图片回显

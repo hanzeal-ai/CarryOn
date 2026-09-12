@@ -13,9 +13,9 @@ function fixture(fetch){
   message(value){this.onmessage({data:JSON.stringify(value)});}
  }
  const ctx=vm.createContext({URL,URLSearchParams,TextEncoder,crypto:webcrypto,fetch,setTimeout,clearTimeout,WebSocket:Socket,
-  location:{hash:'',pathname:'/connectnow/',href:'https://console.test/connectnow/'},history:{replaceState(){}},
+  location:{hash:'',pathname:'/carryon/',href:'https://console.test/carryon/'},history:{replaceState(){}},
   sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
-  document:{querySelector:()=>({src:'https://console.test/connectnow/cloud-console-client.js'}),getElementById:()=>({replaceChildren(){}})},Option:class{},
+  document:{querySelector:()=>({src:'https://console.test/carryon/cloud-console-client.js'}),getElementById:()=>({replaceChildren(){}})},Option:class{},
  });
  vm.runInContext(fs.readFileSync('client.js','utf8')+'\n'+fs.readFileSync('cloud-console-client.js','utf8')+'\nthis.Client=CloudConsoleClient;',ctx);
  return {client:new ctx.Client({onUpdate(){},onDisconnect(){},onAuthError:()=>errors.push('auth'),onError(){}}),storage,errors,sockets};
@@ -25,7 +25,7 @@ test('console uses prefix-scoped cookie requests, never browser device credentia
  const calls=[];const {client}=fixture(async(url,options)=>{calls.push([String(url),options]);return ok({enabled:true});});
  client.device='my-mac';client.token='session';
  await client.request('/status');
- assert.equal(calls[0][0],'https://console.test/connectnow/console/devices/my-mac/request');
+ assert.equal(calls[0][0],'https://console.test/carryon/console/devices/my-mac/request');
  assert.equal(calls[0][1].credentials,'same-origin');
  assert.equal(calls[0][1].headers.Authorization,undefined);
  assert.equal(JSON.parse(calls[0][1].body).path,'/api/status');
@@ -37,7 +37,7 @@ test('pending requests remain scoped to their cloud device',async()=>{
  client.device='two';client.setStorage();assert.equal(client.pending.size,0);
  await assert.rejects(client.submit('message','thread','prompt'));assert.notEqual([...client.pending.values()][0],first);
  client.device='one';client.setStorage();assert.equal([...client.pending.values()][0],first);
- assert.equal(storage.has('connectnow-pending'),false);
+ assert.equal(storage.has('carryon-pending'),false);
 });
 test('old device responses are rejected after switching',async()=>{
  let release;const {client}=fixture(()=>new Promise(resolve=>release=resolve));client.device='one';
@@ -90,7 +90,7 @@ test('console WebSocket uses cookie scope, emits subscriptions and receives orde
  const calls=[],updates=[];const {client,sockets}=fixture(async(url)=>{calls.push(String(url));return ok({});});
  client.token='session';client.device='my-mac';client.onUpdate=async(packet)=>updates.push(packet);
  const id=client.subscribe({threadId:'thread',threadIds:[]});
- const socket=sockets[0];assert.equal(socket.url,'wss://console.test/connectnow/console/devices/my-mac/ws');
+ const socket=sockets[0];assert.equal(socket.url,'wss://console.test/carryon/console/devices/my-mac/ws');
  socket.open();assert.equal(socket.sent[0].type,'subscribe');assert.equal(socket.sent[0].subscription,id);
  socket.message({type:'ping'});
  socket.message({type:'update',subscription:id,revision:1,body:{type:'update',threadId:'thread',history:{text:'first'}}});

@@ -2,9 +2,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from connectnow.bridge import Bridge,BridgeError
-from connectnow.store import Journal
-from connectnow.remote_scope import scoped_dispatch
+from carryon.bridge import Bridge,BridgeError
+from carryon.store import Journal
+from carryon.remote_scope import scoped_dispatch
 from test_operations import IPC,state,T
 
 class Catalog:

@@ -22,7 +22,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -v
           node --test tests/test_client.js tests/test_console_client.js tests/test_cloud_settings.js tests/test_notification_client.js
-          python -m compileall -q connectnow deployment
+          python -m compileall -q carryon deployment
           node --check cloud-console-client.js
           node --check app.js
           node --check notification-client.js
@@ -51,6 +51,6 @@ jobs:
           ssh -i "$key_dir/key" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$key_dir/known_hosts" \
             -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-            "connectnow-deploy@$DEPLOY_HOST" "$GITHUB_SHA" < dist/*.whl
-          curl --fail --silent --show-error "https://$DEPLOY_HOST/connectnow/healthz" |
+            "carryon-deploy@$DEPLOY_HOST" "$GITHUB_SHA" < dist/*.whl
+          curl --fail --silent --show-error "https://$DEPLOY_HOST/carryon/healthz" |
             python -c 'import json,os,sys; assert json.load(sys.stdin)["release"] == os.environ["GITHUB_SHA"]'

@@ -2,8 +2,8 @@ import base64
 import unittest
 from unittest.mock import Mock
 import test_cloud
-from connectnow.images import validate_images, MAX_IMAGE_BYTES
-from connectnow.ipc import DesktopIPC
+from carryon.images import validate_images, MAX_IMAGE_BYTES
+from carryon.ipc import DesktopIPC
 
 PNG='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1cAAAAASUVORK5CYII='
 
@@ -53,7 +53,7 @@ class ImageCloudTests(unittest.TestCase):
     def test_cloud_readonly_can_view_only_known_images_and_bridge_off_revokes(self):
         import tempfile
         from pathlib import Path
-        from connectnow.images import image_id
+        from carryon.images import image_id
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
             self.bridge.history=lambda tid:{'timeline':[{'type':'userMessage','data':{'content':[{'type':'localImage','path':str(path)}]}}]}
@@ -70,9 +70,9 @@ class HistoryImageTests(unittest.TestCase):
     def test_history_scoped_file_reads_and_no_native_mutation(self):
         import tempfile
         from pathlib import Path
-        from connectnow.images import read_history_image, image_id
-        from connectnow.bridge import snapshot_history
-        from connectnow.errors import BridgeError
+        from carryon.images import read_history_image, image_id
+        from carryon.bridge import snapshot_history
+        from carryon.errors import BridgeError
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
             native={'id':'thread','turns':[{'turnId':'t','items':[{'type':'userMessage','content':[{'type':'localImage','path':str(path)}]}]}]}

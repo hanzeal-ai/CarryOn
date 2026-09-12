@@ -17,12 +17,12 @@ class DeploymentTests(unittest.TestCase):
                 archive.writestr(entry,'pass\n')
         return out.getvalue()
     def test_valid_gateway_wheel(self):
-        archive=receiver.validate_wheel(self.wheel('connectnow/gateway.py','connectnow/__init__.py','connectnow_local-0.2.0.dist-info/METADATA'))
-        self.assertIn('connectnow/gateway.py',archive.namelist())
+        archive=receiver.validate_wheel(self.wheel('carryon/gateway.py','carryon/__init__.py','carryon_local-0.2.0.dist-info/METADATA'))
+        self.assertIn('carryon/gateway.py',archive.namelist())
     def test_unsafe_or_wrong_payload_refused_before_activation(self):
-        for name in ['../outside','/etc/passwd','connectnow/../../outside','another_package/foo.py','connectnow\\escape.py']:
+        for name in ['../outside','/etc/passwd','carryon/../../outside','another_package/foo.py','carryon\\escape.py']:
             with self.subTest(name=name),self.assertRaises(ValueError):
-                receiver.validate_wheel(self.wheel('connectnow/gateway.py',name))
-        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('connectnow/gateway.py',symlink=True))
-        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('connectnow/__init__.py'))
-        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('connectnow/gateway.py','connectnow/gateway.py'))
+                receiver.validate_wheel(self.wheel('carryon/gateway.py',name))
+        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('carryon/gateway.py',symlink=True))
+        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('carryon/__init__.py'))
+        with self.assertRaises(ValueError):receiver.validate_wheel(self.wheel('carryon/gateway.py','carryon/gateway.py'))

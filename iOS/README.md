@@ -1,10 +1,10 @@
-# ConnectNow iOS
+# CarryOn iOS
 
 原生 iPhone 客户端：Swift 6、SwiftUI、iOS 17+。视觉与交互依据 [design/mobile](../design/mobile/README.md)。不包含第三方生产依赖。
 
 ## 打开与运行
 
-用 Xcode 打开 `ConnectNow.xcodeproj`，选择 `ConnectNow` scheme。在 Signing & Capabilities 选择自己的开发团队，核对 Bundle Identifier（当前为 `com.hanzeal.connectnow`），再选择已连接且开启开发者模式的 iPhone 运行。Bundle Identifier 的账号归属尚未验证，可改为自己账号下的唯一标识。
+用 Xcode 打开 `CarryOn.xcodeproj`，选择 `CarryOn` scheme。在 Signing & Capabilities 选择自己的开发团队，核对 Bundle Identifier（当前为 `com.hanzeal.carryon`），再选择已连接且开启开发者模式的 iPhone 运行。Bundle Identifier 的账号归属尚未验证，可改为自己账号下的唯一标识。
 
 无需安装模拟器。当前本机 Xcode 26.6、Swift 6.3.3 已完成未签名真机目标构建；没有有效签名证书，因此尚未安装到手机、完成真机视觉/键盘/网络验收。
 
@@ -13,7 +13,7 @@
 swift test --package-path iOS
 
 # 完整 .app 构建，不签名、不安装
-xcodebuild -project iOS/ConnectNow.xcodeproj -target ConnectNow \
+xcodebuild -project iOS/CarryOn.xcodeproj -target CarryOn \
   -configuration Debug -sdk iphoneos ARCHS=arm64 CODE_SIGNING_ALLOWED=NO \
   SYMROOT="$PWD/iOS/.build/xcode-products" \
   OBJROOT="$PWD/iOS/.build/xcode-intermediates" build
@@ -22,7 +22,7 @@ xcodebuild -project iOS/ConnectNow.xcodeproj -target ConnectNow \
 ./iOS/scripts/compile-device.sh
 ```
 
-产物位于 `iOS/.build/xcode-products/Debug-iphoneos/ConnectNow.app`。这不是可分发的签名安装包。本机 scheme + generic destination 路径提示 iOS 26.5 平台组件缺失；上面的 target 构建已实际通过，不将可列出 SDK 等同于所有 Xcode 运行能力就绪。
+产物位于 `iOS/.build/xcode-products/Debug-iphoneos/CarryOn.app`。这不是可分发的签名安装包。本机 scheme + generic destination 路径提示 iOS 26.5 平台组件缺失；上面的 target 构建已实际通过，不将可列出 SDK 等同于所有 Xcode 运行能力就绪。
 
 ## 当前实现
 
@@ -39,7 +39,7 @@ xcodebuild -project iOS/ConnectNow.xcodeproj -target ConnectNow \
 
 [WORKSPACE.md](../docs/WORKSPACE.md) 和 [MULTI_CLOUD.md](../docs/MULTI_CLOUD.md) 是业务契约。云端通过 HTTPS request 代理提交操作，通过 `/console/devices/{deviceId}/ws` 推送会话更新；客户端不直接访问 Mac IPC。WebSocket 使用同一登录 Cookie 与 Origin，进入后台关闭，前台及断线恢复时重建订阅；45 秒无消息时重连，不重放写入。
 
-SwiftUI View 负责展示，Observation 页面状态管理前台生命周期；`ConnectNowCore` 负责 Codable 数据边界、URLSession、请求幂等编号及草稿提交规则。Swift Package 让这些纯逻辑在 macOS 上验证，iPhone App target 复用同一份代码。
+SwiftUI View 负责展示，Observation 页面状态管理前台生命周期；`CarryOnCore` 负责 Codable 数据边界、URLSession、请求幂等编号及草稿提交规则。Swift Package 让这些纯逻辑在 macOS 上验证，iPhone App target 复用同一份代码。
 
 发送/补充/排队、原生状态、项目统计和权限最终由服务端裁决。缺少授权或状态未知时 UI 不提供控制。服务端是同一绑定共享读游标/偏好的模型，不提供独立手机账号。
 

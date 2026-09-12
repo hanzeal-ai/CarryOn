@@ -19,8 +19,8 @@
 先启动本地服务，然后执行（地址包含实际部署的路径前缀）：
 
 ```sh
-connectnow cloud connect --url https://你的云端域名/connectnow
-connectnow cloud status
+carryon cloud connect --url https://你的云端域名/carryon
+carryon cloud status
 ```
 
 命令显示核对码和云端链接；登录云端，在「连接申请」核对并确认即可。核对码用于比较两端申请，无需输入一次性配对码。命令返回仅表示申请已提交；本地服务会继续等待确认并自动绑定，请保持服务运行，五分钟内完成确认。`cloud status` 查看绑定与连接状态；`cloud link-status` 查看最新申请的等待、成功、过期或失败状态。申请状态只在当前服务进程中保留，服务重启后为 idle，已保存绑定仍可用。
@@ -28,11 +28,11 @@ connectnow cloud status
 默认只读，需要远程控制时在 `cloud connect` 后加 `--allow-control`。两个实例分别使用自己的数据目录：
 
 ```sh
-connectnow cloud connect --state-dir ~/.connectnow-test/a --url https://你的云端域名/connectnow
-connectnow cloud connect --state-dir ~/.connectnow-test/b --url https://你的云端域名/connectnow
+carryon cloud connect --state-dir ~/.carryon-test/a --url https://你的云端域名/carryon
+carryon cloud connect --state-dir ~/.carryon-test/b --url https://你的云端域名/carryon
 ```
 
-查询状态和断开连接也需带对应的 `--state-dir`。已有设备凭证仍可通过 `cloud connect --url wss://你的云端域名/connectnow/device --device-id 设备ID --token-file /路径/device-token.txt` 连接；`cloud pair` 用于旧的一次性配对码流程。
+查询状态和断开连接也需带对应的 `--state-dir`。已有设备凭证仍可通过 `cloud connect --url wss://你的云端域名/carryon/device --device-id 设备ID --token-file /路径/device-token.txt` 连接；`cloud pair` 用于旧的一次性配对码流程。
 
 ## 状态与失败语义
 
@@ -48,9 +48,9 @@ connectnow cloud connect --state-dir ~/.connectnow-test/b --url https://你的�
 
 ## 部署准备
 
-首次可直接运行 `python3 -m connectnow.console configure --config /path/gateway.json --public-url https://your-host/connectnow` 创建空设备控制台配置，无需 gateway init 预登记设备。
+首次可直接运行 `python3 -m carryon.console configure --config /path/gateway.json --public-url https://your-host/carryon` 创建空设备控制台配置，无需 gateway init 预登记设备。
 
-云端运行 `python3 -m connectnow.console serve --config /path/gateway.json --state-dir /path/writable-console-state --port 8780`。状态目录必须由服务用户可写；默认是配置文件同级 `console-state`。只读 systemd 服务应单独配置可写 StateDirectory，不能给整个配置目录放宽写权限。运行期新增设备不再编辑 gateway.json。
+云端运行 `python3 -m carryon.console serve --config /path/gateway.json --state-dir /path/writable-console-state --port 8780`。状态目录必须由服务用户可写；默认是配置文件同级 `console-state`。只读 systemd 服务应单独配置可写 StateDirectory，不能给整个配置目录放宽写权限。运行期新增设备不再编辑 gateway.json。
 
 只有服务入口切换、状态目录权限、HTTPS/WSS 反向代理路径都正确时，线上才能使用新流程。源码变更不自动修改 systemd/Nginx 或重启现有服务。网关仍是单进程，不能直接随机负载均衡到多个独立实例。
 
@@ -59,7 +59,7 @@ connectnow cloud connect --state-dir ~/.connectnow-test/b --url https://你的�
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/test_client.js tests/test_console_client.js tests/test_cloud_settings.js
-python3 -m compileall -q connectnow examples tests
+python3 -m compileall -q carryon examples tests
 python3 tests/serve_multi_cloud_smoke.py
 ```
 

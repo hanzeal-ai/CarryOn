@@ -2,12 +2,12 @@
 
 直接使用 example 作为云端控制台，优先阅读 [CONSOLE.md](CONSOLE.md)。以下独立网关是协议联调与外部后端集成示例，不是必需的单独部署组件。
 
-ConnectNow 主动通过 WSS 连接你的网关，不需要用户配置公网 IP、端口映射或 SSH。本机 HTTP 与云端命令复用 `connectnow.api.dispatch`；原生状态与本地投递日志仍是业务权威。网关不会替代本地权限检查和幂等记录。
+CarryOn 主动通过 WSS 连接你的网关，不需要用户配置公网 IP、端口映射或 SSH。本机 HTTP 与云端命令复用 `carryon.api.dispatch`；原生状态与本地投递日志仍是业务权威。网关不会替代本地权限检查和幂等记录。
 
 ```text
-你的浏览器控制台 → 你的账号后端 → ConnectNow 网关
+你的浏览器控制台 → 你的账号后端 → CarryOn 网关
                                      ↑ WSS
-                               用户电脑 ConnectNow → Codex IPC
+                               用户电脑 CarryOn → Codex IPC
 ```
 
 本项目提供设备连接器、传输协议和可运行的参考网关；没有提供 SaaS 账号系统、自动域名/TLS 部署或公网托管。账号后端应验证登录用户有权访问指定 deviceId，API Token 仅留在后端。设备 Token 只交给对应电脑；两种 Token 不通用。
@@ -18,27 +18,27 @@ ConnectNow 主动通过 WSS 连接你的网关，不需要用户配置公网 IP�
 
 ```sh
 # 终端 A：在项目根目录启动参考网关。目录应为本次测试专用。
-python3 -m connectnow.gateway init --config /tmp/connectnow-demo/gateway.json --device-id my-mac
-python3 -m connectnow.gateway serve --config /tmp/connectnow-demo/gateway.json --port 8780
+python3 -m carryon.gateway init --config /tmp/carryon-demo/gateway.json --device-id my-mac
+python3 -m carryon.gateway serve --config /tmp/carryon-demo/gateway.json --port 8780
 
 # 终端 B：启动设备服务并绑定。只有显式 --dev-local 才允许本机 ws://。
-python3 -m connectnow start
-python3 -m connectnow cloud connect \
+python3 -m carryon start
+python3 -m carryon cloud connect \
   --url ws://127.0.0.1:8780/device --device-id my-mac \
-  --token-file /tmp/connectnow-demo/device-token.txt --dev-local
-python3 -m connectnow cloud status
+  --token-file /tmp/carryon-demo/device-token.txt --dev-local
+python3 -m carryon cloud status
 ```
 
-然后执行 `connectnow bridge on`。默认云端只读。修改已有绑定权限使用 `connectnow cloud control --binding-id 绑定ID --allow-control` 或 `--read-only`，也可在桌面端操作。不要重复 connect 来更改权限；同一云端不允许重复绑定。
+然后执行 `carryon bridge on`。默认云端只读。修改已有绑定权限使用 `carryon cloud control --binding-id 绑定ID --allow-control` 或 `--read-only`，也可在桌面端操作。不要重复 connect 来更改权限；同一云端不允许重复绑定。
 
-断开与清除设备凭证：`connectnow cloud disconnect`。仅取消桥接也会拒绝云端任务操作；云端没有重新开启桥接、绑定网关或停止本地服务的权限。
+断开与清除设备凭证：`carryon cloud disconnect`。仅取消桥接也会拒绝云端任务操作；云端没有重新开启桥接、绑定网关或停止本地服务的权限。
 
 ## 放到自己的云端
 
-在服务器安装本项目 wheel（Python 3.10+），使用 `connectnow-gateway init/serve`，或使用下述协议实现自己的网关。参考网关默认监听 `127.0.0.1:8780`，在其前方配置受信任证书的 HTTPS/WSS 反向代理。设备使用：
+在服务器安装本项目 wheel（Python 3.10+），使用 `carryon-gateway init/serve`，或使用下述协议实现自己的网关。参考网关默认监听 `127.0.0.1:8780`，在其前方配置受信任证书的 HTTPS/WSS 反向代理。设备使用：
 
 ```sh
-connectnow cloud connect --url wss://你的网关域名/device --device-id my-mac --token-file /本机/device-token.txt
+carryon cloud connect --url wss://你的网关域名/device --device-id my-mac --token-file /本机/device-token.txt
 ```
 
 独立网关的已有设备凭证通过 CLI 配置；桌面端使用控制台 HTTPS 地址发起连接申请。设备会自动重连，但不会自动重发任务或恢复旧的云端订阅。
@@ -78,9 +78,9 @@ request 的 `path` 是 `/api/...` 相对路径，不能提供任意 URL。支持
 Node 后端示例，凭证来自后端环境变量（不打包到浏览器）：
 
 ```js
-const endpoint = process.env.CONNECTNOW_GATEWAY;
-const deviceId = process.env.CONNECTNOW_DEVICE_ID;
-const apiToken = process.env.CONNECTNOW_API_TOKEN;
+const endpoint = process.env.CARRYON_GATEWAY;
+const deviceId = process.env.CARRYON_DEVICE_ID;
+const apiToken = process.env.CARRYON_API_TOKEN;
 async function deviceRequest(method, path, body) {
   const response = await fetch(`${endpoint}/v1/devices/${encodeURIComponent(deviceId)}/request`, {
     method: 'POST',
@@ -106,13 +106,13 @@ const job = await deviceRequest('POST', `/api/threads/${threadId}/messages`, {
 设备握手：
 
 ```json
-{"type":"hello","protocol":"connectnow/1","deviceId":"my-mac","token":"设备凭证"}
+{"type":"hello","protocol":"carryon/1","deviceId":"my-mac","token":"设备凭证"}
 ```
 
 网关验证设备凭证与归属后回复：
 
 ```json
-{"type":"ready","protocol":"connectnow/1","deviceId":"my-mac"}
+{"type":"ready","protocol":"carryon/1","deviceId":"my-mac"}
 ```
 
 认证前设备不上传会话信息。设备凭证不得放 URL。`id`、`deviceId`、`streamId` 使用 1–100 位字母、数字、横线或下划线。
