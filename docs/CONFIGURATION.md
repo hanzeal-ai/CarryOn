@@ -12,6 +12,7 @@ CarryOn CLI 和 macOS 桌面端是同一套本机服务的两个操作界面。�
 | 桥接 | `carryon bridge on/off/status` | 连接本机 Codex |
 | 远程待机 | `carryon standby on/off/status` | 远程待机 |
 | 连接云端 | `carryon cloud connect --url https://云端地址` | 云端连接，申请连接 |
+| 云端账号 | `carryon cloud account status/setup/change --url https://云端地址` | 云端连接 → 云端账号；绑定菜单 → 管理账号密码 |
 | 查询绑定 | `carryon cloud status` | 云端连接列表 |
 | 查询申请 | `carryon cloud link-status` | 云端申请结果 |
 | 允许控制 | `carryon cloud control --binding-id ID --allow-control` | 对应绑定的允许远程控制 |

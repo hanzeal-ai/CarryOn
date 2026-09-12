@@ -1,0 +1,126 @@
+"""Single-owner password verification and short-lived, owner-confirmed QR login."""
+import hashlib
+import hmac
+import json
+import secrets
+import time
+from pathlib import Path
+
+from .paths import save_json
+
+SESSION_SECONDS = 30 * 24 * 3600
+
+
+def password_record(username, password):
+    if not isinstance(username, str) or not username.strip() or len(username) > 100:
+        raise ValueError('账号须为 1–100 个字符')
+    if not isinstance(password, str) or not 12 <= len(password) <= 256:
+        raise ValueError('密码须为 12–256 个字符')
+    salt = secrets.token_hex(16)
+    return {'username': username.strip(), 'salt': salt,
+            'hash': hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()}
+
+
+class ConsoleAuth:
+    # All mutable operations run under ConsoleServer.auth_lock.
+    def __init__(self, config, state_dir):
+        self.account = config.get('account')
+        if self.account is not None:
+            a = self.account
+            if (not isinstance(a, dict) or not isinstance(a.get('username'), str)
+                or not a['username'].strip() or len(a['username']) > 100
+                or any(not isinstance(a.get(k), str) for k in ('salt', 'hash'))):
+                raise ValueError('账号配置无效')
+            try:
+                if len(bytes.fromhex(a['salt'])) != 16 or len(bytes.fromhex(a['hash'])) != 64:raise ValueError()
+            except ValueError:raise ValueError('账号密码哈希无效') from None
+        elif not config.get('accountSetup') and (not isinstance(config.get('consoleToken'), str) or len(config['consoleToken']) < 32):
+            raise ValueError('请先 configure --username 设置账号密码')
+        self.legacy = config.get('consoleToken', '') if self.account is None else ''
+        authority = self.account or self.legacy
+        if config.get('accountGeneration'):authority={'credential':authority,'generation':config['accountGeneration']}
+        self.fingerprint = hashlib.sha256(json.dumps(authority, sort_keys=True).encode()).hexdigest()
+        self.path = Path(state_dir)/'sessions.json' if state_dir is not None else None
+        self.attempts = []
+        self.qrs = {}
+
+    def load_sessions(self):
+        if self.path is None or not self.path.exists():return {}
+        data = json.loads(self.path.read_text())
+        if data.get('authority') != self.fingerprint:return {}
+        now, mono = time.time(), time.monotonic()
+        return {key: mono + min(expiry-now, SESSION_SECONDS) for key, expiry in data['sessions'].items()
+                if isinstance(key, str) and len(key) == 64 and isinstance(expiry, (int, float)) and expiry > now}
+
+    def save_sessions(self, sessions):
+        if self.path is not None:
+            now, mono = time.time(), time.monotonic()
+            save_json(self.path, {'authority': self.fingerprint,
+                                 'sessions': {k: now+v-mono for k,v in sessions.items() if v > mono}})
+
+    def throttle(self):
+        now = time.monotonic()
+        self.attempts = [t for t in self.attempts if t > now-60]
+        if len(self.attempts) >= 10:raise PermissionError('尝试过于频繁，请一分钟后重试')
+        self.attempts.append(now)
+
+    def verify(self, data):
+        self.throttle()
+        if self.account is None:
+            token = data.get('token')
+            valid = bool(self.legacy) and isinstance(token, str) and hmac.compare_digest(token.encode(), self.legacy.encode())
+        else:
+            username, password = data.get('username'), data.get('password')
+            valid = False
+            if isinstance(username, str) and isinstance(password, str) and len(username) <= 100 and len(password) <= 256:
+                digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(self.account['salt']), n=16384, r=8, p=1)
+                valid = hmac.compare_digest(digest, bytes.fromhex(self.account['hash'])) & hmac.compare_digest(username.strip().encode(), self.account['username'].encode())
+        if not valid:raise PermissionError('账号或密码错误' if self.account else '控制台登录凭证无效')
+
+    def prune(self, sessions):
+        now = time.monotonic()
+        self.qrs = {k:v for k,v in self.qrs.items() if v['expires'] > now and v['owner'] in sessions}
+
+    def create_qr(self, owner, sessions, public_url):
+        self.prune(sessions)
+        # One outstanding invitation per authorizing browser.
+        self.qrs = {k:v for k,v in self.qrs.items() if v['owner'] != owner}
+        if len(self.qrs) >= 64:raise ValueError('扫码请求过多')
+        key, secret = secrets.token_urlsafe(24), secrets.token_urlsafe(32)
+        self.qrs[key] = {'owner': owner, 'secret': hashlib.sha256(secret.encode()).hexdigest(),
+                         'expires': time.monotonic()+180, 'state': 'waiting'}
+        return {'id': key, 'url': public_url+'/#carryon-login='+key+'.'+secret, 'expiresIn': 180}
+
+    def entry(self, key):
+        if not isinstance(key, str) or key not in self.qrs:raise PermissionError('二维码已过期，请重新生成')
+        return self.qrs[key]
+
+    def claim(self, data):
+        entry = self.entry(data.get('id'))
+        secret = data.get('secret')
+        if not isinstance(secret, str) or not hmac.compare_digest(hashlib.sha256(secret.encode()).hexdigest(), entry['secret']):
+            raise PermissionError('二维码无效')
+        # A client-generated key makes a lost claim response retryable, without letting a second scanner take over.
+        claim = data.get('claim')
+        if not isinstance(claim, str) or not 32 <= len(claim) <= 128:raise ValueError('扫码请求无效')
+        digest = hashlib.sha256(claim.encode()).hexdigest()
+        if entry['state'] == 'waiting':
+            entry.update(state='scanned', claim=digest, verification=f'{secrets.randbelow(1000000):06d}')
+        if not hmac.compare_digest(entry.get('claim', ''), digest):raise PermissionError('二维码已被扫描，请重新生成')
+        return {'verification': entry['verification'], 'state': entry['state']}
+
+    def poll(self, data):
+        entry = self.entry(data.get('id'))
+        claim = data.get('claim')
+        if not isinstance(claim, str) or not hmac.compare_digest(hashlib.sha256(claim.encode()).hexdigest(), entry.get('claim', '')):
+            raise PermissionError('扫码请求无效')
+        return entry
+
+    def owner_action(self, data, owner, action):
+        entry = self.entry(data.get('id'))
+        if entry['owner'] != owner:raise PermissionError('扫码请求不属于当前登录会话')
+        if action in ('approve', 'reject'):
+            if entry['state'] != 'scanned':raise ValueError('扫码请求已处理或尚未扫描')
+            if action == 'approve' and data.get('verification') != entry['verification']:raise PermissionError('确认码不匹配')
+            entry['state'] = 'approved' if action == 'approve' else 'rejected'
+        return {'state': entry['state'], 'verification': entry.get('verification')}

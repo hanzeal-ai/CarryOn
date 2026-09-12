@@ -41,9 +41,9 @@ class CloudConsoleClient extends CarryOnClient {
     this.pending=this.restore(this.storageScope+'pending');
     this.operations=this.restore(this.storageScope+'operations');
   }
-  async pair(token) {
+  async pair(token,username) {
     this.close();this.epoch++;this.selection=null;
-    await this.consoleRequest('login',{token:token.trim()});
+    await this.consoleRequest('login',username===undefined?{token:token.trim()}:{username:username.trim(),password:token});
     await this.initialize();
   }
   async request(path,body) {

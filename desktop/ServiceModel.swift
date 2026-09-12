@@ -6,12 +6,19 @@ func cliExecutable() -> URL {
     URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_DESKTOP_CLI"] ?? Bundle.main.executableURL!
         .deletingLastPathComponent().appendingPathComponent("carryon-service").path)
 }
-func executeCLI(_ arguments: [String], directory: String) -> CommandResult {
+func executeCLI(_ arguments: [String], directory: String, input: Data? = nil) -> CommandResult {
     let process = Process(); process.executableURL = cliExecutable()
     process.arguments = arguments + ["--state-dir", directory]
     let pipe = Pipe(); process.standardOutput = pipe; process.standardError = pipe; process.standardInput = FileHandle.nullDevice
+    let inputPipe = input == nil ? nil : Pipe()
+    if let inputPipe { process.standardInput = inputPipe }
     do {
-        try process.run(); let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        try process.run()
+        if let input, let inputPipe {
+            try inputPipe.fileHandleForWriting.write(contentsOf: input)
+            try inputPipe.fileHandleForWriting.close()
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
         return CommandResult(code: process.terminationStatus, text: String(data: data, encoding: .utf8) ?? "无法读取响应")
     } catch { return CommandResult(code: 1, text: "无法运行 CarryOn CLI：\(error.localizedDescription)") }
 }
@@ -94,6 +101,22 @@ struct ServiceRecord: Identifiable, Equatable {
     func call(_ arguments: [String], at path: String? = nil) async -> CommandResult {
         let target = NSString(string: path ?? directory).expandingTildeInPath
         return await Task.detached { executeCLI(arguments, directory: target) }.value
+    }
+    func configureAccount(url: String, action: String, fields: [String: String]) async -> CommandResult {
+        guard let data = try? JSONSerialization.data(withJSONObject: fields) else {
+            return CommandResult(code: 1, text: "账号输入格式无效")
+        }
+        let target = directory
+        return await Task.detached {
+            executeCLI(["cloud", "account", action, "--url", url, "--input-json"], directory: target, input: data)
+        }.value
+    }
+    func qrRequest(url: String, fields: [String: String]) async -> CommandResult {
+        guard let data = try? JSONSerialization.data(withJSONObject: fields) else { return CommandResult(code: 1, text: "扫码输入无效") }
+        let target = directory
+        return await Task.detached {
+            executeCLI(["cloud", "qr", "--url", url, "--input-json"], directory: target, input: data)
+        }.value
     }
     func object(_ text: String) -> [String: Any]? {
         guard let data = text.data(using: .utf8) else { return nil }

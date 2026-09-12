@@ -8,6 +8,9 @@ import AppKit
     @State private var adding = false
     @State private var connecting = false
     @State private var stopping = false
+    @State private var managingAccount = false
+    @State private var accountURL = ""
+    @State private var showingLoginQR = false
     @State private var removing: CloudBinding?
     @State private var controllerInput = ""
 
@@ -37,6 +40,8 @@ import AppKit
         }
         .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
         .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
+        .sheet(isPresented: $showingLoginQR) { CloudQRView(model: model, initialURL: accountURL) }
+        .sheet(isPresented: $managingAccount) { CloudAccountView(model: model, initialURL: accountURL) }
         .sheet(isPresented: $adding) { AddWorkspaceView(model: model) }
         .sheet(isPresented: $connecting) { ConnectCloudView(model: model, initialURL: model.linkURL).id(model.directory) }
         .alert("停止「\(model.selectedName)」的服务？", isPresented: $stopping) {
@@ -140,7 +145,7 @@ import AppKit
                     Toggle("远程待机", isOn: Binding(get: {model.standby}, set: {v in Task { await model.perform(["standby", v ? "on" : "off"]) } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
             }.disabled(!model.running || model.busy)
-            HStack { SectionCaption(title: "云端连接"); Spacer(); Button("连接云端") { connecting = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(DesktopDesign.blue).padding(.top, 14).disabled(!model.running || model.busy) }
+            HStack { SectionCaption(title: "云端连接"); Spacer(); Button("手机扫码登录") { accountURL = ""; showingLoginQR = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(DesktopDesign.blue).padding(.top, 14); Button("云端账号") { accountURL = ""; managingAccount = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(DesktopDesign.blue).padding(.top, 14); Button("连接云端") { connecting = true }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(DesktopDesign.blue).padding(.top, 14).disabled(!model.running || model.busy) }
             Paper {
                 if model.bindings.isEmpty {
                     SettingRow(icon: "icloud", title: "尚未连接云端", detail: "向云端申请连接，确认后即可远程访问") {
@@ -153,7 +158,7 @@ import AppKit
                             SymbolTile(name: "icloud", color: DesktopDesign.blue)
                             VStack(alignment: .leading, spacing: 5) { Text(binding.url).font(.system(size: 12, weight: .medium)).textSelection(.enabled); StatePill(label: binding.connected ? "已连接" : "等待连接", active: binding.connected) }
                             Spacer()
-                            Menu { Button("解除绑定", role: .destructive) { removing = binding } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
+                            Menu { Button("手机扫码登录") { accountURL = CloudAccountView.consoleURL(binding.url); showingLoginQR = true }; Button("管理账号密码") { accountURL = CloudAccountView.consoleURL(binding.url); managingAccount = true }; Button("解除绑定", role: .destructive) { removing = binding } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
                         }
                         HStack {
                             Text("允许远程控制").font(.system(size: 12)); Spacer()

@@ -341,7 +341,7 @@ $('pairing-form').onsubmit=async event=>{
   $('pair').disabled=true;
   try {
     historyCache.clear();outgoingMessages.clear();
-    await client.pair($('token').value);
+    await client.pair($('token').value,cloudMode?$('login-username').value:undefined);
     if(cloudMode){$('pairing').hidden=true;$('token').value='';await offerLink();}
     if(!cloudMode||client.device)applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
     client.connect();if(enabled)await loadThreads();
@@ -525,9 +525,10 @@ async function init(){
     document.body.classList.add('cloud-console');
     document.querySelector('.footnote').textContent='与你的 Codex 工作空间保持同步';
     $('environment-label').textContent='云端工作台';$('auth-title').textContent='登录你的工作空间';$('auth-description').textContent='安全连接，接着上次的进度继续。';$('account-menu').hidden=false;
-    document.querySelector('label[for="token"]').textContent='云端控制台登录凭证';
-    $('token').placeholder='输入控制台登录凭证';$('pair').textContent='登录工作空间 →';
-    $('auth-help').textContent='使用部署时生成的控制台登录凭证。它与设备配对码不同。';
+    document.querySelector('label[for="token"]').textContent='密码';
+    setupConsoleLogin(client,async()=>{await client.initialize();$('pairing').hidden=true;await offerLink();if(client.device)applyStatus(await api('/status'));client.connect();if(enabled)await loadThreads();});
+    $('token').placeholder='输入密码';$('token').autocomplete='current-password';$('pair').textContent='登录工作空间 →';
+    $('auth-help').textContent='';document.querySelector('.auth-security').hidden=true;
     for(const id of ['console-device','console-pair-device','console-logout','console-requests','console-remove-device','console-standby'])$(id).hidden=false;
     $('console-requests').onclick=async()=>{try{await refreshConnectionRequests();$('requests-dialog').showModal();}catch(e){notice(e.message);}};
     $('requests-close').onclick=()=>$('requests-dialog').close();

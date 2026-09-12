@@ -1,7 +1,6 @@
 """Single-owner example console embedding the device gateway in its backend."""
 import argparse
 import hashlib
-import hmac
 from http.cookies import SimpleCookie, CookieError
 import json
 import mimetypes
@@ -15,6 +14,8 @@ from urllib.parse import urlsplit
 
 from .gateway import Gateway, Handler, ID
 from .paths import assets, save_json
+from .console_auth import ConsoleAuth, SESSION_SECONDS, password_record
+from .account_settings import AccountSettings
 
 
 def public_url(value):
@@ -32,14 +33,14 @@ class ConsoleServer(Gateway):
     """Embeddable transport host; replace console auth with your account backend."""
     def __init__(self,address,config,state_dir=None):
         self.public_url=public_url(config['publicUrl'])
-        if not isinstance(config.get('consoleToken'),str) or len(config['consoleToken'])<32:
-            raise ValueError('需要独立的 consoleToken（至少32字符）')
+        self.account_settings=AccountSettings(config,state_dir)
+        self.auth=ConsoleAuth(self.account_settings.effective(),state_dir)
         parsed=urlsplit(self.public_url)
         self.origin=parsed.scheme+'://'+parsed.netloc
         self.prefix=parsed.path.rstrip('/')
         from .linking import LinkRequests
         self.links=LinkRequests(Path(state_dir)/'link-history.json' if state_dir is not None else None)
-        self.sessions={};self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
+        self.sessions=self.auth.load_sessions();self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
         import copy
         config=copy.deepcopy(config)
         self.registry_path=Path(state_dir)/'devices.json' if state_dir is not None else None
@@ -50,6 +51,34 @@ class ConsoleServer(Gateway):
                 if not ID.fullmatch(device) or not isinstance(record,dict) or any(not isinstance(record.get(k),str) or len(record[k])<32 for k in ('deviceToken','apiToken')):raise ValueError('设备登记文件无效')
             config['devices']=records
         super().__init__(address,config,ConsoleHandler)
+
+    def replace_auth(self, config):
+        updated=ConsoleAuth(config,self.account_settings.directory)
+        if updated.fingerprint == self.auth.fingerprint:return
+        updated.attempts=self.auth.attempts
+        self.auth=updated
+        # Persisted sessions are bound to the old authority and cannot restore.
+        self.sessions={};self.codes={}
+        for sid in list(self.console_streams):self.release_stream(sid)
+
+    def account_request(self, action, data):
+        with self.auth_lock, self.account_settings.locked():
+            self.replace_auth(self.account_settings.effective())
+            if action=='status':
+                return {'configured':self.auth.account is not None}
+            try:
+                if action=='setup':
+                    self.auth.throttle()
+                    self.account_settings.initialize(data)
+                else:
+                    if self.auth.account is None:raise PermissionError('请先设置管理员账号')
+                    self.auth.verify({'username':data.get('currentUsername'),'password':data.get('currentPassword')})
+                    self.account_settings.change(data)
+            finally:
+                # A directory fsync can fail after rename: reflect any visible commit,
+                # revoke old sessions, and still report an uncertain result to the caller.
+                self.replace_auth(self.account_settings.effective())
+            return {'configured':True,'changed':True}
 
     def save_devices(self,records):
         if self.registry_path:save_json(self.registry_path,records)
@@ -90,6 +119,7 @@ class ConsoleServer(Gateway):
         now=time.monotonic()
         self.sessions={k:v for k,v in self.sessions.items() if v>now}
         self.codes={k:v for k,v in self.codes.items() if v[1]>now}
+        self.auth.prune(self.sessions)
 
 
     def release_stream(self,sid):
@@ -140,6 +170,19 @@ class ConsoleHandler(Handler):
             self.server.prune()
             return key if key in self.server.sessions else None
 
+    def set_session_cookie(self,token,lifetime=SESSION_SECONDS):
+        self.cookie='carryon-console='+token+'; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age='+str(lifetime)+('; Secure' if self.server.origin.startswith('https:') else '')
+
+    def issue_session(self,lifetime=SESSION_SECONDS):
+        self.server.prune()
+        if len(self.server.sessions)>=64:raise ValueError('登录会话过多，请退出其他设备后重试')
+        token=secrets.token_urlsafe(32)
+        sessions={**self.server.sessions,hashlib.sha256(token.encode()).hexdigest():time.monotonic()+lifetime}
+        self.server.auth.save_sessions(sessions)
+        self.server.sessions=sessions
+        self.set_session_cookie(token,lifetime)
+        return token
+
     def check_origin(self,method):
         origin=self.headers.get('Origin')
         if (origin is not None and origin!=self.server.origin
@@ -149,7 +192,7 @@ class ConsoleHandler(Handler):
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
         allowed={'example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js',
-                 'cloud-console-client.js','console-mode.js','operations.js','timeline.js'}
+                 'cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
         if name=='example.html':
@@ -175,6 +218,20 @@ class ConsoleHandler(Handler):
             if method=='GET' and self.static(path):return
             if not path.startswith('/console/'):
                 return super().handle_api(method)
+            if path in ('/console/account','/console/account/setup','/console/account/change'):
+                # Native administration authenticates with a setup code/current password,
+                # never a browser cookie or a bound device token.
+                if self.headers.get('Origin'):raise PermissionError('请在桌面端或 CLI 管理云端账号')
+                action='status' if path=='/console/account' else path.rsplit('/',1)[-1]
+                if method != ('GET' if action=='status' else 'POST'):
+                    self.reply(405,{'error':'请求方法无效'});return
+                data={} if action=='status' else self.body()
+                if not isinstance(data,dict):raise ValueError('账号参数无效')
+                try:result=self.server.account_request(action,data)
+                except PermissionError:raise
+                except OSError:
+                    self.reply(503,{'error':'无法确认云端账号设置结果，请检查存储状态并核对登录'});return
+                self.reply(200,result);return
             # Redemption is a CLI exchange protected by a high-entropy single-use code.
             if path=='/console/redeem' and method=='POST':
                 if self.headers.get('Origin'):raise PermissionError('请在本机 CarryOn 完成配对')
@@ -193,19 +250,41 @@ class ConsoleHandler(Handler):
                 device=self.server.links.poll(data.get('id'),data.get('secret'))
                 self.reply(200,{'pending':True} if device is None else {'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
             self.check_origin(method)
-            if path=='/console/login' and method=='POST':
-                token=self.body().get('token','')
-                if not isinstance(token,str) or not hmac.compare_digest(token.encode(),self.server.config['consoleToken'].encode()):
-                    raise PermissionError('控制台登录凭证无效')
+            if path in ('/console/login','/console/qr/login') and method=='POST':
+                data=self.body()
+                with self.server.auth_lock:
+                    self.server.auth.verify(data)
+                    self.issue_session(300 if path=='/console/qr/login' else SESSION_SECONDS)
+                self.reply(200,{'authenticated':True});return
+            if path in ('/console/qr/claim','/console/qr/poll') and method=='POST':
+                data=self.body()
                 with self.server.auth_lock:
                     self.server.prune()
-                    if len(self.server.sessions)>=64:raise ValueError('登录会话过多，请稍后重试')
-                    token=secrets.token_urlsafe(32)
-                    self.server.sessions[hashlib.sha256(token.encode()).hexdigest()]=time.monotonic()+12*3600
-                self.cookie='carryon-console='+token+'; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=43200'+('; Secure' if self.server.origin.startswith('https:') else '')
-                self.reply(200,{'authenticated':True});return
+                    if path.endswith('/claim'):
+                        self.reply(200,self.server.auth.claim(data));return
+                    entry=self.server.auth.poll(data)
+                    if entry['state']=='approved':
+                        entry['token']=self.issue_session()
+                        entry['state']='redeemed'
+                    if entry['state']=='redeemed':
+                        if hashlib.sha256(entry['token'].encode()).hexdigest() not in self.server.sessions:
+                            raise PermissionError('扫码登录已失效，请重新扫码')
+                        self.set_session_cookie(entry['token'])
+                        self.reply(200,{'authenticated':True});return
+                    self.reply(200,{'state':entry['state']});return
             key=self.session_key()
             if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path.startswith('/console/qr/') and method=='POST':
+                action=path.rsplit('/',1)[-1];data=self.body()
+                with self.server.auth_lock:
+                    self.server.prune()
+                    if action=='create':result=self.server.auth.create_qr(key,self.server.sessions,self.server.public_url)
+                    elif action in ('status','approve','reject'):result=self.server.auth.owner_action(data,key,action)
+                    elif action=='cancel':
+                        self.server.auth.owner_action(data,key,'status')
+                        del self.server.auth.qrs[data['id']];result={'cancelled':True}
+                    else:raise ValueError('扫码操作无效')
+                self.reply(200,result);return
             if path=='/console/link/inspect' and method=='POST':
                 with self.server.links.lock:
                     entry=self.server.links.get(self.body().get('id'))
@@ -222,8 +301,12 @@ class ConsoleHandler(Handler):
             if path=='/console/link/reject' and method=='POST':
                 self.server.links.reject(self.body().get('id'));self.reply(200,{'rejected':True});return
             if path=='/console/logout' and method=='POST':
+                data=self.body() if self.headers.get('Transfer-Encoding') or int(self.headers.get('Content-Length','0')) else {}
                 with self.server.auth_lock:
-                    self.server.sessions.pop(key,None)
+                    remaining={k:v for k,v in self.server.sessions.items() if k!=key}
+                    self.server.auth.save_sessions(remaining)
+                    self.server.sessions=remaining
+                    self.server.prune()
                     owned=[sid for sid,entry in self.server.console_streams.items() if entry['session']==key]
                 for sid in owned:self.server.release_stream(sid)
                 self.cookie='carryon-console=; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=0'
@@ -288,23 +371,45 @@ class ConsoleHandler(Handler):
 
 def main():
     parser=argparse.ArgumentParser(description='example 云端控制台，内置 CarryOn 设备连接')
-    parser.add_argument('action',choices=['configure','serve'])
+    parser.add_argument('action',choices=['configure','bootstrap','serve'])
     parser.add_argument('--config',type=Path,required=True)
     parser.add_argument('--public-url')
+    parser.add_argument('--username',help='设置或重设单管理员账号，密码交互输入且不回显')
     parser.add_argument('--state-dir',type=Path,help='可写的设备登记目录，默认配置目录下 console-state')
     parser.add_argument('--port',type=int,default=8780)
     args=parser.parse_args()
     config=json.loads(args.config.read_text()) if args.config.exists() else {'devices':{}}
     if args.action=='serve' and not args.config.exists():parser.error('请先运行 configure 创建控制台配置')
+    if args.action=='bootstrap':
+        if args.config.exists() and args.config.stat().st_uid != os.geteuid():
+            parser.error('请以配置文件所有者运行 bootstrap，例如 sudo -u carryon')
+        # A new installation needs no publicly usable default credential.
+        if not config.get('publicUrl'):
+            if not args.public_url:parser.error('首次初始化需要 --public-url')
+            config['publicUrl']=public_url(args.public_url)
+        if not any(k in config for k in ('account','consoleToken','accountSetup')):
+            config['accountSetup']=True
+            save_json(args.config,config)
+        directory=args.state_dir or args.config.parent/'console-state'
+        token=AccountSettings(config,directory).bootstrap()
+        print('一次性初始化凭证（10 分钟内有效，重新生成后旧凭证失效）：')
+        print(token)
+        return
     if args.action=='configure':
         if not args.public_url:parser.error('需要 --public-url')
         config['publicUrl']=public_url(args.public_url)
-        if 'consoleToken' not in config:config['consoleToken']=secrets.token_urlsafe(32)
+        if args.username or not any(k in config for k in ('account','consoleToken')):
+            import getpass
+            username=args.username or input('管理员账号：').strip()
+            password=getpass.getpass('密码（至少 12 位）：')
+            if password!=getpass.getpass('再次输入密码：'):raise ValueError('两次密码不一致')
+            config['account']=password_record(username,password)
+            config.pop('consoleToken',None)
         metadata=args.config.stat() if args.config.exists() else None
         if metadata and os.geteuid() not in (0,metadata.st_uid):raise ValueError('请以配置文件所有者身份运行 configure')
         save_json(args.config,config)
         if metadata and os.geteuid()==0:os.chown(args.config,metadata.st_uid,metadata.st_gid)
-        print('云端控制台已配置；consoleToken 保存在配置文件中，不在终端输出。');return
+        print('云端控制台已配置。'+('账号密码已设置；重启控制台后生效。' if 'account' in config else '请使用 --username 设置账号密码。'));return
     server=ConsoleServer(('127.0.0.1',args.port),config,args.state_dir or args.config.parent/'console-state')
     print('CarryOn example console: '+server.public_url+'/',flush=True)
     try:server.serve_forever()

@@ -232,10 +232,12 @@ class ManagerUnitTests(unittest.TestCase):
         import subprocess,sys
         with tempfile.TemporaryDirectory() as directory:
             config=Path(directory)/'gateway.json'
-            result=subprocess.run([sys.executable,'-m','carryon.console','configure','--config',str(config),'--public-url','https://console.test'],capture_output=True,text=True)
+            result=subprocess.run([sys.executable,'-m','carryon.console','configure','--config',str(config),'--public-url','https://console.test','--username','admin'],input='fixture-password-123\nfixture-password-123\n',capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             data=json.loads(config.read_text());self.assertEqual(data['devices'],{})
-            self.assertNotIn(data['consoleToken'],result.stdout+result.stderr)
+            self.assertEqual(data['account']['username'],'admin')
+            self.assertNotIn('consoleToken',data)
+            self.assertNotIn('fixture-password-123',result.stdout+result.stderr+config.read_text())
             self.assertEqual(config.stat().st_mode&0o777,0o600)
 
     def test_revocation_blocks_native_send_after_job_registration(self):

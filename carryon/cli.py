@@ -115,7 +115,9 @@ def main(argv=None):
             p.add_argument('action',choices=['status','set'])
             for kind in ('message','done','failed','approval'):p.add_argument('--'+kind,action=argparse.BooleanOptionalAction)
         if name == 'cloud':
-            p.add_argument('action', choices=['connect','pair','disconnect','status','control','link-status'])
+            p.add_argument('action', choices=['connect','pair','disconnect','status','control','link-status','account','qr'])
+            p.add_argument('account_action',nargs='?',choices=['status','setup','change'])
+            p.add_argument('--input-json',action='store_true',help='账号设置从标准输入读取 JSON，不将密码放入命令行')
             p.add_argument('--url', help='云端控制台 HTTPS 地址；connect 发起申请后由云端确认')
             p.add_argument('--device-id', help='使用已有设备凭证连接时的设备 ID')
             p.add_argument('--binding-id',help='要断开的云端绑定 ID；多个绑定时必填')
@@ -151,6 +153,14 @@ def main(argv=None):
             from .server import run
             run(args.port,args.codex_home,args.state_dir); return 0
         if args.command == 'doctor': return doctor(args)
+        if args.command=='cloud' and args.action=='qr':
+            if not args.url:raise ValueError('需要 --url 指定云端 HTTPS 地址')
+            from .qr_client import command as qr_command
+            return qr_command(args)
+        if args.command=='cloud' and args.action=='account':
+            if not args.account_action or not args.url:raise ValueError('使用 carryon cloud account status|setup|change --url HTTPS地址')
+            from .account_client import command as account_command
+            return account_command(args)
         info = running(args.state_dir)
         if args.command == 'status':
             print(json.dumps({'running':bool(info),'service':info,

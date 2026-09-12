@@ -148,3 +148,11 @@ body:has(#pairing:not([hidden])) header{background:transparent;border-color:tran
 
 /* One content placeholder per loading/empty/error state. */
 .view-state{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;min-height:190px;padding:32px 20px;text-align:center;color:#6e6e73;font-size:14px;line-height:1.5}.view-state strong{font-size:15px;font-weight:600;color:#45454c}.view-state p{margin:0;max-width:28em;overflow-wrap:anywhere}.view-state>svg{width:34px;height:34px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}.view-state.compact{min-height:44px;padding:8px 12px;gap:8px;flex-direction:row;flex-wrap:wrap;font-size:12px}.view-state.compact>svg{width:18px;height:18px}.loading-spinner{display:inline-block;width:20px;height:20px;border:2px solid #c7c7ce;border-top-color:#555560;border-radius:50%;animation:loading-spin .85s linear infinite}.view-state.compact .loading-spinner{width:15px;height:15px}.view-state button{min-height:44px;padding:8px 18px;border-radius:12px;background:#e9e9ee;color:#34343b}@keyframes loading-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.loading-spinner{animation:none;border-style:dotted}}
+
+.login-qr-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; border: 1px solid #e5e5e5; border-radius: 20px; }
+.login-qr-dialog svg { display: block; width: 260px; max-width: 100%; margin: 16px auto; }
+.login-qr-dialog video { width: 100%; border-radius: 12px; }
+.login-qr-dialog p { line-height: 1.6; }
+.login-qr-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+
+.auth-card #login-username{margin-bottom:18px}.auth-card .login-scan-button{display:block;width:100%;min-height:44px;margin-top:8px}
