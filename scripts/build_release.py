@@ -23,14 +23,19 @@ def main():
     assets=['example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','style.css','mobile.css','mobile-ui.js']
     common=[sys.executable,'-m','PyInstaller','--noconfirm','--log-level','WARN',
         '--paths',str(ROOT),'--collect-data','carryon','--collect-submodules','carryon',
-        '--workpath',str(work),'--specpath',str(work),'--distpath',str(out)]
+        ]
     for name in assets:common += ['--add-data',str(ROOT/name)+':carryon/web']
     identity=os.environ.get('CARRYON_SIGN_IDENTITY')
     if identity:common+=['--codesign-identity',identity]
-    run(*common,'--name','carryon','--onedir',str(ROOT/'packaging/cli_entry.py'))
+    run(*common,'--workpath',str(work/'cli'),'--specpath',str(work/'cli'),'--distpath',str(out),
+        '--name','carryon','--onedir',str(ROOT/'packaging/cli_entry.py'))
     # Recreate the generated bundle before replacing its executable with the native UI.
     if (out/'CarryOn.app').exists():shutil.rmtree(out/'CarryOn.app')
-    run(*common,'--name','CarryOn','--windowed','--osx-bundle-identifier','local.carryon.desktop',str(ROOT/'packaging/cli_entry.py'))
+    # Separate all PyInstaller paths: CarryOn and carryon collide on default APFS.
+    app_out=work/'app-dist'
+    run(*common,'--workpath',str(work/'app'),'--specpath',str(work/'app'),'--distpath',str(app_out),
+        '--name','CarryOn','--windowed','--osx-bundle-identifier','local.carryon.desktop',str(ROOT/'packaging/cli_entry.py'))
+    shutil.copytree(app_out/'CarryOn.app',out/'CarryOn.app',symlinks=True)
     app=out/'CarryOn.app'
     executable=app/'Contents/MacOS/CarryOn'
     executable.rename(executable.with_name('carryon-service'))
@@ -48,6 +53,11 @@ def main():
     shutil.copytree(ROOT/'docs',out/'carryon/docs',dirs_exist_ok=True)
     shutil.copy2(ROOT/'docs/INSTALL.md',out/'carryon/安装说明.md')
     run('tar','-czf',str(out/(prefix+'-cli.tar.gz')),'-C',str(out),'carryon')
+    import tarfile
+    with tarfile.open(out/(prefix+'-cli.tar.gz')) as archive:
+        names=archive.getnames()
+        if 'carryon/carryon' not in names or 'carryon/CarryOn' in names:
+            raise RuntimeError('CLI archive executable casing is invalid')
     stage=work/'carryon-dmg';stage.mkdir(exist_ok=True)
     if (stage/'CarryOn.app').exists():shutil.rmtree(stage/'CarryOn.app')
     shutil.copytree(out/'CarryOn.app',stage/'CarryOn.app',symlinks=True)
