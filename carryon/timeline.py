@@ -3,7 +3,7 @@ import json
 import re
 from .images import image_id
 from .user_messages import unwrap_user_message
-from .artifacts import references
+from .artifacts import references as artifact_references
 
 
 def text(value):
@@ -34,7 +34,7 @@ FIELDS = {
     "plan": "text plan explanation",
     "todo-list": "plan explanation",
     "collabAgentToolCall": "tool status senderThreadId receiverThreadIds prompt model reasoningEffort agentsStates",
-    "subAgentActivity": "status agentNickname agentRole threadId activity summary",
+    "subAgentActivity": "kind agentThreadId agentPath",
     "imageView": "path imageCount",
     "imageGeneration": "status result revisedPrompt",
     "userInput": "questions completed",
@@ -95,6 +95,10 @@ def project_item(item, turn, index):
     elif kind in ("plan", "error"):
         body = item.get("text", item.get("message", ""))
     title = LABELS.get(kind, kind)
+    from .subagents import references
+    agents = references([item])
+    if kind == 'subAgentActivity' and agents:
+        title = agents[0]['title'] + ' · ' + {'started': '已启动', 'interacted': '有更新', 'interrupted': '已中断', 'completed': '已完成'}.get(item.get('kind'), '活动')
     if kind in ("mcpToolCall", "dynamicToolCall"):
         title += " · " + ".".join(str(item[k]) for k in ("server", "tool") if item.get(k))
     if kind == "contextCompaction":
@@ -104,13 +108,25 @@ def project_item(item, turn, index):
         "clientMessageId": item.get("clientUserMessageId", item.get("clientMessageId")),
         "turnId": turn.get("turnId"), "type": kind, "title": title, "status": status,
         "text": body, **({"displayText": display_body} if display_body != body else {}), "phase": item.get("phase"), "durationMs": item.get("durationMs"),
-        "data": data, "artifacts": references(kind, data), "supported": kind in FIELDS}
+        "data": data, "artifacts": artifact_references(kind, data), "supported": kind in FIELDS,
+        **({'subagents': agents} if agents else {})}
+
+
+def completion_time(turn):
+    import math
+    if turn.get('status') != 'completed':return None
+    start,duration=turn.get('turnStartedAtMs'),turn.get('durationMs')
+    if all(type(v) in (int,float) and math.isfinite(v) and v>=0 for v in (start,duration)):
+        return (start+duration)/1000
+    return None
 
 
 def project_turn(turn, position):
     entries, unsupported = [], set()
     tid = turn.get("turnId", str(position))
     meta = pick(turn, "status turnStartedAtMs durationMs error diff")
+    completed=completion_time(turn)
+    if completed is not None:meta['completedAt']=completed
     meta.update(pick(turn.get("params", {}), "model effort"))
     entries.append({"id": f"{tid}:turn", "turnId": tid, "type": "turn", "title": f"第 {position + 1} 轮",
                     "status": turn.get("status"), "data": meta})

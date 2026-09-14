@@ -88,9 +88,11 @@ const Timeline = (() => {
   }
   const questionState=new Map();
   let questionActions=null;
+  let openSubagent=null;
+  function configureSubagents(open){openSubagent=open;}
   function configureQuestions(actions){questionActions=actions;}
   function questionCard(question, article) {
-    if(!questionActions)return;
+    if(!questionActions||current.data.access?.canInteract===false)return;
     const thread=current.data.thread?.id;
     if(!thread)return;
     const key=thread+':'+question.id;
@@ -174,6 +176,12 @@ const Timeline = (() => {
     }
   }
   function entry(item) {
+    if(item.subagents?.length&&openSubagent){
+      const row=el('div','subagent-links');
+      for(const agent of item.subagents){const link=el('button','quiet',item.type==='subAgentActivity'?item.title:agent.title);link.type='button';link.onclick=()=>openSubagent(agent.id);row.append(link);}
+      if(item.type==='collabAgentToolCall'){const info=el('details','activity');info.dataset.key=item.id;info.append(el('summary','','协作详情'),details(item));row.append(info);}
+      return row;
+    }
     if(item.type==='turn'){
       const row=el('div','turn-marker');const d=item.data||{};
       const time=d.turnStartedAtMs?new Date(d.turnStartedAtMs).toLocaleString():'';
@@ -241,7 +249,7 @@ const Timeline = (() => {
     };fragment.append(more);}
     let group=null;
     for(const item of all.slice(-visible)){
-      const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type)&&!item.artifacts?.length;
+      const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type)&&!item.artifacts?.length&&!item.subagents?.length;
       if(activity){
         if(!group){group=el('details','activity-group');group.dataset.key=item.id+':group';group.open=expanded;const summary=el('summary');summary.append(el('span','activity-icon','›_'),el('span','activity-group-label'));group.append(summary);fragment.append(group);}
         group.append(renderEntry(item));
@@ -274,7 +282,7 @@ const Timeline = (() => {
   }
   function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity, details.activity-group'))d.open=value;}}
   function reset(){for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
-  return {render,reset,setExpanded,configureQuestions,configureHistory};
+  return {render,reset,setExpanded,configureQuestions,configureHistory,configureSubagents};
  }
  return {...create(),create};
 })();

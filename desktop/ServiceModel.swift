@@ -141,7 +141,13 @@ struct ServiceRecord: Identifiable, Equatable {
         guard let state = object(result.text), let isRunning = state["running"] as? Bool else {
             clearService(); message = result.text; messageIsError = true; return
         }
-        guard isRunning else { clearService(); return }
+        guard isRunning else {
+            clearService()
+            let cloud = await call(["cloud", "status"], at: target)
+            guard directory == target else { return }
+            applyBindings(cloud)
+            return
+        }
         let bridge = state["bridge"] as? [String: Any] ?? [:]
         let active = bridge["enabled"] as? Bool ?? false
         let cloud = await call(["cloud", "status"], at: target)
@@ -157,17 +163,20 @@ struct ServiceRecord: Identifiable, Equatable {
         }
         controller = bridge["controllerId"] as? String ?? ""
         preferences = object(notifications.text)?["preferences"] as? [String: Bool] ?? [:]
-        bindings = (object(cloud.text)?["bindings"] as? [[String: Any]] ?? []).compactMap { value in
-            guard let id = value["id"] as? String, let url = value["url"] as? String else { return nil }
-            return CloudBinding(id: id, url: url, connected: value["connected"] as? Bool ?? false,
-                                control: value["control"] as? Bool ?? false, error: value["error"] as? String ?? "")
-        }
-        if cloud.code != 0 { message = cloud.text; messageIsError = true }
+        applyBindings(cloud)
         if let powerState = object(power.text) {
             standby = powerState["enabled"] as? Bool ?? false
             standbyDescription = powerState["error"] as? String ?? ((powerState["effective"] as? Bool == true) ? "接电时保持后台运行" : standby ? "等待接电后生效" : "使用系统睡眠设置")
         } else { standby = false; standbyDescription = power.text }
         applyLinkStatus(link)
+    }
+    func applyBindings(_ result: CommandResult) {
+        bindings = (object(result.text)?["bindings"] as? [[String: Any]] ?? []).compactMap { value in
+            guard let id = value["id"] as? String, let url = value["url"] as? String else { return nil }
+            return CloudBinding(id: id, url: url, connected: value["connected"] as? Bool ?? false,
+                                control: value["control"] as? Bool ?? false, error: value["error"] as? String ?? "")
+        }
+        if result.code != 0 { message = result.text; messageIsError = true }
     }
     func applyLinkStatus(_ result: CommandResult) {
         linkIsError = false; linkCanRetry = false; linkURL = ""

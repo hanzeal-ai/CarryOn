@@ -13,6 +13,8 @@ import AppKit
     @State private var showingLoginQR = false
     @State private var removing: CloudBinding?
     @State private var controllerInput = ""
+    @State private var initializing = false
+    @State private var membersBinding: CloudBinding?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -41,6 +43,8 @@ import AppKit
         .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
         .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
         .sheet(isPresented: $showingLoginQR) { CloudQRView(model: model, initialURL: accountURL) }
+        .sheet(isPresented: $initializing) { InitializationView(model: model).id(model.directory) }
+        .sheet(item: $membersBinding) { WorkspaceMembersView(model: model, bindingID: $0.id).id(model.directory) }
         .sheet(isPresented: $managingAccount) { CloudAccountView(model: model, initialURL: accountURL) }
         .sheet(isPresented: $adding) { AddWorkspaceView(model: model) }
         .sheet(isPresented: $connecting) { ConnectCloudView(model: model, initialURL: model.linkURL).id(model.directory) }
@@ -57,6 +61,11 @@ import AppKit
         } message: { Text(removing?.url ?? "") }
         .task {
             await model.refresh()
+            let initialDirectory = model.directory
+            let initial = await Task.detached {
+                executeCLI(["init", "--input-json"], directory: initialDirectory, input: Data("{\"action\":\"status\"}".utf8))
+            }.value
+            if let state = model.object(initial.text), state["state"] as? String != "bound" { initializing = true }
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 4_000_000_000) } catch { return }
                 await model.refresh()
@@ -72,6 +81,7 @@ import AppKit
             }.padding(.horizontal, 23).padding(.top, 30).padding(.bottom, 32)
             HStack { Text("本地工作区").font(.system(size: 11, weight: .medium)); Spacer(); Text("\(model.services.filter(\.running).count) 个运行中").font(.system(size: 10)) }
                 .foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 12)
+            Button("初始化工作区") { initializing = true }.buttonStyle(.plain).foregroundStyle(DesktopDesign.blue).padding(.horizontal, 23).padding(.bottom, 12)
             ScrollView {
                 VStack(spacing: 7) {
                     ForEach(model.services) { service in
@@ -158,7 +168,7 @@ import AppKit
                             SymbolTile(name: "icloud", color: DesktopDesign.blue)
                             VStack(alignment: .leading, spacing: 5) { Text(binding.url).font(.system(size: 12, weight: .medium)).textSelection(.enabled); StatePill(label: binding.connected ? "已连接" : "等待连接", active: binding.connected) }
                             Spacer()
-                            Menu { Button("手机扫码登录") { accountURL = CloudAccountView.consoleURL(binding.url); showingLoginQR = true }; Button("管理账号密码") { accountURL = CloudAccountView.consoleURL(binding.url); managingAccount = true }; Button("解除绑定", role: .destructive) { removing = binding } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
+                            Menu { Button("工作区使用者") { membersBinding = binding }; Button("手机扫码登录") { accountURL = CloudAccountView.consoleURL(binding.url); showingLoginQR = true }; Button("管理账号密码") { accountURL = CloudAccountView.consoleURL(binding.url); managingAccount = true }; Button("解除绑定", role: .destructive) { removing = binding } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
                         }
                         HStack {
                             Text("允许远程控制").font(.system(size: 12)); Spacer()

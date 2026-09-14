@@ -44,10 +44,18 @@ class PushService:
         if not isinstance(token,str) or not re.fullmatch(r'[0-9a-f]{32,512}',token) or len(token)%2:raise ValueError('推送 Token 无效')
         if environment not in ('sandbox','production'):raise ValueError('推送环境无效')
         revision=data.get('revision')
+        if hasattr(self.server.auth, 'identity'):
+            from .workspace_access import require
+            with self.server.auth_lock, self.server.lock:
+                require(self.server, session, device)
         if type(revision) is not int or not 1<=revision<=9007199254740991:raise ValueError('注册版本无效')
         with self.server.auth_lock,self.server.lock,self.lock:
             if self.server.sessions.get(session,0)<=time.monotonic():raise PermissionError('登录已过期，请重新登录')
             if not isinstance(device,str) or device not in self.server.config['devices']:raise PermissionError('设备未授权')
+            if hasattr(self.server.auth, 'identity'):
+                previous_owner = self.db.execute('SELECT session FROM installations WHERE id=? OR (token=? AND environment=?)',(ident,token,environment)).fetchall()
+                if any(self.server.auth.identity(row['session']) != self.server.auth.identity(session) for row in previous_owner):
+                    raise PermissionError('通知安装不属于当前账号')
             known=self.db.execute('SELECT revision FROM registration_versions WHERE authority=? AND id=?',(self.server.auth.fingerprint,ident)).fetchone()
             if known and revision<=known[0]:return {'registered':False,'superseded':True}
             self.db.execute('INSERT OR REPLACE INTO registration_versions VALUES(?,?,?)',(self.server.auth.fingerprint,ident,revision));self.db.commit()
@@ -89,6 +97,10 @@ class PushService:
         if type(revision) is not int or not 1<=revision<=9007199254740991:raise ValueError('注册版本无效')
         with self.server.auth_lock,self.lock:
             if self.server.sessions.get(session,0)<=time.monotonic():raise PermissionError('登录已过期，请重新登录')
+            if hasattr(self.server.auth, 'identity'):
+                previous = self.db.execute('SELECT session FROM installations WHERE id=?',(ident,)).fetchone()
+                if previous and self.server.auth.identity(previous['session']) != self.server.auth.identity(session):
+                    raise PermissionError('通知安装不属于当前账号')
             known=self.db.execute('SELECT revision FROM registration_versions WHERE authority=? AND id=?',(self.server.auth.fingerprint,ident)).fetchone()
             if known and revision<=known[0]:return
             self.db.execute('INSERT OR REPLACE INTO registration_versions VALUES(?,?,?)',(self.server.auth.fingerprint,ident,revision))
@@ -100,6 +112,13 @@ class PushService:
             self.db.execute('DELETE FROM installations WHERE device=?',(device,));self.db.commit()
 
     def current(self,row):
+        if hasattr(self.server.auth, 'identity'):
+            from .workspace_access import require
+            try:
+                with self.server.auth_lock, self.server.lock:
+                    require(self.server, row['session'], row['device'])
+            except PermissionError:
+                return False
         with self.lock:
             return self.db.execute('SELECT 1 FROM installations WHERE id=? AND generation=? AND authority=?',(row['id'],row['generation'],self.server.auth.fingerprint)).fetchone() is not None
 
@@ -119,7 +138,8 @@ class PushService:
         if type(badge) is not int or badge<0 or type(cursor) is not int or cursor<0:raise ValueError('通知快照格式无效')
         if row['cursor'] is not None and cursor<row['cursor']:raise ValueError('本机通知游标倒退，需核对原数据目录')
         links=getattr(self.server,'links',None)
-        if links is not None:badge+=len(links.pending())
+        if links is not None and (not hasattr(self.server.auth, 'identity') or self.server.auth.identity(row['session']) == 'owner'):
+            badge+=len(links.pending())
         for event in packet['events']:
             if self.stop.is_set() or not self.current(row):return
             payload={'aps':{'alert':{'title':LABELS[event['kind']],'body':event['title'][:120]},

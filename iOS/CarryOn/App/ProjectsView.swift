@@ -37,6 +37,7 @@ struct RecordListView: View {
     let path: String
     let key: String
     var isProjectList = false
+    var retainReadActivity = false
     var excludedThreadID: String?
     var create: (() -> Void)?
     let select: (Record) -> Void
@@ -49,6 +50,7 @@ struct RecordListView: View {
     private var loading: Bool { loadKind != nil }
     @State private var failure: String?
     @State private var requestVersion = UUID()
+    @State private var clearing = false
     private var queryIdentity: String { model.scope + path + search + (excludedThreadID ?? "") }
     var body: some View {
         ScrollView {
@@ -57,6 +59,14 @@ struct RecordListView: View {
                     SearchField(text: $search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
                     if let create { Button(action: create) { Image(systemName: "plus").font(.system(size: 25)).frame(width: 44, height: 44) }.disabled(!model.canWrite).accessibilityLabel("新建会话") }
                 }.padding(.top, 12)
+                if retainReadActivity {
+                    HStack {
+                        Text("动态").font(.system(size: 24, weight: .semibold))
+                        Spacer()
+                        Button("清空已读") { Task { await clearRead() } }
+                            .font(.subheadline).disabled(clearing || loading || model.selectedDevice.isEmpty)
+                    }
+                }
                 if records.isEmpty {
                     if model.selectedDevice.isEmpty { BlankState(text: "请先选择工作区", symbol: "laptopcomputer") }
                     else if loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
@@ -77,7 +87,7 @@ struct RecordListView: View {
                 } else if !records.isEmpty {
                     Paper {
                         ForEach(records) { record in
-                            Button { select(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain)
+                            Button { select(record) } label: { ThreadRow(record: record, dimmed: retainReadActivity && record.value["activityRead"].bool == true) }.buttonStyle(.plain)
                             if record.id != records.last?.id { Divider().padding(.leading, 16) }
                         }
                     }
@@ -89,6 +99,14 @@ struct RecordListView: View {
         }.scrollDismissesKeyboard(.interactively).refreshable { await load(reset: true, kind: .refresh) }
             .task(id: queryIdentity) { records = []; total = 0; offset = 0; await load(reset: true, debounce: !search.isEmpty) }
             .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true, kind: .background) } }
+    }
+    private func clearRead() async {
+        clearing = true; defer { clearing = false }
+        do {
+            _ = try await model.deviceRequest("/api/notifications/clear-read", body: .object([:]))
+            await load(reset: true, kind: .refresh)
+            try await model.refreshActivityCounts()
+        } catch { failure = error.localizedDescription }
     }
     private func projectRow(_ record: Record) -> some View {
         HStack(spacing: 14) {
@@ -122,7 +140,7 @@ struct RecordListView: View {
             if debounce { try await Task.sleep(for: .milliseconds(300)) }
             try Task.checkCancellation()
             let excluded = excludedThreadID.map { "&excludeThreadId=" + ConsoleAddress.component($0) } ?? ""
-            let next = try await model.page(path + "?limit=50&offset=\(reset ? 0 : offset)&search=\(ConsoleAddress.component(search))&filter=all" + excluded, key: key)
+            let next = try await model.page(path + "?limit=50&offset=\(reset ? 0 : offset)&search=\(ConsoleAddress.component(search))&filter=all" + excluded + (retainReadActivity ? "&includeRead=true" : ""), key: key)
             guard version == requestVersion, !Task.isCancelled else { return }
             let old = reset ? [] : records
             let ids = Set(old.map(\.id))
@@ -142,7 +160,7 @@ struct ActivityView: View {
                 Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", value: "\(model.requests.count) 项待确认", chevron: true) }
                     .background(.white, in: RoundedRectangle(cornerRadius: 19)).padding(.horizontal, 20).padding(.top, 12)
             }
-            RecordListView(path: "/api/activity", key: "threads") { model.open($0) }
+            RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true) { model.open($0) }
         }.sheet(isPresented: $links) { ConnectionRequestsView() }
     }
 }

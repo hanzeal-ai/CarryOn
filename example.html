@@ -15,6 +15,7 @@
   <script src="/notification-client.js" defer></script>
   <script src="/qrcode.js" defer></script>
   <script src="/console-login.js" defer></script>
+  <script src="/subagents.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
 </head>
@@ -49,7 +50,7 @@
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon"><img src="/logo.svg" alt="" width="48" height="48"></span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
 
       <section id="requests" aria-label="待处理请求" hidden></section>

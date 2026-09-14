@@ -20,5 +20,6 @@ fi
 cp -R "$source_dir" "$install_dir"
 ln -s "$install_dir/carryon" "$bin_dir/carryon"
 echo "已安装：$bin_dir/carryon"
-echo "启动：\"$bin_dir/carryon\" start"
+echo "首次使用：\"$bin_dir/carryon\" init"
+echo "日常启动：\"$bin_dir/carryon\" start"
 echo "若 PATH 中没有 ${bin_dir}，请使用上述完整路径。"

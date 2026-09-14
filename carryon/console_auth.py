@@ -43,11 +43,37 @@ class ConsoleAuth:
         self.path = Path(state_dir)/'sessions.json' if state_dir is not None else None
         self.attempts = []
         self.qrs = {}
+        self.users_path = Path(state_dir)/'users.json' if state_dir is not None else None
+        self.users = json.loads(self.users_path.read_text()) if self.users_path and self.users_path.exists() else {}
+        self.identities = {}
+
+    def register(self, data):
+        self.throttle()
+        record = password_record(data.get('username'), data.get('password'))
+        if (self.account and record['username'].casefold() == self.account['username'].casefold()
+            or any(a['username'].casefold() == record['username'].casefold() for a in self.users.values())):
+            raise ValueError('账号已存在')
+        identity = secrets.token_hex(16)
+        users = {**self.users, identity: record}
+        if self.users_path:
+            save_json(self.users_path, users)
+        self.users = users
+        return identity
+
+    def identity(self, key):
+        return self.identities.get(key, 'owner')
+
+    def profile(self, identity):
+        record = self.account if identity == 'owner' else self.users.get(identity)
+        if not record and identity != 'owner':
+            raise PermissionError('账号已失效')
+        return {'id': identity, 'username': record['username'] if record else '管理员'}
 
     def load_sessions(self):
         if self.path is None or not self.path.exists():return {}
         data = json.loads(self.path.read_text())
         if data.get('authority') != self.fingerprint:return {}
+        self.identities = data.get('identities', {})
         now, mono = time.time(), time.monotonic()
         return {key: mono + min(expiry-now, SESSION_SECONDS) for key, expiry in data['sessions'].items()
                 if isinstance(key, str) and len(key) == 64 and isinstance(expiry, (int, float)) and expiry > now}
@@ -56,6 +82,7 @@ class ConsoleAuth:
         if self.path is not None:
             now, mono = time.time(), time.monotonic()
             save_json(self.path, {'authority': self.fingerprint,
+                                 'identities': {k: self.identity(k) for k in sessions},
                                  'sessions': {k: now+v-mono for k,v in sessions.items() if v > mono}})
 
     def throttle(self):
@@ -66,6 +93,14 @@ class ConsoleAuth:
 
     def verify(self, data):
         self.throttle()
+        username, password = data.get('username'), data.get('password')
+        if isinstance(username, str) and isinstance(password, str) and len(username) <= 100 and len(password) <= 256:
+            for identity, record in self.users.items():
+                if record['username'] == username.strip():
+                    digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(record['salt']), n=16384, r=8, p=1)
+                    if hmac.compare_digest(digest, bytes.fromhex(record['hash'])):
+                        return identity
+                    raise PermissionError('账号或密码错误')
         if self.account is None:
             token = data.get('token')
             valid = bool(self.legacy) and isinstance(token, str) and hmac.compare_digest(token.encode(), self.legacy.encode())
@@ -76,6 +111,7 @@ class ConsoleAuth:
                 digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(self.account['salt']), n=16384, r=8, p=1)
                 valid = hmac.compare_digest(digest, bytes.fromhex(self.account['hash'])) & hmac.compare_digest(username.strip().encode(), self.account['username'].encode())
         if not valid:raise PermissionError('账号或密码错误' if self.account else '控制台登录凭证无效')
+        return 'owner'
 
     def prune(self, sessions):
         now = time.monotonic()

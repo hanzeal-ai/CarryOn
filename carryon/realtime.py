@@ -137,6 +137,7 @@ class Subscription:
         self.version = 0
         self.next_update_at = 0
         self.side_ids = set()
+        self.persisted_subagent = False
         self.selection = {'threadId': None, 'subscription': None, 'threadIds': [],
                           'includeSideChats': False, 'sideThreadId': None}
 
@@ -175,6 +176,7 @@ class Subscription:
                               'includeSideChats': include_sides, 'sideThreadId': side_id,
                               'historyLimit': limit, 'sideHistoryLimit': side_limit, 'historyProtocol': int(protocol)}
             self.side_ids.clear()
+            self.persisted_subagent = False
             self.version += 1
             self.owner.sync_watches()
             self.owner.load_event.set()
@@ -183,7 +185,7 @@ class Subscription:
     def wait(self, revision):
         with self.bridge.events:
             if revision == self.bridge.event_revision and not self.closed:
-                self.bridge.events.wait(15)
+                self.bridge.events.wait(1 if self.persisted_subagent else 15)
             revision = self.bridge.event_revision
         # Coalesce token bursts; each stream holds only its newest pending projection.
         remaining = self.next_update_at - time.monotonic()
@@ -233,11 +235,14 @@ class Subscription:
                 try:
                     if hasattr(self.bridge,'workspace'):packet['readSequence']=self.bridge.workspace.latest_sequence(target)
                     if selection.get('historyLimit') and hasattr(self.bridge, 'preview_history') and ipc.current(target) is None:
-                        history = self.bridge.preview_history(target)
+                        history = self.bridge.preview_history(target, limit=selection['historyLimit'])
                         packet['readSequence'] = 0
                     else:
                         history = self.bridge.history(target, limit=selection['historyLimit']) if selection.get('historyLimit') else self.bridge.history(target)
                     packet['history'] = {k: v for k, v in history.items() if k != 'turns'}
+                    with self.bridge.lock:
+                        if version == self.version:
+                            self.persisted_subagent = history.get('access', {}).get('isSubagent') is True and history.get('source') == 'local-rollout'
                 except (ValueError, IPCError) as exc:
                     packet['error'] = str(exc)
             if target and selection['includeSideChats'] and selection['sideThreadId']:

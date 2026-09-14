@@ -94,7 +94,7 @@ class CloudConnector:
             cancel=self.cancel
             def authorize():
                 if cancel.is_set() or connection_cancel is not None and connection_cancel.is_set():raise BridgeError('此云端连接已撤销、断线或权限已改变',403)
-            status,body=scoped_dispatch(self.bridge,message.get('method'),message.get('path'),message.get('body'),control,self.binding_id,authorize)
+            status,body=scoped_dispatch(self.bridge,message.get('method'),message.get('path'),message.get('body'),control,self.binding_id,authorize,activity_owner=message.get('activityOwner'))
         except BridgeError as exc:status,body=exc.status,{'error':str(exc)}
         except IPCError as exc:status,body=409,{'error':str(exc),'uncertain':exc.uncertain}
         except (ValueError,TypeError,KeyError):status,body=400,{'error':'请求参数无效'}

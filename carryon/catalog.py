@@ -23,6 +23,48 @@ class Catalog:
         self.home = Path(home).resolve()
         self.lock = threading.Lock()
         self.cache = {}
+        self.rollout_cache = {}
+
+    def children(self, parent_id):
+        from .subagents import spawn_source
+        valid_id(parent_id)
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM threads WHERE archived=0 ORDER BY created_at, id").fetchall()
+        children = {}
+        for record in rows:
+            row = dict(record)
+            parent = spawn_source(row).get('parent_thread_id')
+            if isinstance(parent, str): children.setdefault(parent, []).append(row)
+        result, pending, seen = [], [parent_id], {parent_id}
+        for parent in pending:
+            for row in children.get(parent, []):
+                if row['id'] in seen: continue
+                seen.add(row['id']); result.append(row); pending.append(row['id'])
+        return result
+
+    def rollout_index(self, thread_id):
+        from .rollout import RolloutIndex
+        row = self.get(thread_id)
+        path = Path(row['rollout_path']).resolve()
+        if not path.is_relative_to(self.home):
+            raise ValueError('本地会话历史不可用')
+        with self.lock:
+            index = self.rollout_cache.pop(thread_id, None)
+            if index is None or index.path != path:
+                index = RolloutIndex(row, self.home)
+            self.rollout_cache[thread_id] = index
+            while len(self.rollout_cache) > 8:
+                self.rollout_cache.pop(next(iter(self.rollout_cache)))
+            return index
+
+    def rollout_state(self, thread_id, limit=None):
+        return self.rollout_index(thread_id).snapshot(limit)
+
+    def spawned_children(self, thread_id):
+        index = self.rollout_index(thread_id)
+        with index.lock:
+            index.update()
+            return set(index.spawned)
 
     @contextmanager
     def connection(self):

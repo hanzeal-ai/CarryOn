@@ -2,6 +2,12 @@ import XCTest
 @testable import CarryOnCore
 
 final class ConversationContentContextTests: XCTestCase {
+    func testSubagentsShareThreadResourcesAndOnlyDisableInteraction() {
+        let context = ConversationContentContext(isReadOnly: true)
+        XCTAssertTrue(context.isReadOnly)
+        XCTAssertEqual(context.resourcePath(threadID: "child", kind: "artifacts", id: "file"), "/api/threads/child/artifacts/file")
+        XCTAssertFalse(ConversationContentContext(isReadOnly: false).isReadOnly)
+    }
     func testSideResourcesKeepParentScope() {
         let side = ConversationContentContext(parentID: "parent")
         XCTAssertTrue(side.isReadOnly)

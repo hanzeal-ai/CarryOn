@@ -79,11 +79,14 @@ struct ConversationMenu: View {
     @State private var jobs = false
     @State private var metadata = false
     @State private var sideChats = false
+    @State private var subagents = false
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     Paper {
+                        Button { subagents = true } label: { SettingRow(icon: "person.2", title: "子会话", chevron: true) }
+                        Divider().padding(.leading, 60)
                         Button { sideChats = true } label: { SettingRow(icon: "bubble.left.and.bubble.right", title: "临时聊天", chevron: true) }
                         Divider().padding(.leading, 60)
                         Button { metadata = true } label: { SettingRow(icon: "info.circle", title: "会话信息", chevron: true) }
@@ -95,6 +98,9 @@ struct ConversationMenu: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
                 .sheet(isPresented: $jobs) { RequestLogView() }
                 .sheet(isPresented: $sideChats) { SideChatsView() }
+                .sheet(isPresented: $subagents) {
+                    if let parent = model.selectedThread?.id { SubagentsView(parentID: parent, onOpen: { dismiss() }) }
+                }
                 .sheet(isPresented: $metadata) { StructuredDetail(title: "会话信息", value: model.history["metadata"]) }
 
         }.presentationDetents([.medium, .large])

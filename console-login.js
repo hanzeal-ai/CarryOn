@@ -5,6 +5,17 @@ function setupConsoleLogin(client,onLogin) {
   const label=document.createElement('label');label.htmlFor='login-username';label.textContent='账号';
   const username=document.createElement('input');username.id='login-username';username.name='username';username.autocomplete='username';username.required=true;username.placeholder='输入账号';username.autocapitalize='none';
   el('token').before(label,username);el('token').before(document.querySelector('label[for=token]'));
+  const registerError=document.createElement('p');registerError.setAttribute('role','alert');registerError.hidden=true;
+  const register=button('创建账号',async()=>{
+    const name=username.value.trim(),password=el('token').value;
+    registerError.hidden=true;
+    if(!name||password.length<12){registerError.textContent='请输入账号和至少 12 位密码';registerError.hidden=false;return;}
+    register.disabled=true;
+    try {await client.consoleRequest('register',{username:name,password});el('token').value='';await onLogin();}
+    catch(error){registerError.textContent=error.message;registerError.hidden=false;}
+    finally{register.disabled=false;}
+  });
+  el('pair').after(register,registerError);
   const dialog=document.createElement('dialog');dialog.className='login-qr-dialog';
   const title=document.createElement('h2'),content=document.createElement('div'),actions=document.createElement('div');
   title.textContent='扫码登录';actions.className='login-qr-actions';dialog.append(title,content,actions);document.body.append(dialog);

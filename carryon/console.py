@@ -51,6 +51,8 @@ class ConsoleServer(Gateway):
                 if not ID.fullmatch(device) or not isinstance(record,dict) or any(not isinstance(record.get(k),str) or len(record[k])<32 for k in ('deviceToken','apiToken')):raise ValueError('设备登记文件无效')
             config['devices']=records
         super().__init__(address,config,ConsoleHandler)
+        from .binding_invites import BindingInvites
+        self.binding_invites = BindingInvites(self, state_dir)
         self.push=None
         if config.get('apns'):
             if state_dir is None:raise ValueError('APNs 需要持久化 state-dir')
@@ -72,13 +74,17 @@ class ConsoleServer(Gateway):
             self.replace_auth(self.account_settings.effective())
             if action=='status':
                 return {'configured':self.auth.account is not None}
+            username = data.get('username')
+            if isinstance(username, str) and any(record['username'].casefold() == username.strip().casefold() for record in self.auth.users.values()):
+                raise ValueError('账号已存在，请使用其他管理员账号名称')
             try:
                 if action=='setup':
                     self.auth.throttle()
                     self.account_settings.initialize(data)
                 else:
                     if self.auth.account is None:raise PermissionError('请先设置管理员账号')
-                    self.auth.verify({'username':data.get('currentUsername'),'password':data.get('currentPassword')})
+                    if self.auth.verify({'username':data.get('currentUsername'),'password':data.get('currentPassword')}) != 'owner':
+                        raise PermissionError('需要管理员凭证')
                     self.account_settings.change(data)
             finally:
                 # A directory fsync can fail after rename: reflect any visible commit,
@@ -153,7 +159,28 @@ class ConsoleServer(Gateway):
 
 
 class ConsoleHandler(Handler):
+    def body(self):
+        cached = getattr(self, 'forward_body', None)
+        return cached if cached is not None else super().body()
+
     def reply(self,status,data):
+        access = getattr(self, 'access_context', None)
+        if access and 200 <= status < 300:
+            from .workspace_access import require
+            try:
+                with self.server.auth_lock, self.server.lock:
+                    require(self.server, *access)
+            except PermissionError:
+                context = getattr(self, 'stream_context', None)
+                if context and isinstance(data, dict) and data.get('streamId'):
+                    sid = data['streamId']
+                    with self.server.auth_lock:
+                        self.server.console_streams[sid] = {'device':context[0], 'session':context[1], 'last':time.monotonic()}
+                    self.server.release_stream(sid)
+                if getattr(self, 'forwarded_write', False):
+                    status, data = 409, {'error':'授权已变更；请求可能已经执行，请在电脑核对原 requestId，勿重新提交。', 'uncertain':True}
+                else:
+                    status, data = 403, {'error':'工作区授权已变更，请刷新'}
         # Some authorization/offline failures precede body parsing. Never reuse
         # a connection whose unread request body could become the next request.
         self.close_connection=True
@@ -184,10 +211,11 @@ class ConsoleHandler(Handler):
     def set_session_cookie(self,token,lifetime=SESSION_SECONDS):
         self.cookie='carryon-console='+token+'; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age='+str(lifetime)+('; Secure' if self.server.origin.startswith('https:') else '')
 
-    def issue_session(self,lifetime=SESSION_SECONDS):
+    def issue_session(self,lifetime=SESSION_SECONDS,identity='owner'):
         self.server.prune()
         if len(self.server.sessions)>=64:raise ValueError('登录会话过多，请退出其他设备后重试')
         token=secrets.token_urlsafe(32)
+        self.server.auth.identities[hashlib.sha256(token.encode()).hexdigest()] = identity
         sessions={**self.server.sessions,hashlib.sha256(token.encode()).hexdigest():time.monotonic()+lifetime}
         self.server.auth.save_sessions(sessions)
         self.server.sessions=sessions
@@ -202,7 +230,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js',
+        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','client.js',
                  'cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
@@ -260,12 +288,31 @@ class ConsoleHandler(Handler):
                     self.reply(200,self.server.links.start(data.get('name')));return
                 device=self.server.links.poll(data.get('id'),data.get('secret'))
                 self.reply(200,{'pending':True} if device is None else {'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
+            if path == '/console/binding/manage' and method == 'POST':
+                if self.headers.get('Origin'): raise PermissionError('请在电脑端管理授权')
+                from .member_management import manage
+                self.reply(200, manage(self.server, self.body())); return
+            if path == '/console/binding/known' and method == 'POST':
+                if self.headers.get('Origin'): raise PermissionError('请在电脑端管理授权')
+                self.server.binding_invites.throttle(self.client_address[0])
+                self.reply(200, self.server.binding_invites.bind_known(self.body())); return
+            if path in ('/console/binding/start', '/console/binding/poll') and method == 'POST':
+                if self.headers.get('Origin'): raise PermissionError('请在电脑端发起绑定')
+                if path.endswith('/start'): self.server.binding_invites.throttle(self.client_address[0])
+                action = self.server.binding_invites.start if path.endswith('/start') else self.server.binding_invites.poll
+                self.reply(200, action(self.body())); return
             self.check_origin(method)
+            if path == '/console/register' and method == 'POST':
+                data = self.body()
+                with self.server.auth_lock:
+                    identity = self.server.auth.register(data)
+                    self.issue_session(identity=identity)
+                self.reply(200, {'authenticated': True}); return
             if path in ('/console/login','/console/qr/login') and method=='POST':
                 data=self.body()
                 with self.server.auth_lock:
-                    self.server.auth.verify(data)
-                    self.issue_session(300 if path=='/console/qr/login' else SESSION_SECONDS)
+                    identity = self.server.auth.verify(data)
+                    self.issue_session(300 if path=='/console/qr/login' else SESSION_SECONDS, identity)
                 self.reply(200,{'authenticated':True});return
             if path in ('/console/qr/claim','/console/qr/poll') and method=='POST':
                 data=self.body()
@@ -275,7 +322,7 @@ class ConsoleHandler(Handler):
                         self.reply(200,self.server.auth.claim(data));return
                     entry=self.server.auth.poll(data)
                     if entry['state']=='approved':
-                        entry['token']=self.issue_session()
+                        entry['token']=self.issue_session(identity=self.server.auth.identity(entry['owner']))
                         entry['state']='redeemed'
                     if entry['state']=='redeemed':
                         if hashlib.sha256(entry['token'].encode()).hexdigest() not in self.server.sessions:
@@ -285,6 +332,14 @@ class ConsoleHandler(Handler):
                     self.reply(200,{'state':entry['state']});return
             key=self.session_key()
             if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path in ('/console/binding/inspect', '/console/binding/accept') and method == 'POST':
+                action = self.server.binding_invites.inspect if path.endswith('/inspect') else self.server.binding_invites.accept
+                self.reply(200, action(self.body(), self.server.auth.identity(key))); return
+            from .workspace_access import granted, require, capability
+            if path == '/console/link/pending' and method == 'GET' and self.server.auth.identity(key) != 'owner':
+                self.reply(200, {'requests':[], 'history':[], 'historyError':None}); return
+            if (path.startswith('/console/link/') or path == '/console/pairing') and self.server.auth.identity(key) != 'owner':
+                raise PermissionError('请使用工作区邀请二维码连接')
             if path.startswith('/console/qr/') and method=='POST':
                 action=path.rsplit('/',1)[-1];data=self.body()
                 with self.server.auth_lock:
@@ -314,6 +369,7 @@ class ConsoleHandler(Handler):
                 return
             if path=='/console/link/approve' and method=='POST':
                 data=self.body()
+                if data.get('deviceId') is not None: require(self.server,key,data['deviceId'])
                 device=self.server.approve_link(data.get('id'),data.get('deviceId'))
                 self.reply(200,{'approved':True,'deviceId':device});return
             if path=='/console/link/pending' and method=='GET':
@@ -338,11 +394,13 @@ class ConsoleHandler(Handler):
                 self.reply(200,{'authenticated':False});return
             if path=='/console/session' and method=='GET':
                 with self.server.lock:
-                    devices=[{'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed} for d in self.server.config['devices']]
-                self.reply(200,{'devices':devices,'publicUrl':self.server.public_url});return
+                    devices=[{'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed,
+                              'permissions':granted(self.server,key,d)} for d in self.server.config['devices'] if 'view' in granted(self.server,key,d)]
+                self.reply(200,{'devices':devices,'publicUrl':self.server.public_url,'account':self.server.auth.profile(self.server.auth.identity(key))});return
             if path=='/console/pairing' and method=='POST':
                 device=self.body().get('deviceId')
                 if not isinstance(device,str) or device not in self.server.config['devices']:raise ValueError('设备不存在')
+                require(self.server, key, device)
                 code=secrets.token_urlsafe(24)
                 with self.server.auth_lock:
                     self.server.prune()
@@ -353,7 +411,10 @@ class ConsoleHandler(Handler):
                 parts=path.split('/')
                 if len(parts)<4 or not ID.fullmatch(parts[3]) or parts[3] not in self.server.config['devices']:
                     raise PermissionError('设备未授权')
+                require(self.server, key, parts[3])
                 if len(parts)==4 and method=='DELETE':
+                    if self.server.auth.identity(key) != self.server.config['devices'][parts[3]].get('ownerUserId', 'owner'):
+                        raise PermissionError('请在电脑端管理工作区授权')
                     self.server.revoke_device(parts[3]);self.reply(200,{'removed':True,'notice':'设备凭证已撤销；在途请求可能已执行，请在本机核对，勿自动重发'});return
                 if len(parts)==5 and parts[4]=='ws' and method=='GET':
                     if self.headers.get('Origin') != self.server.origin:
@@ -379,6 +440,14 @@ class ConsoleHandler(Handler):
                     if method=='DELETE':
                         self.server.release_stream(parts[5]);self.reply(200,{'closed':True});return
                 # Delegate to the same authoritative gateway routes after console auth.
+                body = self.body() if method == 'POST' else None
+                needed = capability(body.get('method'), body.get('path', ''), body.get('body')) if parts[4:] == ['request'] and body else capability(method, '/api/'+'/'.join(parts[4:]), body)
+                require(self.server, key, parts[3], needed)
+                self.access_context = (key, parts[3], needed)
+                self.activity_owner = self.server.auth.identity(key)
+                self.forwarded_write = bool(parts[4:] == ['request'] and body and body.get('method') == 'POST')
+                if body is not None:
+                    self.forward_body = body
                 original=self.path;headers=self.headers
                 from email.message import Message
                 forwarded=Message()

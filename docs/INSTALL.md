@@ -22,14 +22,15 @@ CarryOn 0.2 面向 macOS。安装包包含 Python 和控制台，用户不需要
 
 ```sh
 sh ./install.sh
-"$HOME/.local/bin/carryon" start
+"$HOME/.local/bin/carryon" init
 ```
 
 安装不使用 sudo，也不会修改 shell 配置。如 `~/.local/bin` 已在 PATH 中，可直接使用 `carryon`。也可以不安装，直接执行解压目录中的 `./carryon start`。
 
 ```sh
-carryon start             # 后台启动并打开本地控制台
-carryon start --no-open   # 仅启动 API
+carryon init              # 初始化、手机扫码绑定，默认自动启动
+carryon start             # 后台启动桥接，不打开浏览器
+carryon start --open      # 启动桥接并打开本地控制台
 carryon open              # 重新打开已配对页面
 carryon status            # 查看服务实例与桥接状态
 carryon doctor            # 检查平台、数据目录和 IPC socket

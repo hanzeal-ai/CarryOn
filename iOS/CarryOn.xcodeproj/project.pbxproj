@@ -171,21 +171,24 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
-				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
-				INFOPLIST_KEY_CarryOnAPNsEnvironment = "$(CARRYON_APNS_ENVIRONMENT)";
 				CARRYON_APNS_ENVIRONMENT = sandbox;
-				CURRENT_PROJECT_VERSION = 2;
+				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = MV673UW39G;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = CarryOn;
-				INFOPLIST_KEY_NSCameraUsageDescription = "扫描已登录电脑上的二维码以登录 CarryOn";
+				INFOPLIST_KEY_CarryOnAPNsEnvironment = "$(CARRYON_APNS_ENVIRONMENT)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "扫描已登录电脑上的二维码以登录 CarryOn";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hanzeal.carryon;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -200,21 +203,24 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
-				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
-				INFOPLIST_KEY_CarryOnAPNsEnvironment = "$(CARRYON_APNS_ENVIRONMENT)";
 				CARRYON_APNS_ENVIRONMENT = production;
-				CURRENT_PROJECT_VERSION = 2;
+				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = MV673UW39G;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = CarryOn;
-				INFOPLIST_KEY_NSCameraUsageDescription = "扫描已登录电脑上的二维码以登录 CarryOn";
+				INFOPLIST_KEY_CarryOnAPNsEnvironment = "$(CARRYON_APNS_ENVIRONMENT)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "扫描已登录电脑上的二维码以登录 CarryOn";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hanzeal.carryon;
 				PRODUCT_NAME = "$(TARGET_NAME)";

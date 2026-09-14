@@ -129,7 +129,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:]==['request'] and method=='POST':
                 data=self.body()
                 response=device.call({'type':'request','method':data.get('method'),
-                    'path':data.get('path'),'body':data.get('body')})
+                    'path':data.get('path'),'body':data.get('body'),
+                    **({'activityOwner':self.activity_owner} if getattr(self,'activity_owner',None) is not None else {})})
                 self.reply(response['status'],response.get('body'));return
             if parts[3:]==['streams'] and method=='POST':
                 selection=self.body();sid=uuid.uuid4().hex

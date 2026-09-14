@@ -59,7 +59,7 @@ struct NativeRequestView: View {
                 Button("拒绝", role: .destructive) { Task { await respond(["response": .object(["action": .string("decline")])]) } }.frame(minHeight: 44)
             } else { Text("请在 Codex App 处理此类型请求。").font(.caption) }
         }.padding(17).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 18))
-            .disabled(!model.canWrite)
+            .disabled(!model.canInteract)
             .onAppear { permissions = request["params"]["permissions"].formatted }
             .alert("确认已查看请求与授权范围？", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
                 Button("取消", role: .cancel) { decision = nil }

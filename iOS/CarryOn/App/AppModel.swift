@@ -97,6 +97,8 @@ import CarryOnCore
     var activityBadgeCount: Int { authenticated ? max(0, activityCount ?? 0) + requests.count : 0 }
     var device: Record? { devices.first { $0.id == selectedDevice } }
     var canWrite: Bool { !removingDevice && authenticated && foreground && connected && status["enabled"].bool == true && status["remoteControl"].bool == true && !writing }
+    var conversationReadOnly: Bool { (history["access"]["canInteract"].bool ?? selectedThread?.value["access"]["canInteract"].bool) == false }
+    var canInteract: Bool { canWrite && !conversationReadOnly && history["access"]["nativeReady"].bool != false }
     var state: String { connected ? history["status"]["state"].text : "unknown" }
     var scope: String { addressText + "\n" + selectedDevice }
     var connectionLabel: String {
@@ -115,7 +117,7 @@ import CarryOnCore
         set { attachments[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
 
-    func login() async {
+    func login(register: Bool = false) async {
         guard !busy else { return }
         busy = true; error = nil
         defer { busy = false }
@@ -124,7 +126,7 @@ import CarryOnCore
             let address = try ConsoleAddress(addressText)
             let client = ConsoleAPI(address: address, credentials: KeychainSessionCredentials())
             pendingClient = client
-            _ = try await client.request("login", body: .object(["username": .string(username.trimmingCharacters(in: .whitespacesAndNewlines)), "password": .string(credential)]))
+            _ = try await client.request(register ? "register" : "login", body: .object(["username": .string(username.trimmingCharacters(in: .whitespacesAndNewlines)), "password": .string(credential)]))
             try await finishLogin(client, address: address)
         } catch {
             await abandonLogin(pendingClient)
@@ -230,6 +232,15 @@ import CarryOnCore
         selectedThread = thread; history = historyCache.get(scope + "\n" + thread.id) ?? .null; readSequence = 0
         connected = false
         updateSelection()
+    }
+    func openSubagent(_ id: String, parentID: String) async {
+        let capturedScope = scope
+        do {
+            let result = try await deviceRequest("/api/threads/\(ConsoleAddress.component(parentID))/subagents")
+            guard capturedScope == scope, selectedThread?.id == parentID, !Task.isCancelled else { return }
+            guard let value = result["threads"].array.first(where: { $0["id"].text == id }) else { throw APIError("此子会话已不可用") }
+            open(try Record(value))
+        } catch { if capturedScope == scope && selectedThread?.id == parentID { report(error, operation: "打开子会话") } }
     }
     func openNotification(_ target: PushTarget) async {
         guard authenticated, (try? ConsoleAddress(addressText).base.absoluteString) == target.server else { return }
@@ -402,6 +413,7 @@ import CarryOnCore
     }
     @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
+        if target == selectedThread?.id && !canInteract { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
         let version = epoch, capturedScope = scope
         writing = true; defer { writing = false }
         do {

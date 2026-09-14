@@ -80,6 +80,8 @@ class CLITests(unittest.TestCase):
                 self.assertEqual(json.loads((state/'service.json').read_text())['instanceId'],info['instanceId'])
                 result=run('status');self.assertEqual(result.returncode,0,result.stderr)
                 self.assertFalse(json.loads(result.stdout)['bridge']['enabled'])
+                self.assertTrue(json.loads(result.stdout)['bridge']['requested'])
+                self.assertEqual(json.loads(result.stdout)['bridge']['connectionState'], 'waiting')
                 import urllib.request
                 with urllib.request.urlopen(f"http://127.0.0.1:{info['port']}/client.js") as response:
                     self.assertIn(b'CarryOnClient',response.read())

@@ -58,7 +58,7 @@ struct QRLoginView: View {
     }
 }
 
-private struct QRScanner: UIViewControllerRepresentable {
+struct QRScanner: UIViewControllerRepresentable {
     let onScan: (String) -> Void
     let onFailure: () -> Void
     func makeCoordinator() -> Coordinator { Coordinator(onScan, onFailure) }

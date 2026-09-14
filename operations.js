@@ -49,7 +49,8 @@ const Operations = (() => {
     row.append(messageEditor);
   }
   function render(history, threadId, api, notice, canWrite=true) {
-    writable=canWrite;
+    writable=canWrite&&history.access?.canInteract!==false;
+    if(history.access?.canInteract===false){reset();return;}
     transport=api;notify=notice;
     const c=history.controls;
     if(!c||history.syncing===true){reset();return;}

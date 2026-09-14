@@ -12,7 +12,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 | POST | `/bridge` | `{"enabled":true}` 或 `false` | 同 status |
 | GET | `/threads` | query：`search`、`limit` 1–100、`offset` ≥0 | `{threads:[{id,title,cwd,updated_at,created_at,history_mode}],nextOffset}` |
 | POST | `/controller` | `{"threadId":"UUID"}` | 同 status，需目标已加载且空闲 |
-| GET | `/threads/{id}/history` | 无 | `{thread,messages,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
+| GET | `/threads/{id}/history` | `limit`：1–4000，默认 40 | `{thread,messages,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
 | POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案"}` | HTTP 202 + Job |
 | POST | `/threads/{id}/messages` | `{"requestId":"唯一ID","prompt":"后续任务"}` | HTTP 202 + Job |
 | GET | `/jobs` | 无 | `{jobs:[Job,...]}`，最近 100 个 |
@@ -171,6 +171,14 @@ Token 不放在 URL。随后发送订阅，`subscription` 是客户端生成的�
 页面默认订阅当前搜索结果的前 100 条；超过时明确提示订阅范围，可通过搜索缩小范围。数量统计只针对这些列表会话，不代表整个 Codex 的全局运行总数。
 
 本地 IPC 接收 `snapshot` 与 `patches`（版本 11）；补丁必须匹配 owner、会话和 `baseRevision`。重复旧版本忽略，版本缺口或无法应用的补丁触发重新同步。原生隐藏推理依然不投影到网页。
+
+子会话：`GET /api/threads/{id}/subagents` 返回 `{threads: [...]}`，按原生父子关系列出未归档的全部后代并去重。每项包含 `id/title/cwd/access`，`access.canInteract` 是原生 Agent 类型允许交互的标记，不表示当前已连接到 owner。子会话沿用普通会话的 history、images、artifacts、messages、compose、operations 和 WebSocket 接口。
+
+子会话历史额外返回 `access.isSubagent/parentId/canInteract/nativeReady`。只有 `canInteract=true` 且 `nativeReady=true` 时客户端启用执行操作；服务端仍在实际写入前检查只读策略、owner、当前轮次和远程授权。后台只读 Agent 的写入接口返回 403，即使已有原生快照。
+
+子会话没有原生快照时，使用 `source=local-rollout` 的只读历史、空 controls 和未加载运行状态。WebSocket 的 `historyLimit` 在该来源下按可展示事件分页，`historyWindow.unit=items`；通过增大同一订阅的 `historyLimit` 读取更早事件。原生快照仍按轮次分页。持久历史的文件版本检查和增量索引不恢复或启动会话。
+
+HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩大到 4000 项；文件/图片链接校验仍可查找更早历史。持久投影的用户输入只采用原生 `UserMessage` 展示事件，不展示混有运行时上下文的原始 user-role 模型输入；若日志仅有原始或加密的委派输入，该段输入不可恢复展示。正常原生快照继续采用主会话展示契约。
 
 最多 16 个实时连接；请求消息最大 100 KB，响应最大 32 MiB。空闲时发送 Ping 保活。客户端断线后可退避重连、重新认证和订阅，恢复的是当前快照，不是断线事件回放。仅有旧 rollout 的会话仍属于降级文件历史，不具备原生实时事件保证。
 

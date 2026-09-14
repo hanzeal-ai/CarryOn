@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
+            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/subagents.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "png": "image/png"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -182,6 +182,8 @@ def run(port, codex_home, directory):
     token_file.chmod(0o600)
     journal = Journal(directory / 'jobs.sqlite')
     bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
+    from .lifecycle import BridgeLifecycle
+    bridge.lifecycle = BridgeLifecycle(bridge)
     server = Server(('127.0.0.1', port), Handler)
     bridge.listener_info = {"listenHost": server.server_address[0], "port": server.server_port}
     server.bridge, server.token = bridge, token
@@ -206,11 +208,13 @@ def run(port, codex_home, directory):
     try:
         from .services import register
         register(directory,port=server.server_port,codex_home=codex_home)
+        bridge.lifecycle.start()
         bridge.workspace.start()
         server.standby.start()
         server.cloud.start()
         server.serve_forever()
     finally:
+        bridge.lifecycle.close()
         bridge.workspace.close()
         server.standby.close()
         server.local_link.close()

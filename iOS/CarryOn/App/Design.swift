@@ -90,6 +90,13 @@ struct SettingRow: View {
 struct ThreadRow: View {
     @Environment(AppModel.self) private var model
     let record: Record
+    var dimmed = false
+    private var projectName: String {
+        if let name = record.value["projectName"].string, !name.isEmpty { return name }
+        if record.value["projectless"].bool == true { return "最近" }
+        let path = record.value["projectRoot"].string ?? record.value["projectKey"].string ?? record.value["cwd"].text
+        return path.split(separator: "/").last.map(String.init) ?? "最近"
+    }
     var body: some View {
         let state = record.value["status"]["state"].text
         HStack(spacing: 13) {
@@ -98,13 +105,18 @@ struct ThreadRow: View {
                 HStack { Text(record.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
                     if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7).accessibilityLabel("未读") }
                 }
-                Text(record.value["cwd"].text).font(.caption2).foregroundStyle(Design.secondary).lineLimit(1)
+                Text(projectName).font(.caption2).foregroundStyle(Design.secondary).lineLimit(1)
                 Text(record.value["failed"].bool == true ? "执行失败" : record.value["status"]["label"].string ?? "状态未知")
                     .font(.caption2).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
+                if case .number(let completed) = record.value["completedAt"] {
+                    Text("完成于 " + Date(timeIntervalSince1970: completed).formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2).foregroundStyle(Design.secondary)
+                }
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
         }.padding(.horizontal, 15).padding(.vertical, 17).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            .saturation(dimmed ? 0 : 1).opacity(dimmed ? 0.5 : 1)
     }
 }
 

@@ -27,6 +27,7 @@ class Workspace:
             CREATE TABLE IF NOT EXISTS notification_baselines(thread_id TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS notification_readers(reader TEXT NOT NULL,thread_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(reader,thread_id));
             CREATE TABLE IF NOT EXISTS notification_preferences(reader TEXT PRIMARY KEY,body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS activity_cleared(reader TEXT NOT NULL,thread_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(reader,thread_id));
             ''');self.db.commit()
 
     def start(self):
@@ -139,6 +140,20 @@ class Workspace:
     def latest_sequence(self,tid):
         with self.lock:return self.db.execute('SELECT COALESCE(MAX(sequence),0) FROM notification_events WHERE thread_id=?',(tid,)).fetchone()[0]
 
+    def clear_read(self,reader,activity_owner=None):
+        # Advance only through already read events. Never delete events or session data.
+        with self.lock:
+            self.db.execute('''INSERT INTO activity_cleared(reader,thread_id,sequence)
+                SELECT ?,e.thread_id,MAX(e.sequence) FROM notification_events e
+                LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
+                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader='native:codex'
+                GROUP BY e.thread_id
+                HAVING MAX(e.sequence)<=MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0))
+                ON CONFLICT(reader,thread_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)''',(activity_owner or reader,reader))
+            self.db.commit();self.revision+=1
+        self.bridge.notify()
+        return {'cleared':True}
+
     def events(self,reader,after=0,limit=100):
         with self.lock:
             records=self.db.execute('SELECT sequence,body FROM notification_events WHERE sequence>? ORDER BY sequence LIMIT ?',(after,limit)).fetchall()
@@ -151,7 +166,7 @@ class Workspace:
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
-    def projection(self,reader):
+    def projection(self,reader,activity_owner=None):
         self.bridge.require()
         with self.lock:
             if self.error:raise ValueError(self.error)
@@ -164,6 +179,9 @@ class Workspace:
             unread={row[0] for row in unread_events}
             notified={tid for tid,kind in unread_events if preferences.get(kind,False)}
             sequences={row[0]:row[1] for row in self.db.execute('SELECT thread_id,MAX(sequence) FROM notification_events GROUP BY thread_id')}
+            retained={tid for tid,kind in self.db.execute('''SELECT DISTINCT e.thread_id,e.kind FROM notification_events e
+                LEFT JOIN activity_cleared c ON c.reader=? AND c.thread_id=e.thread_id
+                WHERE e.sequence>COALESCE(c.sequence,0)''',(activity_owner or reader,)) if preferences.get(kind,False)}
         ipc,_=self.bridge.require();groups={};threads=[]
         for row in rows:
             tid=row['id'];native=ipc.current(tid)
@@ -172,10 +190,14 @@ class Workspace:
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
             pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),row.get('projectless',False))
-            thread={**row,'projectId':pid,'status':status,'actionable':actionable,'failed':known.get('failed',False),
+            thread={**row,'projectId':pid,'projectName':name,'status':status,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0),
+                    'activityRetained':tid in retained,'activityRead':tid not in unread,
                     'activity':tid in notified or (known.get('failed',False) and preferences['failed'])
                                or (known.get('needsConfirmation',False) and preferences['approval'])}
+            from .timeline import completion_time
+            completed=next((value for turn in reversed(turns(native or {})) if (value:=completion_time(turn)) is not None),None)
+            if completed is not None:thread['completedAt']=completed
             threads.append(thread)
             group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('projectRoot',row.get('cwd','')),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
@@ -207,7 +229,7 @@ class Workspace:
                 return {'events':eligible,'nextSequence':packet['nextSequence'],'badge':len(visible)}
         raise ValueError('通知状态正在变化，请稍后重试')
 
-    def dispatch(self,reader,method,path,data,query):
+    def dispatch(self,reader,method,path,data,query,activity_owner=None):
         self.bridge.require()
         data={} if data is None else data
         if not isinstance(data,dict):raise ValueError('请求体必须为对象')
@@ -219,15 +241,21 @@ class Workspace:
         if path=='/api/notifications/read' and method=='POST':
             if data.get('threadId') not in self.thread_ids():raise ValueError('会话不可用')
             return 200,self.read(reader,data.get('threadId'),data.get('sequence'))
+        if path=='/api/notifications/clear-read' and method=='POST':return 200,self.clear_read(reader,activity_owner)
         limit=min(100,max(1,int(query.get('limit',['100'])[0])));offset=max(0,int(query.get('offset',['0'])[0]))
         if path=='/api/notifications' and method=='GET':return 200,self.events(reader,max(0,int(query.get('after',['0'])[0])),limit)
         if method!='GET':return 404,{'error':'接口不存在'}
-        groups,threads=self.projection(reader)
+        groups,threads=self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader)
         search=query.get('search',[''])[0].casefold()
         if path=='/api/projects':
             groups=[g for g in groups if search in (g['name']+' '+g['cwd']).casefold()]
             return 200,{'projects':groups[offset:offset+limit],'total':len(groups),'nextOffset':offset+limit}
-        if path=='/api/activity':threads=[t for t in threads if t['activity'] and t['id']!=query.get('excludeThreadId',[''])[0]]
+        if path=='/api/activity':
+            include_read=query.get('includeRead',['false'])[0]=='true'
+            if include_read:
+                threads=[t for t in threads if t['activityRetained'] or (t['activity'] and t['readSequence']==0)]
+            else:threads=[t for t in threads if t['activity']]
+            threads=[t for t in threads if t['id']!=query.get('excludeThreadId',[''])[0]]
         elif path.startswith('/api/projects/') and path.endswith('/threads'):
             pid=path.split('/')[3];threads=[t for t in threads if t['projectId']==pid]
         elif path!='/api/workspace/threads':return 404,{'error':'接口不存在'}

@@ -83,7 +83,7 @@ public actor ConsoleAPI {
             throw APIError(result?["error"].string ?? "请求失败（HTTP \(response.statusCode)）", status: response.statusCode)
         }
         guard let result, result.object != nil else { throw APIError("服务器返回了无效数据") }
-        if route == "login" || (route == "qr/poll" && result["authenticated"].bool == true) {
+        if route == "login" || route == "register" || (route == "qr/poll" && result["authenticated"].bool == true) {
             let fields = response.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) }
             guard let token = HTTPCookie.cookies(withResponseHeaderFields: fields, for: request.url!).first(where: { $0.name == "carryon-console" })?.value,
                   !token.isEmpty else { throw APIError("登录响应缺少会话凭证") }

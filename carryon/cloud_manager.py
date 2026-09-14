@@ -11,6 +11,22 @@ from .paths import save_json
 class CloudManager:
     validate=staticmethod(CloudConnector.validate)
 
+    @staticmethod
+    def saved_status(directory):
+        path = Path(directory)/'cloud.json'
+        data = json.loads(path.read_text()) if path.exists() else {'version':2, 'bindings':{}}
+        if data.get('version') == 2:
+            configs = data['bindings']
+        elif 'version' not in data:
+            configs = {'legacy':data} if data.get('enabled') else {}
+        else:
+            raise ValueError('云端配置版本无效')
+        bindings = []
+        for key, config in configs.items():
+            CloudConnector.validate(config)
+            bindings.append({'id':key, **CloudConnector(None, directory, config=config, binding_id=key).status()})
+        return {'enabled':any(c['enabled'] for c in bindings), 'connected':False, 'bindings':bindings}
+
     def __init__(self,bridge,directory):
         self.bridge=bridge;self.directory=Path(directory);self.path=self.directory/'cloud.json'
         self.lock=threading.RLock();self.connections={}

@@ -64,9 +64,10 @@ struct WorkspaceSwitcher: View {
 struct WorkspaceConnectionHelp: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var scanning = false
     private var command: String {
         let url = model.addressText.replacingOccurrences(of: "'", with: "'\\''")
-        return "carryon start\ncarryon bridge on\ncarryon cloud connect --url '" + url + "'" + (model.addressText.hasPrefix("http:") ? " --dev-local" : "")
+        return "carryon init --url '" + url + "'"
     }
     var body: some View {
         NavigationStack {
@@ -75,17 +76,18 @@ struct WorkspaceConnectionHelp: View {
                     Text("CLI").font(.headline)
                     Text("1. 在电脑上安装 CarryOn，并打开 Codex App。\n2. 在终端执行以下命令：")
                     WorkspaceCopyBlock(text: command, label: "复制命令", monospaced: true)
-                    Text("3. 在本端「我的 → 连接申请」核对设备及两端确认码，确认连接。")
+                    Text("3. 扫描电脑显示的二维码，核对账号、工作区和权限后确认绑定。")
+                    Button { scanning = true } label: { Label("扫码绑定工作区", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 48) }
+                        .foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
                     Divider()
                     Text("桌面端").font(.headline)
-                    Text("1. 打开 CarryOn 桌面端，选择或添加工作区。\n2. 启动服务、开启桥接，点击「连接云端」。\n3. 输入以下云端地址并发起申请：")
+                    Text("1. 打开 CarryOn 桌面端的初始化向导。\n2. 输入以下云端地址，生成工作区二维码：")
                     WorkspaceCopyBlock(text: model.addressText, label: "复制云端地址")
-                    Text("4. 在本端「我的 → 连接申请」核对设备及两端确认码，确认连接。")
-                    Text("连接默认只读；需要操作会话时，在电脑端允许远程控制。").font(.caption).foregroundStyle(Design.secondary)
+                    Text("3. 扫码确认后，电脑默认自动启动工作区。")
                 }.padding(20)
             }.navigationTitle("连接新工作区").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭") } }
-        }.presentationDetents([.large])
+        }.presentationDetents([.large]).sheet(isPresented: $scanning) { WorkspaceBindingView() }
     }
 }
 

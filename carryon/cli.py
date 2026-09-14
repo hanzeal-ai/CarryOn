@@ -67,11 +67,9 @@ def start(args):
                 time.sleep(.15)
             if not info:
                 raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
-            if call(directory,'/cloud').get('enabled'):
-                try:call(directory,'/bridge',{'enabled':True})
-                except (urllib.error.HTTPError,OSError):
-                    print('本地服务已启动，但未能自动开启桥接；请打开 Codex 后执行 carryon bridge on，或在桌面端开启桥接。')
-    print(f"CarryOn {info['version']} 已启动：http://127.0.0.1:{info['port']}/")
+        bridge = call(directory, '/bridge', {'enabled': True}, timeout=20)
+    print(f"CarryOn {info['version']} 本地服务已启动：http://127.0.0.1:{info['port']}/")
+    print('Codex 已连接' if bridge.get('enabled') else '正在等待 Codex App；打开并登录后将自动连接。')
     if not args.no_open: open_console(directory, info)
     return 0
 
@@ -95,13 +93,28 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog='carryon', description='启动本地 Codex 控制台与云端设备通道')
     parser.add_argument('--version', action='version', version=__version__)
     sub = parser.add_subparsers(dest='command')
+    init = sub.add_parser('init', help='初始化工作区并使用手机扫码绑定')
+    init.add_argument('--state-dir', type=Path, default=state_dir())
+    init.add_argument('--url')
+    init.add_argument('--permissions', help='逗号分隔的工作区成员权限；省略时交互选择')
+    init.add_argument('--input-json', action='store_true')
+    members = sub.add_parser('members', help='管理当前工作区的使用者与权限')
+    members.add_argument('action', nargs='?', choices=('list','grant','revoke','invite'), default='list')
+    members.add_argument('--state-dir', type=Path, default=state_dir())
+    members.add_argument('--binding-id')
+    members.add_argument('--account-id')
+    members.add_argument('--permissions', help='逗号分隔：view,create,send,stop,edit,files,approve')
+    members.add_argument('--source-state-dir', type=Path, help='复用同一云端的已确认账号所在工作区')
+    members.add_argument('--input-json', action='store_true')
     for name in ('start','serve','open','status','stop','doctor','cloud','bridge','standby','controller','notifications','services'):
         p = sub.add_parser(name)
         p.add_argument('--state-dir', type=Path, default=state_dir())
         if name in ('start','serve','doctor'):
-            p.add_argument('--codex-home', type=Path, default=Path.home()/'.codex')
-        if name in ('start','serve'): p.add_argument('--port', type=int, default=8769)
-        if name == 'start': p.add_argument('--no-open', action='store_true')
+            p.add_argument('--codex-home', type=Path)
+        if name in ('start','serve'): p.add_argument('--port', type=int)
+        if name == 'start':
+            p.add_argument('--no-open', action='store_true', default=True)
+            p.add_argument('--open', dest='no_open', action='store_false')
         if name=='services':
             p.add_argument('action',choices=['list','add'])
             p.add_argument('--name')
@@ -134,8 +147,21 @@ def main(argv=None):
     args = parser.parse_args(argv if argv is not None else (sys.argv[1:] or ['start']))
     if args.command is None: parser.print_help(); return 0
     if hasattr(args,'state_dir'):args.state_dir = args.state_dir.expanduser().resolve()
-    if hasattr(args,'codex_home'): args.codex_home=args.codex_home.expanduser().resolve()
     try:
+        if args.command == 'init':
+            from .onboarding import command as initialize
+            return initialize(args)
+        if args.command == 'members':
+            from .members_cli import command as manage_members
+            return manage_members(args)
+        if args.command in ('start', 'serve', 'doctor'):
+            from .services import records
+            saved = records().get(str(args.state_dir), {})
+            args.codex_home = (args.codex_home or Path(saved.get('codexHome', Path.home()/'.codex'))).expanduser().resolve()
+            if hasattr(args, 'port') and args.port is None:
+                args.port = saved.get('port', 8769)
+        elif hasattr(args, 'codex_home'):
+            args.codex_home = args.codex_home.expanduser().resolve()
         if args.command=='services':
             from .services import list_services, register
             if args.action=='add':
@@ -162,6 +188,9 @@ def main(argv=None):
             from .account_client import command as account_command
             return account_command(args)
         info = running(args.state_dir)
+        if not info and args.command == 'cloud' and args.action == 'status':
+            from .cloud_manager import CloudManager
+            print(json.dumps(CloudManager.saved_status(args.state_dir), ensure_ascii=False, indent=2)); return 0
         if args.command == 'status':
             print(json.dumps({'running':bool(info),'service':info,
                 'bridge':call(args.state_dir,'/status') if info else None},ensure_ascii=False,indent=2));return 0 if info else 1
@@ -222,6 +251,8 @@ def main(argv=None):
         print('错误：'+message,file=sys.stderr);return 1
     except (OSError, ValueError, KeyError) as exc:
         print('错误：'+str(exc),file=sys.stderr);return 1
+    except KeyboardInterrupt:
+        print('已取消当前操作；已保存的配置保留。', file=sys.stderr); return 130
 
 
 if __name__=='__main__':raise SystemExit(main())

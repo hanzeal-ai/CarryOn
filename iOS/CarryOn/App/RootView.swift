@@ -84,31 +84,39 @@ struct RootView: View {
 }
 struct LoginView: View {
     @State private var scan = false
+    @State private var advancedSettings = false
+    @State private var registering = false
+    @State private var confirmation = ""
     @Environment(AppModel.self) private var model
     var body: some View {
         @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("CarryOn").font(.system(size: 20, weight: .semibold)).padding(.top, 35)
-                Spacer(minLength: 50)
-                Image("CarryOnLogo").resizable().scaledToFit().frame(width: 62, height: 62).accessibilityHidden(true)
-                Text("查看进展，\n继续对话。").font(.system(size: 36, weight: .semibold)).tracking(-1)
-                Text("换个设备，接着做。").foregroundStyle(Design.secondary)
+                Image("CarryOnLoginLogo")
+                    .resizable().scaledToFit().frame(width: 112, height: 168)
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                    .accessibilityLabel("CarryOn")
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("云端地址").font(.caption).foregroundStyle(Design.secondary)
-                    TextField("https://…", text: $model.addressText).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
                     Text("账号").font(.caption).foregroundStyle(Design.secondary)
                     TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
                     Text("密码").font(.caption).foregroundStyle(Design.secondary)
-                    SecureField("输入密码", text: $model.credential).textContentType(.password).submitLabel(.go).onSubmit { if !model.username.isEmpty && !model.credential.isEmpty { Task { await model.login() } } }.padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
-                    Button { Task { await model.login() } } label: {
-                        HStack { Spacer(); if model.busy { ProgressView().tint(.white) } else { Text("登录").fontWeight(.semibold) }; Spacer() }.frame(minHeight: 50)
+                    SecureField(registering ? "至少 12 位密码" : "输入密码", text: $model.credential).textContentType(registering ? .newPassword : .password).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    if registering {
+                        SecureField("再次输入密码", text: $confirmation).textContentType(.newPassword).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    }
+                    Button { Task { await model.login(register: registering) } } label: {
+                        HStack { Spacer(); if model.busy { ProgressView().tint(.white) } else { Text(registering ? "注册并登录" : "登录").fontWeight(.semibold) }; Spacer() }.frame(minHeight: 50)
                     }.background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).foregroundStyle(.white)
-                        .disabled(model.busy || model.addressText.isEmpty || model.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.credential.isEmpty)
+                        .disabled(model.busy || model.addressText.isEmpty || model.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.credential.isEmpty || (registering && (model.credential.count < 12 || model.credential != confirmation)))
+                    Button(registering ? "已有账号？登录" : "创建账号") { registering.toggle(); confirmation = "" }.frame(maxWidth: .infinity, minHeight: 36).disabled(model.busy)
                     Button { scan = true } label: { Label("扫码登录", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 44) }.disabled(model.busy)
-                }.padding(.top, 12)
+                    Button("高级设置") { advancedSettings = true }
+                        .font(.footnote).foregroundStyle(Design.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44).disabled(model.busy)
+                }
             }.padding(28).frame(maxWidth: 500)
         }.frame(maxWidth: .infinity).background(Design.background).scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $scan) { QRLoginView() }
+        .sheet(isPresented: $advancedSettings) { CloudSettingsView() }
     }
 }

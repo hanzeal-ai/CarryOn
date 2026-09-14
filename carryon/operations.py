@@ -166,7 +166,7 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None):
     from .errors import BridgeError
     from .catalog import valid_id
     valid_id(thread_id)
-    bridge.catalog.get(thread_id)
+    bridge.subagents.assert_interactive(thread_id)
     ipc, generation = bridge.require()
     action, request_id = data.get('action'), data.get('requestId')
     if action not in METHODS:
@@ -210,6 +210,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
             with bridge.lock:
                 bridge.check_generation(ipc, generation)
                 if authorize:authorize()
+                bridge.subagents.assert_interactive(job['threadId'])
                 # Recheck streamed state immediately before writing, when available.
                 current = ipc.current(job['threadId']) if hasattr(ipc, 'current') else None
                 if prepared is not None and current is None:

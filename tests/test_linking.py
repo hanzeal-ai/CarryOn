@@ -51,13 +51,14 @@ class LinkTests(unittest.TestCase):
                 with self.assertRaises(ValueError):cloud.set_control('true')
                 self.assertEqual(apply.call_count,1)
 
-    def test_local_start_does_not_reenable_existing_service(self):
+    def test_local_start_reuses_service_and_requests_bridge_connection(self):
         with tempfile.TemporaryDirectory() as directory:
             args=SimpleNamespace(state_dir=Path(directory),port=0,codex_home=Path(directory),no_open=True)
             info={'version':'test','port':1234}
             with patch('carryon.cli.running',return_value=info), patch('carryon.cli.call') as call:
-                self.assertEqual(start(args),0);call.assert_not_called()
-            with patch('carryon.cli.running',side_effect=[None,info]), patch('carryon.cli.subprocess.Popen'), patch('carryon.cli.call',side_effect=[{'enabled':True},OSError('Codex closed')]) as call:
+                self.assertEqual(start(args),0)
+                call.assert_called_once_with(Path(directory), '/bridge', {'enabled':True}, timeout=20)
+            with patch('carryon.cli.running',side_effect=[None,info]), patch('carryon.cli.subprocess.Popen'), patch('carryon.cli.call',return_value={'enabled':False,'requested':True}) as call:
                 self.assertEqual(start(args),0)
                 self.assertEqual(call.call_args.args[1:],('/bridge',{'enabled':True}))
 

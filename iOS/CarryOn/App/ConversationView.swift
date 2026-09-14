@@ -61,6 +61,7 @@ struct ConversationView: View {
             if bottomVisible { markRead() }
         }
         .carryOnChatAppearance()
+        .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))
         .navigationTitle(thread.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -111,8 +112,9 @@ struct ConversationView: View {
     }
     @ViewBuilder private var composerView: some View {
         @Bindable var model = model
+        if !model.conversationReadOnly {
         CarryOnChatComposer(text: $model.draft,
-            disabled: !model.canWrite || loadingImages || submitting,
+            disabled: !model.canInteract || loadingImages || submitting,
             hasImages: !images.isEmpty, stopping: model.state == "running",
             resuming: model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             send: submitMessage,
@@ -120,11 +122,12 @@ struct ConversationView: View {
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
                 PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
                     Image(systemName: "plus").frame(width: 44, height: 44)
-                }.disabled(!model.canWrite || !["idle", "running", "waiting"].contains(model.state) || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
+                }.disabled(!model.canInteract || !["idle", "running", "waiting"].contains(model.state) || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
                     .accessibilityLabel("添加图片")
                 Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
                     .accessibilityLabel("模型与思考强度")
             }
+        }
     }
     private func submitMessage() {
         Task { await send() }
@@ -164,7 +167,7 @@ struct ConversationView: View {
                 BlankState(
                     text: model.history["syncing"].bool == true ? "正在同步会话…" : "暂无会话记录", loading: model.history["syncing"].bool == true, symbol: "bubble.left.and.bubble.right")
             }
-            ForEach(model.history["controls"]["requests"].array, id: \.requestKey) { request in
+            ForEach(model.conversationReadOnly ? [] : model.history["controls"]["requests"].array, id: \.requestKey) { request in
                 NativeRequestView(request: request).id(request.requestKey)
             }
             let unsupported = model.history["pendingRequests"].array.count - model.history["controls"]["requests"].array.count
@@ -193,7 +196,7 @@ struct ConversationView: View {
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if model.editingMessage != .null {
+            if !model.conversationReadOnly && model.editingMessage != .null {
                 HStack {
                     Text("编辑消息").font(.caption)
                     Spacer()
@@ -208,7 +211,7 @@ struct ConversationView: View {
                 }
             }
             if loadingImages || submitting { ProgressView().controlSize(.small) }
-            if !images.isEmpty {
+            if !model.conversationReadOnly && !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 12) {
                         ForEach(Array(images.enumerated()), id: \.offset) { index, url in
@@ -223,7 +226,7 @@ struct ConversationView: View {
         }.padding(.horizontal, 16)
     }
     private func send() async {
-        guard !submitting, model.canWrite, !loadingImages else { return }
+        guard !submitting, model.canInteract, !loadingImages else { return }
         submitting = true; defer { submitting = false }
         if await model.compose(images: images.map(JSONValue.string)) { photos = [] }
     }
@@ -279,7 +282,7 @@ struct TimelineEntry: View {
     let item: JSONValue
     let threadID: String
     private var canEdit: Bool {
-        !contentContext.isReadOnly && model.canWrite && model.selectedThread?.id == threadID &&
+        !contentContext.isReadOnly && model.canInteract && model.selectedThread?.id == threadID &&
         model.state == "idle" && model.history["syncing"].bool != true &&
         item["type"].text == "userMessage" && item["turnId"] != .null &&
         item["turnId"] == model.history["controls"]["lastTurnId"] &&
@@ -289,7 +292,12 @@ struct TimelineEntry: View {
     var body: some View {
         let kind = item["type"].text
         if kind == "turn" {
-            Text(item["title"].text + " · " + item["status"].text).font(.system(size: 10)).foregroundStyle(Design.secondary).frame(maxWidth: .infinity).padding(.vertical, 3)
+            VStack(spacing: 3) {
+                Text(item["title"].text + " · " + item["status"].text)
+                if case .number(let completed) = item["data"]["completedAt"] {
+                    Text("完成于 " + Date(timeIntervalSince1970: completed).formatted(date: .abbreviated, time: .standard))
+                }
+            }.font(.system(size: 10)).foregroundStyle(Design.secondary).frame(maxWidth: .infinity).padding(.vertical, 3)
         } else if ["userMessage", "steeringUserMessage", "agentMessage"].contains(kind) {
             let user = kind != "agentMessage"
             VStack(alignment: .leading, spacing: 11) {
@@ -308,6 +316,13 @@ struct TimelineEntry: View {
                 ForEach(refs.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
             }.padding(.leading, user ? 32 : 0)
 
+        } else if !item["subagents"].array.isEmpty {
+            SubagentLinks(item: item, parentID: threadID)
+            if kind == "collabAgentToolCall" {
+                DisclosureGroup("协作详情") {
+                    Text(item["data"].formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                }.font(.caption).tint(Design.secondary)
+            }
         } else if !item["artifacts"].array.isEmpty {
             MessageThumbnails(parts: [], refs: item["artifacts"].array, threadID: threadID)
             ForEach(item["artifacts"].array.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
@@ -383,11 +398,11 @@ struct ModelInformationView: View {
                 Picker("模型", selection: $selectedModel) {
                     if !choices.contains(where: { $0["id"].text == selectedModel }) { Text(selectedModel.isEmpty ? "未提供" : selectedModel).tag(selectedModel) }
                     ForEach(choices, id: \.stableID) { Text($0["name"].text).tag($0["id"].text) }
-                }.pickerStyle(.menu).disabled(choices.isEmpty || saving || !model.canWrite)
+                }.pickerStyle(.menu).disabled(choices.isEmpty || saving || !model.canInteract)
                 Picker("思考强度", selection: $effort) {
                     if !efforts.contains(effort) { Text(effort.isEmpty ? "未提供" : effort).tag(effort) }
                     ForEach(efforts, id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.menu).disabled(efforts.isEmpty || saving || !model.canWrite)
+                }.pickerStyle(.menu).disabled(efforts.isEmpty || saving || !model.canInteract)
                 if let failure { Text(failure).foregroundStyle(.red) }
                 if !loading && choices.isEmpty { Text("暂未读取到本机模型目录").foregroundStyle(Design.secondary) }
                 Text("从下一轮生效").font(.caption).foregroundStyle(Design.secondary)
@@ -399,7 +414,7 @@ struct ModelInformationView: View {
                             saving = true
                             if await model.operation("settings", fields: ["settings": .object(["model": .string(selectedModel), "effort": .string(effort)])]) { dismiss() }
                             saving = false
-                        } }.disabled(saving || loading || !model.canWrite || !efforts.contains(effort))
+                        } }.disabled(saving || loading || !model.canInteract || !efforts.contains(effort))
                     }
                 }
                 .task {
@@ -427,7 +442,7 @@ func groupedTimeline(_ items: [JSONValue]) -> [JSONValue] {
         }
     }
     for item in items {
-        if !["turn", "userMessage", "steeringUserMessage", "agentMessage", "error"].contains(item["type"].text) && item["artifacts"].array.isEmpty { pending.append(item) }
+        if !["turn", "userMessage", "steeringUserMessage", "agentMessage", "error"].contains(item["type"].text) && item["artifacts"].array.isEmpty && item["subagents"].array.isEmpty { pending.append(item) }
         else { flush(); result.append(item) }
     }
     flush(); return result
@@ -574,7 +589,7 @@ struct AsyncQuestionView: View {
                         Spacer()
                         Button("跳过") { touched = true; expanded = false }
                         Button("发送") { Task { await send() } }.buttonStyle(.borderedProminent)
-                            .disabled(answer.isEmpty || answer == lastSubmission || !model.canWrite || submitting)
+                            .disabled(answer.isEmpty || answer == lastSubmission || !model.canInteract || submitting)
                     }.font(.caption)
                 }.padding(16).background(Design.background, in: RoundedRectangle(cornerRadius: 18)).disabled(submitting)
             } else {
@@ -598,7 +613,7 @@ struct AsyncQuestionView: View {
         .onChange(of: question["active"]) { _, value in if value.bool != true && !touched { expanded = false } }
     }
     private func send() async {
-        guard !submitting, !answer.isEmpty, answer != lastSubmission, model.canWrite, model.selectedThread?.id == threadID else { return }
+        guard !submitting, !answer.isEmpty, answer != lastSubmission, model.canInteract, model.selectedThread?.id == threadID else { return }
         touched = true; submitting = true; defer { submitting = false }
         let sent = answer
         if await model.answerQuestion(question, answer: sent, threadID: threadID) { submitted = true; lastSubmission = sent; expanded = false }

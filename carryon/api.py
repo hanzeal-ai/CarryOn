@@ -17,7 +17,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         bridge.require()
         if not hasattr(bridge,'standby'):return 200,{'supported':False,'enabled':False,'effective':False}
         return 200,bridge.standby.status()
-    if not remote and (path in ('/api/projects','/api/workspace/threads','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences','/api/notifications/push') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',path)):
+    if not remote and (path in ('/api/projects','/api/workspace/threads','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/clear-read','/api/notifications/preferences','/api/notifications/push') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',path)):
         if not hasattr(bridge,'workspace'):raise BridgeError('工作区功能尚未启用，请升级本机服务',503)
         return bridge.workspace.dispatch('local',method,path,data,parse_qs(parsed.query))
     if remote:
@@ -25,19 +25,20 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
         nonlocal result
         result = (status, body)
     if method == "GET" and path == "/api/status":
-        respond(200, bridge.status())
+        respond(200, bridge.lifecycle.status() if hasattr(bridge, 'lifecycle') else bridge.status())
         return result
     if method == "POST" and path == "/api/bridge":
         if type(data.get("enabled")) is not bool:
             raise ValueError("enabled 必须为布尔值")
-        respond(200, bridge.enable() if data["enabled"] else bridge.disable())
+        respond(200, bridge.lifecycle.configure(data['enabled']) if hasattr(bridge, 'lifecycle')
+                else bridge.enable() if data["enabled"] else bridge.disable())
         return result
     bridge.require()
     if method == 'GET' and path == '/api/coordination':
@@ -69,8 +70,13 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         parent = parse_qs(parsed.query).get('parentId', [''])[0] if parts[2] == 'side-chats' else None
         respond(200, (bridge.image if parts[4] == "images" else bridge.artifact)(parts[3], parts[5], parent))
     elif method == "GET" and path.startswith("/api/threads/") and path.endswith("/history"):
-        history = bridge.history(path.split("/")[3])
+        values = parse_qs(parsed.query, keep_blank_values=True).get('limit', ['40'])
+        if len(values) != 1 or not re.fullmatch(r'[0-9]{1,4}', values[0]) or not 1 <= int(values[0]) <= 4000:
+            raise ValueError('limit 必须为 1 到 4000 的整数')
+        history = bridge.history(path.split("/")[3], limit=int(values[0]))
         respond(200, {k: v for k, v in history.items() if k != "turns"})
+    elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/subagents'):
+        respond(200, bridge.subagents.list(path.split('/')[3]))
     elif method == "GET" and path.startswith('/api/threads/') and path.endswith('/queue'):
         respond(200, bridge.queue(path.split('/')[3]))
     elif method == "POST" and path == "/api/threads":

@@ -176,6 +176,69 @@ class WorkspaceTests(unittest.TestCase):
     def activity(self, reader='local', **query):
         return self.workspace.dispatch(reader,'GET','/api/activity',None,query)[1]
 
+    def test_read_activity_retained_cleared_per_reader_and_new_events_return(self):
+        self.observe();state=self.observe(status='completed')
+        sequence=self.workspace.latest_sequence(T)
+        self.workspace.read('local',T,sequence)
+        retained=self.activity(includeRead=['true'])
+        self.assertEqual(retained['total'],1)
+        self.assertTrue(retained['threads'][0]['activityRead'])
+        self.assertEqual(retained['threads'][0]['projectName'],'same')
+        self.assertEqual(self.activity()['total'],0)  # Read history is not a badge.
+        self.workspace.clear_read('local')
+        self.assertEqual(self.activity(includeRead=['true'])['total'],0)
+        self.assertEqual(self.activity('binding:other',includeRead=['true'])['total'],1)
+        self.assertEqual(len(self.workspace.events('local')['events']),2)
+        self.assertIn(T,self.workspace.thread_ids())
+        restored=Workspace(self.bridge);restored.catalog_refresh()
+        self.assertEqual(restored.dispatch('local','GET','/api/activity',None,{'includeRead':['true']})[1]['total'],0)
+        state=copy.deepcopy(state)
+        state['turns'].append({'turnId':'turn-2','status':'completed','items':[]})
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        self.workspace.clear_read('local')  # An unread event must survive a clear race.
+        result=self.activity(includeRead=['true'])
+        self.assertEqual(result['total'],1)
+        self.assertFalse(result['threads'][0]['activityRead'])
+
+    def test_native_read_clear_and_readonly_remote_clear(self):
+        self.observe();self.observe(status='completed')
+        self.native_read_event()
+        self.assertTrue(self.activity('binding:a',includeRead=['true'])['threads'][0]['activityRead'])
+        code,_=scoped_dispatch(self.bridge,'POST','/api/notifications/clear-read',{},False,'a',activity_owner='alice')
+        self.assertEqual(code,200)
+        self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/activity?includeRead=true',None,False,'a',activity_owner='alice')[1]['total'],0)
+        self.assertEqual(self.activity('binding:b',includeRead=['true'])['total'],1)
+
+    def test_clear_read_pending_activity_does_not_answer_request(self):
+        self.observe(request=True)
+        self.workspace.read('local',T,self.workspace.latest_sequence(T))
+        self.workspace.clear_read('local')
+        self.assertEqual(self.activity(includeRead=['true'])['total'],0)
+        self.assertTrue(self.bridge.ipc.states[T]['requests'])
+        self.assertEqual(self.activity()['total'],1)  # Pending actions remain independently counted.
+
+    def test_accounts_on_same_binding_clear_independently(self):
+        self.observe();self.observe(status='completed');self.native_read_event()
+        def call(owner,method='GET',path='/api/activity?includeRead=true',body=None):
+            return scoped_dispatch(self.bridge,method,path,body,False,'shared',activity_owner=owner)[1]
+        self.assertEqual(call('alice')['total'],1)
+        call('alice','POST','/api/notifications/clear-read',{'activityOwner':'bob'})
+        self.assertEqual(call('alice')['total'],0)
+        self.assertEqual(call('bob')['total'],1)
+        from carryon.errors import BridgeError
+        with self.assertRaises(BridgeError):
+            scoped_dispatch(self.bridge,'POST','/api/notifications/clear-read',{},False,'shared')
+
+    def test_completion_uses_native_time_not_catalog_update(self):
+        from carryon.timeline import project_turn,completion_time
+        self.observe()
+        state=self.observe(status='completed')
+        turn=state['turns'][0];turn.update(turnStartedAtMs=1700000000000,durationMs=42000)
+        self.assertEqual(project_turn(turn,0)[0][0]['data']['completedAt'],1700000042)
+        self.assertEqual(self.activity()['threads'][0]['completedAt'],1700000042)
+        self.assertIsNone(completion_time({**turn,'status':'inProgress'}))
+        self.assertIsNone(completion_time({'status':'completed','durationMs':42}))
+
     def test_activity_includes_each_enabled_notification_kind(self):
         for kind in ('message','done','failed','approval'):
             with self.subTest(kind=kind):

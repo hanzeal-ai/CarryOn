@@ -23,6 +23,8 @@ def serve(handler, session_key, device_id):
 
     def send(payload):
         with server.auth_lock, server.lock:
+            from .workspace_access import require
+            require(server, session_key, device_id)
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
             if device_id not in server.config['devices'] or server.devices.get(device_id) is not device:
@@ -55,6 +57,8 @@ def serve(handler, session_key, device_id):
         release(previous)
         sid = uuid.uuid4().hex
         with server.auth_lock, server.lock:
+            from .workspace_access import require
+            require(server, session_key, device_id)
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
             if device_id not in server.config['devices'] or server.devices.get(device_id) is not device or device.closed:

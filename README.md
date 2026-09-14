@@ -8,9 +8,9 @@ Switch devices. Carry on.
 
 云端 example 已提供同进程控制台后端与设备连接模块，使用方法见 [云端控制台指南](docs/CONSOLE.md)。
 
-**普通用户：安装 CarryOn.app，双击后自动打开本地控制台。开发者：`carryon start`。** 安装包自带 Python，运行不需要 npm/pip 依赖。当前支持 macOS 路径，已记录的 Codex 内部 IPC 验证版本为 26.901.51231。
+**首次使用：安装 CarryOn.app 后进入初始化向导，或执行 `carryon init`。日常运行：`carryon start`。** 安装包自带 Python，运行不需要 npm/pip 依赖。当前支持 macOS 路径，已记录的 Codex 内部 IPC 验证版本为 26.901.51231。
 
-当前版本 0.2.1。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。
+当前版本 0.2.2。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。
 
 - [GitHub Actions 与阿里云部署](deployment/README.md)：隔离网关、部署开关和回滚。
 - [品牌与升级说明](docs/BRANDING.md)：CarryOn 命名及升级步骤。
@@ -23,15 +23,20 @@ Switch devices. Carry on.
 ## 快速使用
 
 ```sh
+carryon init
 carryon start
 carryon status
 carryon open
 carryon stop
 ```
 
+首次 `init` 填写云端 HTTPS 地址、选择权限，用已登录 CarryOn 的 iOS App 扫码确认；绑定后默认自动启动，也可选择仅保存配置。CLI 和桌面端共用初始化进度，重复执行可续办，已有绑定不重复扫码。云端、CLI 和 iOS 需使用支持工作区绑定的新版本。
+
+日常 `start` 后台启动并主动连接 Codex；Codex 尚未打开时显示等待并自动重连。默认不打开浏览器，按需使用 `open` 或 `start --open`。`members` 管理当前工作区账号权限，详见 [初始化和工作区授权](docs/ONBOARDING.md)。
+
 源码开发者在项目根目录使用 `python3 -m carryon start`。默认数据目录为 `~/Library/Application Support/CarryOn`，可通过 `CARRYON_HOME` 或命令后的 `--state-dir` 设置。旧源码项目 `.runtime` 不自动迁移，有历史请求时请按安装文档沿用原目录。
 
-在 CLI 执行 `carryon bridge on`，或在 CarryOn 桌面端开启桥接。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
+`start` 自动开启桥接；`bridge off` 可暂停桥接及自动重连。已有会话需先在 Codex App 中打开。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
 
 关闭页面不停止服务；使用桌面端「停止服务」或 CLI stop。重复启动复用同一个数据目录下的服务。CarryOn 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
 
@@ -51,7 +56,7 @@ carryon cloud disconnect
 
 命令返回表示申请已提交，绑定由本地服务在云端确认后自动完成。无需输入一次性配对码或设备 Token。多实例时每条命令带上对应的 `--state-dir`。
 
-默认只读。允许远程投递、编辑、设置和审批需要桌面端明确勾选远程控制或使用 `--allow-control`。云端不能开启已关闭的本地桥接。参考网关及自定义协议见云端接入文档；云端控制台提供单管理员账号密码与扫码登录，不提供多用户账号系统或公共托管。
+默认只读。允许远程投递、编辑、设置和审批需要明确授权。云端不能开启已关闭的本地桥接。云端支持账号密码自助注册、按工作区授权及原有管理员登录；新账号不会自动看到已有工作区。参考网关及自定义协议见云端接入文档，公共托管及账号恢复尚未提供。
 
 ## 当前业务能力
 

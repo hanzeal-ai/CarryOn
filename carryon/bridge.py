@@ -82,6 +82,32 @@ def snapshot_history(state, turn_cache=None, limit=None):
 
 
 class Bridge:
+    @property
+    def subagents(self):
+        from .subagents import Subagents
+        return Subagents(self)
+
+    def subagent_history(self, thread_id, limit=None):
+        row = self.catalog.get(thread_id)
+        ipc, generation = self.require()
+        state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
+        persisted = state is None
+        if persisted:
+            state = self.catalog.rollout_state(thread_id, limit=limit)
+        result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
+        if persisted:
+            result.update(source='local-rollout', controls={}, pendingRequests=[])
+            if state.get('rolloutWindow'):
+                result.update(historyWindow=state['rolloutWindow'], earlierDurationMs=state['earlierDurationMs'])
+        else:
+            try: result['queue'] = self.queue(thread_id)
+            except (ValueError, OSError): pass
+        result = self.subagents.decorate(result, row)
+        result['historyRevision'] += ':' + hashlib.sha256(json.dumps([result['access'], result.get('queue')], sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            self.check_generation(ipc, generation)
+        return result
+
     def __init__(self, socket_path, catalog, journal, ipc_factory=DesktopIPC):
         self.socket_path = socket_path
         self.catalog = catalog
@@ -178,7 +204,7 @@ class Bridge:
 
     def select_controller(self, thread_id):
         valid_id(thread_id)
-        self.catalog.get(thread_id)
+        self.subagents.assert_interactive(thread_id)
         ipc, generation = self.require()
         _, state = ipc.snapshot(thread_id)
         idle_snapshot(state)
@@ -269,10 +295,13 @@ class Bridge:
             self.check_generation(ipc, generation)
         return result
 
-    def preview_history(self, thread_id):
+    def preview_history(self, thread_id, limit=None):
         """Persisted display only while the background native loader establishes authority."""
         ipc, generation = self.require()
         row = self.catalog.get(thread_id)
+        from .subagents import is_subagent
+        if is_subagent(row):
+            return self.subagent_history(thread_id, limit)
         try:
             result = dict(self.catalog.history(thread_id))
         except (ValueError, OSError):
@@ -287,7 +316,10 @@ class Bridge:
         return result
 
     def history(self, thread_id, limit=None):
-        self.catalog.get(thread_id)
+        row = self.catalog.get(thread_id)
+        from .subagents import is_subagent
+        if is_subagent(row):
+            return self.subagent_history(thread_id, limit)
         ipc, generation = self.require()
         try:
             state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
@@ -336,6 +368,7 @@ class Bridge:
         if not isinstance(prompt,str):raise ValueError('消息必须是文本')
         if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_id):raise ValueError('requestId 无效')
         valid_id(thread_id)
+        self.subagents.assert_interactive(thread_id)
         fingerprint=digest([thread_id,prompt,images])
         ipc,generation=self.require()
         previous=self.journal.get(request_id)
@@ -381,7 +414,7 @@ class Bridge:
             if any(j["threadId"] == thread_id and j["state"] in (
                     "preparing", "dispatching", "accepted", "uncertain") for j in self.journal.list()):
                 raise BridgeError("此会话已有未完成或结果待确认的请求，请先核对请求状态")
-            self.catalog.get(thread_id)
+            self.subagents.assert_interactive(thread_id)
             job = {"id": request_id, "kind": kind, "threadId": thread_id,
                    "state": "preparing", "created": time.time(), "fingerprint": fingerprint,
                    "clientMessageId": str(uuid.uuid4())}
@@ -413,6 +446,7 @@ class Bridge:
                 with self.lock:
                     self.check_generation(ipc, generation)
                     if authorize:authorize()
+                    self.subagents.assert_interactive(job['threadId'])
                     self.journal.update(job["id"], state="dispatching")
                     dispatched = True
                     write()
