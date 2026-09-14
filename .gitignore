@@ -13,3 +13,6 @@ carryon/web/
 *.key
 *token.txt
 gateway.json
+
+.venv-apns/
+*.p8

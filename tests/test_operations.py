@@ -47,6 +47,24 @@ class ContractTests(unittest.TestCase):
         _, version, p = build('edit', {'turnId': 'turn-1', 'prompt': 'new', 'confirmed': True}, state())
         self.assertEqual(version, 2); self.assertFalse(p['shouldSendPermissionOverrides'])
 
+    def test_resume_requires_interrupted_current_turn_and_preserves_native_input(self):
+        s = state(); s['turns'][0]['status'] = 'interrupted'
+        s['turns'][0]['params']['input'] += [{'type': 'localImage', 'path': '/tmp/image.png'}, {'type': 'text', 'text': 'file context'}]
+        original = copy.deepcopy(s)
+        method, version, params = build('resume', {'turnId': 'turn-1', 'prompt': 'untrusted replacement'}, s)
+        self.assertEqual(method, 'thread-follower-edit-last-user-turn')
+        self.assertEqual(version, 2)
+        self.assertEqual(params['message'], 'original')
+        self.assertFalse(params['shouldSendPermissionOverrides'])
+        self.assertEqual(s, original)
+        for status in ('completed', 'inProgress', 'failed'):
+            s['turns'][0]['status'] = status
+            with self.assertRaises(ValueError): build('resume', {'turnId': 'turn-1'}, s)
+        s['turns'][0]['status'] = 'interrupted'
+        with self.assertRaises(ValueError): build('resume', {'turnId': 'old'}, s)
+        s['requests'] = [{'id': 1}]
+        with self.assertRaises(ValueError): build('resume', {'turnId': 'turn-1'}, s)
+
     def test_settings_validate_native_fields_and_reject_unknown_parameters(self):
         for value in ({'unknownField': True}, {'model': []}, {'effort': ''}, {'sandboxPolicy': {'type':'evil'}}):
             with self.assertRaises(ValueError): build('settings', {'settings': value}, state())

@@ -88,3 +88,26 @@ class HistoryImageTests(unittest.TestCase):
             with self.assertRaises(ValueError):read_history_image(history,identifier)
             path.write_bytes(b'x'*(8*1024*1024+1))
             with self.assertRaises(ValueError):read_history_image(history,identifier)
+
+
+class LocalImageBodyTests(unittest.TestCase):
+    def test_compose_and_steer_use_image_budget_without_expanding_other_routes(self):
+        import io
+        import json
+        from email.message import Message
+        from carryon.server import Handler
+        from carryon.images import MAX_REQUEST_BYTES
+        payload = json.dumps({'prompt': '', 'images': ['data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff' + b'x' * 110000 + b'\xff\xd9').decode()]}).encode()
+        for suffix in ('messages', 'compose', 'operations'):
+            handler = object.__new__(Handler)
+            handler.path = '/api/threads/t/' + suffix
+            handler.headers = Message()
+            handler.headers['Content-Type'] = 'application/json'
+            handler.headers['Content-Length'] = str(len(payload))
+            handler.rfile = io.BytesIO(payload)
+            self.assertEqual(handler.body()['prompt'], '')
+            handler.headers.replace_header('Content-Length', str(MAX_REQUEST_BYTES + 1))
+            with self.assertRaises(ValueError): handler.body()
+        handler.path = '/api/controller'
+        handler.headers.replace_header('Content-Length', str(len(payload)))
+        with self.assertRaises(ValueError): handler.body()

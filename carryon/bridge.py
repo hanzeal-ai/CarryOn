@@ -349,8 +349,8 @@ class Bridge:
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
             if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize)
             if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
-            if images:raise ValueError('运行中补充和等待队列暂不支持图片，请保留草稿并在空闲后发送')
             data={'requestId':request_id,'prompt':prompt}
+            if images:data['images']=images
             if status=='waiting':
                 data.update(action='queue-add',queueFingerprint=self.queue(thread_id)['fingerprint'])
             else:

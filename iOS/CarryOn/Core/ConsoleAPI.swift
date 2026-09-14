@@ -49,8 +49,11 @@ public actor ConsoleAPI {
     public let address: ConsoleAddress
     private let session: URLSession
     private var cookie: String?
-    public init(address: ConsoleAddress, configuration: URLSessionConfiguration = .ephemeral) {
+    private var loginCookie: String?
+    private let credentials: (any SessionCredentials)?
+    public init(address: ConsoleAddress, configuration: URLSessionConfiguration = .ephemeral, credentials: (any SessionCredentials)? = nil) {
         self.address = address
+        self.credentials = credentials
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
@@ -63,24 +66,72 @@ public actor ConsoleAPI {
         request.httpMethod = method ?? (body == nil ? "GET" : "POST")
         request.setValue(address.origin, forHTTPHeaderField: "Origin")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let cookie { request.setValue("carryon-console=" + cookie, forHTTPHeaderField: "Cookie") }
+        let requestCookie = cookie
+        if let requestCookie { request.setValue("carryon-console=" + requestCookie, forHTTPHeaderField: "Cookie") }
         if let body { request.httpBody = try body.encoded(); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError("服务器响应无效") }
-        if response.statusCode == 401 { cookie = nil }
+        if response.statusCode == 401 {
+            if cookie == requestCookie { cookie = nil }
+            do {
+                if let requestCookie { try credentials?.remove(server: address.base.absoluteString, matching: requestCookie) }
+            }
+            catch { throw APIError("登录已失效，安全保存的状态未能清除，请重新登录", status: 401) }
+        }
         let result = try? JSONDecoder().decode(JSONValue.self, from: data)
         guard (200..<300).contains(response.statusCode) else {
             throw APIError(result?["error"].string ?? "请求失败（HTTP \(response.statusCode)）", status: response.statusCode)
         }
         guard let result, result.object != nil else { throw APIError("服务器返回了无效数据") }
-        if route == "login" {
+        if route == "login" || (route == "qr/poll" && result["authenticated"].bool == true) {
             let fields = response.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key)] = String(describing: $1.value) }
             guard let token = HTTPCookie.cookies(withResponseHeaderFields: fields, for: request.url!).first(where: { $0.name == "carryon-console" })?.value,
                   !token.isEmpty else { throw APIError("登录响应缺少会话凭证") }
             cookie = token
+            loginCookie = token
         }
-        if route == "logout" { cookie = nil }
+        if route == "logout" {
+            if cookie == requestCookie { cookie = nil }
+            if let requestCookie { try credentials?.remove(server: address.base.absoluteString, matching: requestCookie) }
+        }
         return result
+    }
+    /// A new session stays in memory until its directory is valid and initialization is not cancelled.
+    public func completeLogin() async throws -> [Record] {
+        let result = try await request("session")
+        guard case .array(let values) = result["devices"] else { throw APIError("设备目录格式不正确") }
+        let devices = try values.map(Record.init)
+        try Task.checkCancellation()
+        guard let token = loginCookie, token == cookie else { throw APIError("登录会话无效") }
+        try credentials?.save(token, server: address.base.absoluteString)
+        return devices
+    }
+
+    /// Cleanup runs independently of the cancelled UI task; it only targets this new session.
+    public func cancelLogin() async throws {
+        guard let token = loginCookie else { invalidate(); return }
+        loginCookie = nil
+        var cleanupErrors: [String] = []
+        do {
+            try credentials?.remove(server: address.base.absoluteString, matching: token)
+        } catch { cleanupErrors.append("新登录凭证未能从本机清除") }
+        do {
+            var request = URLRequest(url: try address.url("logout"))
+            request.httpMethod = "POST"
+            request.setValue(address.origin, forHTTPHeaderField: "Origin")
+            request.setValue("carryon-console=" + token, forHTTPHeaderField: "Cookie")
+            let session = session
+            let cleanupRequest = request
+            let status = try await Task.detached {
+                let (_, response) = try await session.data(for: cleanupRequest)
+                return (response as? HTTPURLResponse)?.statusCode
+            }.value
+            guard let status, (200..<300).contains(status) || status == 401 else {
+                throw APIError("会话撤销未确认")
+            }
+        } catch { cleanupErrors.append("未能确认服务端撤销新登录，请恢复网络后在服务端核对会话") }
+        invalidate()
+        if !cleanupErrors.isEmpty { throw APIError(cleanupErrors.joined(separator: "；")) }
     }
     public func device(_ id: String, path: String, body: JSONValue? = nil) async throws -> JSONValue {
         guard path.hasPrefix("/api/"), !path.contains("#") else { throw APIError("设备接口路径无效") }
@@ -106,6 +157,10 @@ public actor ConsoleAPI {
             } onCancel: { stream.close() }
             return stream
         } catch { stream.close(); throw error }
+    }
+    public func restoreSession() throws -> Bool {
+        cookie = try credentials?.load(server: address.base.absoluteString)
+        return cookie != nil
     }
     public func invalidate() { cookie = nil; session.invalidateAndCancel() }
 }

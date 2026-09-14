@@ -109,7 +109,8 @@ class Workspace:
             self.db.commit()
             self.revision+=1
             self.fingerprints[tid]=fingerprint
-            self.states[tid]={'status':status,'actionable':bool(requests) or status['state']=='waiting' or failed,'failed':failed}
+            self.states[tid]={'status':status,'actionable':bool(requests) or status['state']=='waiting' or failed,'failed':failed,
+                              'needsConfirmation':bool(requests) or status['state']=='waiting'}
         if changed:self.bridge.notify()
 
     def preferences(self,reader,data=None):
@@ -117,8 +118,11 @@ class Workspace:
             if data is not None:
                 if not isinstance(data,dict) or set(data)!=set(KINDS) or any(type(v) is not bool for v in data.values()):raise ValueError('通知偏好必须包含四类布尔开关')
                 self.db.execute('INSERT OR REPLACE INTO notification_preferences VALUES(?,?)',(reader,json.dumps(data)));self.db.commit()
+                self.revision+=1
             row=self.db.execute('SELECT body FROM notification_preferences WHERE reader=?',(reader,)).fetchone()
-            return json.loads(row[0]) if row else dict.fromkeys(KINDS,True)
+            result=json.loads(row[0]) if row else dict.fromkeys(KINDS,True)
+        if data is not None:self.bridge.notify()
+        return result
 
     def read(self,reader,tid,sequence):
         valid_id(tid)
@@ -152,10 +156,13 @@ class Workspace:
         with self.lock:
             if self.error:raise ValueError(self.error)
             rows=list(self.rows.values());states=dict(self.states)
-            unread={row[0]:row[1] for row in self.db.execute('''SELECT e.thread_id,MAX(e.sequence) FROM notification_events e
+            preferences=self.preferences(reader)
+            unread_events=self.db.execute('''SELECT e.thread_id,e.kind FROM notification_events e
                 LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
                 LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader='native:codex'
-                WHERE e.sequence>MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0)) GROUP BY e.thread_id''',(reader,))}
+                WHERE e.sequence>MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0)) GROUP BY e.thread_id,e.kind''',(reader,)).fetchall()
+            unread={row[0] for row in unread_events}
+            notified={tid for tid,kind in unread_events if preferences.get(kind,False)}
             sequences={row[0]:row[1] for row in self.db.execute('SELECT thread_id,MAX(sequence) FROM notification_events GROUP BY thread_id')}
         ipc,_=self.bridge.require();groups={};threads=[]
         for row in rows:
@@ -166,17 +173,47 @@ class Workspace:
             actionable=known.get('actionable',False)
             pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),row.get('projectless',False))
             thread={**row,'projectId':pid,'status':status,'actionable':actionable,'failed':known.get('failed',False),
-                    'unread':tid in unread,'readSequence':sequences.get(tid,0)}
+                    'unread':tid in unread,'readSequence':sequences.get(tid,0),
+                    'activity':tid in notified or (known.get('failed',False) and preferences['failed'])
+                               or (known.get('needsConfirmation',False) and preferences['approval'])}
             threads.append(thread)
             group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('projectRoot',row.get('cwd','')),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
         return sorted(groups.values(),key=lambda g:(-bool(g['waiting']),-bool(g['running']),g['name'],g['id'])),threads
 
+    def push_snapshot(self,reader,after=None):
+        # Optimistic consistency avoids taking workspace -> bridge locks in reverse order.
+        for _ in range(5):
+            with self.lock:revision=self.revision
+            _,threads=self.projection(reader)
+            visible={t['id'] for t in threads if t['activity']}
+            with self.lock:
+                if self.revision!=revision:continue
+                preferences=self.preferences(reader)
+                if after is None:
+                    after=self.db.execute('SELECT COALESCE(MAX(sequence),0) FROM notification_events').fetchone()[0]
+                packet=self.events(reader,after,100)
+                eligible=[]
+                for event in packet['events']:
+                    tid=event['threadId'];kind=event['kind']
+                    if tid not in visible or not preferences.get(kind,False):continue
+                    read=self.db.execute("SELECT COALESCE(MAX(sequence),0) FROM notification_readers WHERE thread_id=? AND reader IN (?, 'native:codex')",(tid,reader)).fetchone()[0]
+                    if event['sequence']<=read:continue
+                    if kind=='message' and any(preferences[terminal] and self.db.execute(
+                        'SELECT 1 FROM notification_events WHERE event_id=?',(digest([tid,event['turnId'],terminal]),)).fetchone()
+                        for terminal in ('done','failed')):continue
+                    eligible.append(event)
+                return {'events':eligible,'nextSequence':packet['nextSequence'],'badge':len(visible)}
+        raise ValueError('通知状态正在变化，请稍后重试')
+
     def dispatch(self,reader,method,path,data,query):
         self.bridge.require()
         data={} if data is None else data
         if not isinstance(data,dict):raise ValueError('请求体必须为对象')
+        if path=='/api/notifications/push' and method=='GET':
+            after=query.get('after')
+            return 200,self.push_snapshot(reader,max(0,int(after[0])) if after else None)
         if path=='/api/notifications/preferences' and method in ('GET','POST'):
             return 200,{'preferences':self.preferences(reader,data if method=='POST' else None)}
         if path=='/api/notifications/read' and method=='POST':
@@ -190,14 +227,20 @@ class Workspace:
         if path=='/api/projects':
             groups=[g for g in groups if search in (g['name']+' '+g['cwd']).casefold()]
             return 200,{'projects':groups[offset:offset+limit],'total':len(groups),'nextOffset':offset+limit}
-        if path=='/api/activity':threads=[t for t in threads if t['actionable']]
+        if path=='/api/activity':threads=[t for t in threads if t['activity'] and t['id']!=query.get('excludeThreadId',[''])[0]]
         elif path.startswith('/api/projects/') and path.endswith('/threads'):
             pid=path.split('/')[3];threads=[t for t in threads if t['projectId']==pid]
-        else:return 404,{'error':'接口不存在'}
+        elif path!='/api/workspace/threads':return 404,{'error':'接口不存在'}
         threads=[t for t in threads if search in (t.get('title','')+' '+t.get('cwd','')).casefold()]
+        if path=='/api/workspace/threads' and query.get('threadId'):
+            threads=[t for t in threads if t['id']==query['threadId'][0]]
         mode=query.get('filter',['all'])[0]
         if mode not in ('all','waiting','running'):raise ValueError('无效筛选')
         if mode=='waiting':threads=[t for t in threads if t['actionable']]
         if mode=='running':threads=[t for t in threads if t['status']['state']=='running']
         threads.sort(key=lambda t: (t.get('updated_at') or 0, t['id']), reverse=True)
-        return 200,{'threads':threads[offset:offset+limit],'total':len(threads),'nextOffset':offset+limit}
+        result={'threads':threads[offset:offset+limit],'total':len(threads),'nextOffset':offset+limit}
+        if path=='/api/activity':
+            current=query.get('currentThreadId',[''])[0]
+            result['currentThreadIncluded']=any(t['id']==current for t in threads)
+        return 200,result

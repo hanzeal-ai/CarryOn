@@ -20,7 +20,7 @@ def run(*args):subprocess.run(args,cwd=ROOT,check=True)
 def main():
     if sys.platform!='darwin':raise SystemExit('请在目标 macOS 架构上构建')
     out=ROOT/'dist';work=ROOT/'build';out.mkdir(exist_ok=True);work.mkdir(exist_ok=True)
-    assets=['example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','console-login.js','qrcode.js','style.css','mobile.css','mobile-ui.js']
+    assets=['logo.svg','favicon.png','apple-touch-icon.png','example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','console-login.js','qrcode.js','style.css','mobile.css','mobile-ui.js']
     common=[sys.executable,'-m','PyInstaller','--noconfirm','--log-level','WARN',
         '--paths',str(ROOT),'--collect-data','carryon','--collect-submodules','carryon',
         ]
@@ -45,6 +45,9 @@ def main():
     info_path=app/'Contents/Info.plist'
     info=plistlib.loads(info_path.read_bytes());info['LSMinimumSystemVersion']='13.0'
     info['CFBundleShortVersionString']=__version__;info['CFBundleVersion']=__version__
+    info['CFBundleIconFile']='CarryOn.icns'
+    for resource in (ROOT/'desktop/Resources').iterdir():
+        shutil.copy2(resource,app/'Contents/Resources'/resource.name)
     info_path.write_bytes(plistlib.dumps(info))
     run('codesign','--force','--deep','--sign',identity or '-',str(app))
     arch=platform.machine();prefix=f'CarryOn-{__version__}-macos-{arch}'

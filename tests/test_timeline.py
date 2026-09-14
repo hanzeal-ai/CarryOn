@@ -75,3 +75,17 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(result['runtime']['type'],'active')
         self.assertEqual(result['pendingRequests'],[{'id':'approval','method':'commandApproval'}])
         self.assertNotIn('PRIVATE_REQUEST',json.dumps(result))
+
+
+class UserRowIdentityTests(unittest.TestCase):
+    def test_placeholder_and_native_message_keep_identity_without_losing_native_id(self):
+        from carryon.timeline import project_turn
+        turn = {'turnId': 't', 'params': {'input': [{'type': 'text', 'text': 'hi'}]}, 'items': []}
+        placeholder = project_turn(turn, 0)[0][1]
+        turn['items'] = [{'id': 'native-user', 'type': 'userMessage', 'content': turn['params']['input']}]
+        native = project_turn(turn, 0)[0][1]
+        self.assertEqual(placeholder['id'], native['id'])
+        self.assertEqual(native['nativeId'], 'native-user')
+        turn['items'].append({'id': 'second', 'type': 'userMessage', 'content': turn['params']['input']})
+        rows = project_turn(turn, 0)[0]
+        self.assertEqual(len({r['id'] for r in rows}), len(rows))

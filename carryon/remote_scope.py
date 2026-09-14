@@ -30,7 +30,7 @@ def scoped_dispatch(bridge,method,target,data,control,binding,authorize=None):
     if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith('/api/'):
         raise ValueError('Invalid API path')
     if method not in ('GET','POST'):raise ValueError('Invalid method')
-    if (parsed.path in ('/api/projects','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',parsed.path)):
+    if (parsed.path in ('/api/projects','/api/workspace/threads','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences','/api/notifications/push') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',parsed.path)):
         if not hasattr(bridge,'workspace'):raise BridgeError('工作区功能尚未启用，请升级本机服务',503)
         return bridge.workspace.dispatch('binding:'+binding,method,parsed.path,data,parse_qs(parsed.query))
     if method=='POST' and not control:raise BridgeError('本机仅授权云端读取',403)

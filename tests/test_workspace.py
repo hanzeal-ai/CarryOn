@@ -71,6 +71,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(page['threads']),100);self.assertEqual(page['total'],125)
         page2=self.workspace.dispatch('local','GET','/api/projects/'+project['id']+'/threads',None,{'offset':['100']})[1]
         self.assertEqual(len(page2['threads']),25);self.assertEqual(page2['total'],125)
+        all_page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'offset':['100']})[1]
+        self.assertEqual(len(all_page['threads']),25);self.assertEqual(all_page['total'],125)
 
     def test_read_cursor_is_bounded_and_does_not_clear_concurrent_events(self):
         state=self.observe(request=True);first=self.workspace.latest_sequence(T)
@@ -87,8 +89,145 @@ class WorkspaceTests(unittest.TestCase):
         status,_=scoped_dispatch(self.bridge,'POST','/api/notifications/read',{'threadId':T,'sequence':self.workspace.latest_sequence(T)},False,'a')
         self.assertEqual(status,200)
         self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/projects?limit=1',None,False,'a')[1]['total'],2)
-        self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/activity',None,False,'a')[1]['total'],1)
+        self.assertEqual(scoped_dispatch(self.bridge,'GET','/api/activity',None,False,'a')[1]['total'],0)
         self.assertEqual(len(self.workspace.events('binding:a')['events']),1)
+
+    def test_all_sessions_sort_page_search_and_keep_live_status(self):
+        from carryon.api import dispatch
+        self.observe(T);self.observe(U,status='completed')
+        self.workspace.rows[T]['updated_at']=10
+        self.workspace.rows[U]['updated_at']=20
+        self.workspace.rows[U]['projectless']=True
+        self.workspace.preferences('binding:a',dict.fromkeys(('message','done','failed','approval'),False))
+        route='/api/workspace/threads'
+        status,first=scoped_dispatch(self.bridge,'GET',route+'?limit=1',None,False,'a')
+        self.assertEqual(status,200)
+        self.assertEqual(first['total'],2)
+        self.assertEqual(first['nextOffset'],1)
+        self.assertEqual(first['threads'][0]['id'],U)
+        second=dispatch(self.bridge,'GET',route+'?limit=1&offset=1')[1]
+        self.assertEqual(second['threads'][0]['id'],T)
+        self.assertEqual(second['threads'][0]['status']['state'],'running')
+        running=scoped_dispatch(self.bridge,'GET',route+'?filter=running',None,False,'a')[1]
+        self.assertEqual([t['id'] for t in running['threads']],[T])
+        searched=dispatch(self.bridge,'GET',route+'?search=Second')[1]
+        self.assertEqual([t['id'] for t in searched['threads']],[U])
+        self.workspace.rows[T]['updated_at']=20
+        tied=dispatch(self.bridge,'GET',route)[1]
+        self.assertEqual([t['id'] for t in tied['threads']],sorted([T,U],reverse=True))
+        self.bridge.ipc.states={}
+        self.assertTrue(all(t['status']['state']=='unknown' for t in dispatch(self.bridge,'GET',route)[1]['threads']))
+        self.assertEqual(scoped_dispatch(self.bridge,'POST',route,{},False,'a')[0],404)
+
+    def test_conversation_badge_excludes_current_thread_and_tracks_read_and_preferences(self):
+        self.observe(T);self.observe(T,status='completed')
+        self.observe(U,request=True)
+        def summary(current=T):
+            return self.workspace.dispatch('local','GET','/api/activity',None,{'limit':['1'],'currentThreadId':[current]})[1]
+        result=summary()
+        self.assertEqual(result['total'],2)
+        self.assertTrue(result['currentThreadIncluded'])
+        # Membership is checked across the full result, not just the first page.
+        self.assertTrue(summary(U)['currentThreadIncluded'])
+        other=self.workspace.dispatch('local','GET','/api/activity',None,{'excludeThreadId':[T]})[1]
+        self.assertEqual(other['total'],1)
+        self.assertEqual([t['id'] for t in other['threads']],[U])
+        self.workspace.read('local',T,self.workspace.latest_sequence(T))
+        self.assertFalse(summary()['currentThreadIncluded'])
+        self.assertEqual(summary()['total'],1)
+        self.workspace.read('local',U,self.workspace.latest_sequence(U))
+        self.assertEqual(summary()['total'],1)  # Reading does not approve a request.
+        self.workspace.preferences('local',{'message':True,'done':True,'failed':True,'approval':False})
+        self.assertEqual(summary()['total'],0)
+        self.workspace.preferences('local',dict.fromkeys(('message','done','failed','approval'),True))
+        self.observe(U,status='inProgress',request=False)
+        self.assertEqual(summary()['total'],0)
+
+    def test_push_snapshot_uses_preferences_dedup_and_read_cursors(self):
+        self.observe();self.observe(status='completed')
+        self.assertEqual(self.workspace.push_snapshot('local')['events'],[])  # Initial registration establishes baseline.
+        packet=self.workspace.push_snapshot('local',0)
+        self.assertEqual([e['kind'] for e in packet['events']],['done'])
+        self.assertEqual(packet['badge'],1)
+        self.assertEqual(packet['nextSequence'],2)
+        self.workspace.preferences('local',{'message':True,'done':False,'failed':True,'approval':True})
+        self.assertEqual([e['kind'] for e in self.workspace.push_snapshot('local',0)['events']],['message'])
+        self.workspace.read('local',T,2)
+        self.assertEqual(self.workspace.push_snapshot('local',0)['events'],[])
+        self.assertEqual(self.workspace.push_snapshot('local',0)['badge'],0)
+        self.assertEqual(self.workspace.push_snapshot('binding:other',0)['badge'],1)
+
+    def test_push_snapshot_retries_when_event_arrives_after_projection(self):
+        from unittest.mock import patch
+        self.observe()
+        original=self.workspace.projection
+        calls=[]
+        def interleaved(reader):
+            result=original(reader);calls.append(reader)
+            if len(calls)==1:self.observe(status='completed')
+            return result
+        with patch.object(self.workspace,'projection',side_effect=interleaved):
+            packet=self.workspace.push_snapshot('local',0)
+        self.assertEqual(len(calls),2)
+        self.assertEqual([e['kind'] for e in packet['events']],['done'])
+        self.assertEqual(packet['nextSequence'],2)
+        self.assertEqual(packet['badge'],1)
+
+    def activity(self, reader='local', **query):
+        return self.workspace.dispatch(reader,'GET','/api/activity',None,query)[1]
+
+    def test_activity_includes_each_enabled_notification_kind(self):
+        for kind in ('message','done','failed','approval'):
+            with self.subTest(kind=kind):
+                reader='binding:'+kind
+                self.workspace.preferences(reader,{k:k==kind for k in ('message','done','failed','approval')})
+                self.observe()
+                if kind=='approval':self.observe(request=True)
+                else:self.observe(status='failed' if kind=='failed' else 'completed')
+                result=self.activity(reader,limit=['1'])
+                self.assertEqual(result['total'],1)
+                self.assertEqual([t['id'] for t in result['threads']],[T])
+                self.assertTrue(result['threads'][0]['unread'])
+                self.workspace.read(reader,T,self.workspace.latest_sequence(T))
+                self.assertEqual(self.activity(reader)['total'],int(kind in ('failed','approval')))
+                self.workspace.preferences(reader,dict.fromkeys(('message','done','failed','approval'),False))
+                self.assertEqual(self.activity(reader)['total'],0)
+
+    def test_activity_preferences_refresh_persist_and_do_not_delete_unread(self):
+        self.observe();self.observe(status='completed')
+        self.assertEqual(self.activity()['total'],1)  # done + message merge into one row.
+        revision=self.workspace.revision;event_revision=self.bridge.event_revision
+        muted=dict.fromkeys(('message','done','failed','approval'),False)
+        self.workspace.preferences('local',muted)
+        self.assertGreater(self.workspace.revision,revision)
+        self.assertGreater(self.bridge.event_revision,event_revision)
+        self.assertEqual(self.activity()['total'],0)
+        self.assertEqual(self.activity('binding:other')['total'],1)
+        self.assertTrue(next(t for t in self.workspace.projection('local')[1] if t['id']==T)['unread'])
+        self.assertEqual(len(self.workspace.events('local')['events']),2)
+        restored=Workspace(self.bridge);restored.catalog_refresh()
+        self.assertEqual(restored.dispatch('local','GET','/api/activity',None,{})[1]['total'],0)
+        self.workspace.preferences('local',{**muted,'done':True})
+        self.assertEqual(self.activity()['total'],1)
+
+    def test_activity_read_cursor_preserves_later_events_and_native_read_clears(self):
+        self.observe();state=self.observe(status='completed')
+        first=self.workspace.latest_sequence(T)
+        state=copy.deepcopy(state)
+        state['turns'].append({'turnId':'turn-2','status':'completed','items':[]})
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        self.workspace.read('local',T,first)
+        self.assertEqual(self.activity()['total'],1)
+        self.native_read_event()
+        self.assertEqual(self.activity()['total'],0)
+        self.assertEqual(self.activity('binding:other')['total'],0)
+
+    def test_activity_excludes_initial_completed_history_but_keeps_unloaded_notifications(self):
+        self.observe(status='completed')
+        self.assertEqual(self.activity()['total'],0)
+        self.observe(U);self.observe(U,status='completed')
+        self.bridge.ipc.states={}
+        self.assertEqual([t['id'] for t in self.activity()['threads']],[U])
 
     def test_projectless_threads_share_recent_group_and_preserve_working_directories(self):
         self.workspace.rows[T]['projectless'] = True

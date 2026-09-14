@@ -40,7 +40,10 @@ struct WorkspaceSwitcher: View {
             }
             .scrollContentBackground(.hidden).background(Design.background)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("连接新工作区？") { help = true } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("连接新工作区？") { help = true }
+                        .foregroundStyle(Design.blue)
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭") }
             }
             .sheet(isPresented: $help) { WorkspaceConnectionHelp() }

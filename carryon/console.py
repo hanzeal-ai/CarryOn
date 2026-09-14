@@ -51,6 +51,12 @@ class ConsoleServer(Gateway):
                 if not ID.fullmatch(device) or not isinstance(record,dict) or any(not isinstance(record.get(k),str) or len(record[k])<32 for k in ('deviceToken','apiToken')):raise ValueError('设备登记文件无效')
             config['devices']=records
         super().__init__(address,config,ConsoleHandler)
+        self.push=None
+        if config.get('apns'):
+            if state_dir is None:raise ValueError('APNs 需要持久化 state-dir')
+            from .apns import APNsSender
+            from .push import PushService
+            self.push=PushService(self,Path(state_dir)/'push.sqlite',APNsSender(config['apns']))
 
     def replace_auth(self, config):
         updated=ConsoleAuth(config,self.account_settings.directory)
@@ -79,6 +85,10 @@ class ConsoleServer(Gateway):
                 # revoke old sessions, and still report an uncertain result to the caller.
                 self.replace_auth(self.account_settings.effective())
             return {'configured':True,'changed':True}
+
+    def server_close(self):
+        if getattr(self,'push',None):self.push.close()
+        super().server_close()
 
     def save_devices(self,records):
         if self.registry_path:save_json(self.registry_path,records)
@@ -114,6 +124,7 @@ class ConsoleServer(Gateway):
             streams=[sid for sid,e in self.console_streams.items() if e['device']==device]
             self.codes={k:v for k,v in self.codes.items() if v[0]!=device}
         for sid in streams:self.release_stream(sid)
+        if self.push:self.push.revoke(device)
 
     def prune(self):
         now=time.monotonic()
@@ -191,7 +202,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js',
+        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','mobile.css','mobile-ui.js','app.js','notification-client.js','client.js',
                  'cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
@@ -285,6 +296,17 @@ class ConsoleHandler(Handler):
                         del self.server.auth.qrs[data['id']];result={'cancelled':True}
                     else:raise ValueError('扫码操作无效')
                 self.reply(200,result);return
+            if path=='/console/push' and method in ('GET','POST','DELETE'):
+                if method=='GET':self.reply(200,{'enabled':self.server.push is not None});return
+                if self.server.push is None:self.reply(503,{'error':'服务端尚未配置 APNs'});return
+                data=self.body()
+                if method=='POST':
+                    try:result=self.server.push.register(data,key)
+                    except (OSError,EOFError):
+                        self.reply(503,{'error':'本机通知服务暂不可用，请稍后重试注册'});return
+                else:
+                    self.server.push.unregister(data.get('installationId'),key,data.get('revision'));result={'removed':True}
+                self.reply(200,result);return
             if path=='/console/link/inspect' and method=='POST':
                 with self.server.links.lock:
                     entry=self.server.links.get(self.body().get('id'))
@@ -303,10 +325,13 @@ class ConsoleHandler(Handler):
             if path=='/console/logout' and method=='POST':
                 data=self.body() if self.headers.get('Transfer-Encoding') or int(self.headers.get('Content-Length','0')) else {}
                 with self.server.auth_lock:
+                    if self.server.push and data.get('installationId') is not None:
+                        self.server.push.unregister(data['installationId'],key,data.get('revision'))
                     remaining={k:v for k,v in self.server.sessions.items() if k!=key}
                     self.server.auth.save_sessions(remaining)
                     self.server.sessions=remaining
                     self.server.prune()
+                    if self.server.push:self.server.push.unregister_session(key)
                     owned=[sid for sid,entry in self.server.console_streams.items() if entry['session']==key]
                 for sid in owned:self.server.release_stream(sid)
                 self.cookie='carryon-console=; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=0'

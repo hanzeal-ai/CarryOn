@@ -183,7 +183,8 @@ const Timeline = (() => {
     }
     if(['userMessage','steeringUserMessage','agentMessage'].includes(item.type)){
       const user=item.type!=='agentMessage', article=el('article','message '+(user?'user':'assistant')+(item.phase==='commentary'?' commentary':''));
-      const head=el('div','message-head');head.append(el('span','role',user?'你':item.phase==='commentary'?'Codex · 进度':'Codex'),copyButton(item.text||''));
+      article.dataset.messageId=item.id;
+      const head=el('div','message-head');head.append(el('span','role',user?'你':item.phase==='commentary'?'CarryOn · 进度':'CarryOn'),copyButton(item.text||''));
       const parts=item.data?.content||item.data?.input||[];
       const nativeImages=new Set(parts.filter(p=>p.type==='localImage').map(p=>p.path));
       const refs=(item.artifacts||[]).filter(ref=>!nativeImages.has(ref.path));

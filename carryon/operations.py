@@ -12,7 +12,7 @@ from .thread_status import project_status
 METHODS = {
     'interrupt': ('interrupt-turn', 4), 'steer': ('steer-turn', 1),
     'compact': ('compact-thread', 1), 'settings': ('update-thread-settings', 1),
-    'edit': ('edit-last-user-turn', 2), 'clear-queue': ('set-queued-follow-ups-state', 1),
+    'edit': ('edit-last-user-turn', 2), 'resume': ('edit-last-user-turn', 2), 'clear-queue': ('set-queued-follow-ups-state', 1),
     'command-approval': ('command-approval-decision', 1),
     'file-approval': ('file-approval-decision', 1),
     'permissions-approval': ('permissions-request-approval-response', 1),
@@ -62,7 +62,7 @@ def controls(state):
                              'fingerprint': digest(r), 'params': r.get('params', {}),
                              'decisions': approval_choices(action, r.get('params', {}))})
     return {'activeTurnId': active.get('turnId') if active else None,
-            'lastTurnId': last.get('turnId'), 'lastUserText': text,
+            'lastTurnId': last.get('turnId'), 'lastTurnStatus': last.get('status'), 'lastUserText': text,
             'settings': {k: v for k, v in (state.get('latestThreadSettings') or {}).items()
                          if k in SCHEMAS['settings']['properties'] and k != 'threadId'}, 'requests': requests}
 
@@ -79,10 +79,13 @@ def build(action, data, state):
         if action == 'interrupt':
             params.update(mode='user-stop', expectedTurnId=c['activeTurnId'])
         else:
-            prompt = text(data.get('prompt'))
-            params.update(input=[{'type': 'text', 'text': prompt, 'text_elements': []}],
+            from .images import validate_images
+            images = validate_images(data.get('images'))
+            prompt = data.get('prompt')
+            prompt = '' if images and isinstance(prompt, str) and len(prompt) <= 16000 and not prompt.strip() else text(prompt)
+            params.update(input=([{'type': 'text', 'text': prompt, 'text_elements': []}] if prompt else []) + [{'type': 'image', 'url': url} for url in images],
                           clientUserMessageId=str(uuid.uuid4()), attachments=[],
-                          restoreMessage=queued_message(prompt, state))
+                          restoreMessage=queued_message(prompt, state, images))
     elif action in QUEUE_ACTIONS:
         if runtime not in ('active', 'idle'):
             raise ValueError('会话运行状态尚未确认')
@@ -91,15 +94,17 @@ def build(action, data, state):
         if runtime not in ('active', 'idle'):
             raise ValueError('会话运行状态尚未确认')
         params['threadSettings'] = validate_settings(data.get('settings'), state['id'])
-    elif action in ('compact', 'edit'):
+    elif action in ('compact', 'edit', 'resume'):
         if project_status(state)['state'] != 'idle':
             raise ValueError('此操作需要已确认空闲且没有待处理请求的会话')
-        if action == 'edit':
-            if not c['lastUserText'] or data.get('turnId') != c['lastTurnId']:
+        if action in ('edit', 'resume'):
+            if action == 'resume' and (c['lastTurnStatus'] != 'interrupted' or not turns(state)[-1].get('params', {}).get('input')):
+                raise ValueError('只有已暂停的最后一轮可以重新启动')
+            if data.get('turnId') != c['lastTurnId'] or (action == 'edit' and not c['lastUserText']):
                 raise ValueError('最后一轮已改变或不支持文本编辑')
-            if data.get('confirmed') is not True:
+            if action == 'edit' and data.get('confirmed') is not True:
                 raise ValueError('编辑会替换最后一轮并重新执行，请确认')
-            params.update(turnId=c['lastTurnId'], message=text(data.get('prompt')),
+            params.update(turnId=c['lastTurnId'], message=c['lastUserText'] if action == 'resume' else text(data.get('prompt')),
                           shouldSendPermissionOverrides=False)
     else:
         request = next((r for r in state.get('requests', [])
@@ -178,7 +183,7 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None):
             return previous
         if any(j['threadId'] == thread_id
                and (j['state'] in ('preparing', 'dispatching', 'uncertain')
-                    or (action in ('compact', 'edit') and j['state'] == 'accepted'))
+                    or (action in ('compact', 'edit', 'resume') and j['state'] == 'accepted'))
                for j in bridge.journal.list()):
             raise BridgeError('此会话有正在投递或结果待确认的操作，请先核对')
         job = {'id': request_id, 'fingerprint': fingerprint, 'kind': 'operation:' + action,

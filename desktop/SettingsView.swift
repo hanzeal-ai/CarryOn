@@ -67,7 +67,7 @@ import AppKit
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 23)).foregroundStyle(DesktopDesign.blue)
+                Image("CarryOnLogo").resizable().scaledToFit().frame(width: 36, height: 36).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) { Text("CarryOn").font(.system(size: 18, weight: .semibold)); Text("换个设备，接着做。").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
             }.padding(.horizontal, 23).padding(.top, 30).padding(.bottom, 32)
             HStack { Text("本地工作区").font(.system(size: 11, weight: .medium)); Spacer(); Text("\(model.services.filter(\.running).count) 个运行中").font(.system(size: 10)) }

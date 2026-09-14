@@ -10,3 +10,12 @@ public struct ConversationDraft: Equatable, Sendable {
         if images == sent.images { images = [] }
     }
 }
+
+public enum ComposerAction: Equatable, Sendable {
+    case send, pause, restart, unavailable
+    public static func resolve(text: String, hasImages: Bool, running: Bool, interrupted: Bool) -> Self {
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasImages { return .send }
+        if running { return .pause }
+        return interrupted ? .restart : .unavailable
+    }
+}

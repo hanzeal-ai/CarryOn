@@ -5,6 +5,7 @@ import UIKit
 struct ImageLightboxPresenter: UIViewControllerRepresentable {
     let image: UIImage?
     @Binding var isPresented: Bool
+    var onDelete: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIViewController(context: Context) -> UIViewController {
@@ -24,12 +25,17 @@ struct ImageLightboxPresenter: UIViewControllerRepresentable {
                 guard let controller, controller.view.window != nil, coordinator.binding?.wrappedValue == true,
                       coordinator.preview == nil else { return }
                 let preview = ImageLightboxController(image: image)
+                preview.onDelete = onDelete
                 preview.onClose = { [weak coordinator] in
                     coordinator?.preview = nil
                     coordinator?.binding?.wrappedValue = false
                 }
                 coordinator.preview = preview
-                controller.present(preview, animated: !UIAccessibility.isReduceMotionEnabled)
+                // Present from the attached hosting controller, not the zero-sized child.
+                var presenter = controller
+                while let parent = presenter.parent { presenter = parent }
+                while let presented = presenter.presentedViewController, !presented.isBeingDismissed { presenter = presented }
+                presenter.present(preview, animated: !UIAccessibility.isReduceMotionEnabled)
             }
         } else if !isPresented, let preview = coordinator.preview {
             preview.close()
@@ -49,11 +55,13 @@ struct ImageLightboxPresenter: UIViewControllerRepresentable {
 
 final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     var onClose: (() -> Void)?
+    var onDelete: (() -> Void)?
     private let image: UIImage
     private let mask = UIView()
     private let scroll = UIScrollView()
     private let picture = UIImageView()
     private let closeButton = UIButton(type: .system)
+    private let deleteButton = UIButton(type: .system)
     private var laidOutSize = CGSize.zero
     private var closing = false
     private lazy var drag = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
@@ -93,6 +101,14 @@ final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIG
         closeButton.accessibilityLabel = "关闭图片预览"
         closeButton.addTarget(self, action: #selector(tappedMask), for: .touchUpInside)
         view.addSubview(closeButton)
+        if onDelete != nil {
+            deleteButton.setTitle("删除图片", for: .normal)
+            deleteButton.tintColor = .white
+            deleteButton.backgroundColor = .systemRed
+            deleteButton.layer.cornerRadius = 12
+            deleteButton.addTarget(self, action: #selector(deleteImage), for: .touchUpInside)
+            view.addSubview(deleteButton)
+        }
         drag.maximumNumberOfTouches = 1
         drag.delegate = self
         view.addGestureRecognizer(drag)
@@ -110,6 +126,8 @@ final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIG
         mask.frame = view.bounds
         closeButton.frame = CGRect(x: view.bounds.width - view.safeAreaInsets.right - 52,
                                    y: view.safeAreaInsets.top + 4, width: 44, height: 44)
+        deleteButton.frame = CGRect(x: (view.bounds.width - 140) / 2,
+                                    y: view.bounds.height - view.safeAreaInsets.bottom - 60, width: 140, height: 44)
         guard laidOutSize != view.bounds.size, view.bounds.width > 0, image.size.width > 0, image.size.height > 0 else { return }
         laidOutSize = view.bounds.size
         scroll.transform = .identity
@@ -187,6 +205,12 @@ final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIG
             self.closeButton.alpha = 1
         }
     }
+    @objc private func deleteImage() {
+        guard !closing else { return }
+        let didClose = onClose, remove = onDelete
+        onClose = { didClose?(); remove?() }
+        close()
+    }
     @objc private func tappedMask() { close() }
     override func accessibilityPerformEscape() -> Bool { close(); return true }
     func close(sliding: Bool = false) {
@@ -195,6 +219,7 @@ final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIG
         UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.2, animations: {
             self.mask.alpha = 0
             self.closeButton.alpha = 0
+            self.deleteButton.alpha = 0
             self.scroll.alpha = 0
             if sliding && !UIAccessibility.isReduceMotionEnabled {
                 self.scroll.transform = CGAffineTransform(translationX: 0, y: self.view.bounds.height)

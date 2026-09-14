@@ -66,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("不支持 Transfer-Encoding")
         length = int(self.headers.get("Content-Length", "0"))
         from .images import MAX_REQUEST_BYTES
-        limit=MAX_REQUEST_BYTES if urlsplit(self.path).path.endswith("/messages") else 100000
+        limit=MAX_REQUEST_BYTES if urlsplit(self.path).path.endswith(("/messages", "/compose", "/operations")) else 100000
         if not 0 < length <= limit:
             raise ValueError("请求体为空或过大")
         if self.headers.get_content_type() != "application/json":
@@ -82,9 +82,9 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/app.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
+            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
                 filename = "example.html" if path == "/" else path[1:]
-                mime = {"html": "text/html", "js": "text/javascript", "css": "text/css"}[filename.rsplit(".", 1)[1]]
+                mime = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "png": "image/png"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
                 return
             if method == "GET" and path == "/api/stream":

@@ -59,6 +59,7 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: isLogin ? ["Set-Cookie": "carryon-console=fixture-session; Path=/carryon/console/; Secure; HttpOnly"] : [:])!
         let result: JSONValue = status == 200 ? .object([
             "authenticated": .bool(true),
+            "devices": .array([]),
             "cookie": .string(request.value(forHTTPHeaderField: "Cookie") ?? ""),
             "origin": .string(request.value(forHTTPHeaderField: "Origin") ?? ""),
             "method": .string(request.httpMethod ?? ""),
@@ -145,4 +146,74 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     #expect(throws: APIError.self) { _ = try wire.decode(update) }
     var fresh = HistoryWireProjection()
     #expect(throws: APIError.self) { _ = try fresh.decode(update) }
+}
+
+private final class MemorySessionCredentials: SessionCredentials, @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens: [String: String] = [:]
+    func load(server: String) throws -> String? { lock.withLock { tokens[server] } }
+    func save(_ token: String, server: String) throws { lock.withLock { tokens[server] = token } }
+    func remove(server: String) throws { _ = lock.withLock { tokens.removeValue(forKey: server) } }
+    func remove(server: String, matching token: String) throws {
+        lock.withLock { if tokens[server] == token { tokens.removeValue(forKey: server) } }
+    }
+}
+
+@Test func savedSessionRestoresOnlyForItsServerAndExpiresOrLogsOut() async throws {
+    let vault = MemorySessionCredentials()
+    let address = try ConsoleAddress("https://example.com/carryon")
+    func client(_ address: ConsoleAddress) -> ConsoleAPI {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]
+        return ConsoleAPI(address: address, configuration: config, credentials: vault)
+    }
+    let first = client(address)
+    _ = try await first.request("login", body: .object(["token": .string("login-secret")]))
+    #expect(try vault.load(server: address.base.absoluteString) == nil)
+    _ = try await first.completeLogin()
+    #expect(try vault.load(server: address.base.absoluteString) == "fixture-session")
+    await first.invalidate() // Closing the process/session must not log out.
+    let restored = client(address)
+    #expect(try await restored.restoreSession())
+    #expect(try await restored.request("session")["cookie"].text == "carryon-console=fixture-session")
+    let other = client(try ConsoleAddress("https://example.com/other"))
+    #expect(try await !other.restoreSession())
+    do { _ = try await restored.request("denied") } catch {}
+    #expect(try vault.load(server: address.base.absoluteString) != nil)
+    do { _ = try await restored.request("expired") } catch {}
+    #expect(try vault.load(server: address.base.absoluteString) == nil)
+    _ = try await restored.request("login", body: .object(["token": .string("login-secret")]))
+    _ = try await restored.request("logout", method: "POST")
+    #expect(try vault.load(server: address.base.absoluteString) == nil)
+    await restored.invalidate(); await other.invalidate()
+}
+
+@Test @MainActor func definitiveWriteFailureUnlocksChangedContentButUnknownOutcomeDoesNot() throws {
+    let suite = "CarryOn.Tests." + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    for state in ["failed", "interrupted", "uncertain", "preparing", "dispatching"] {
+        let pending = PendingWrites(defaults: defaults, storageKey: state)
+        let body: JSONValue = .object(["prompt": .string("original")])
+        let changed: JSONValue = .object(["prompt": .string("edited")])
+        let id = try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: body)
+        let job: JSONValue = .object(["id": .string(id), "threadId": .string("thread"), "state": .string(state)])
+        try pending.reconcile(scope: "scope", job: job.setting("id", .string("other")))
+        #expect(throws: APIError.self) { try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) }
+        try pending.reconcile(scope: "scope", job: job)
+        let restarted = PendingWrites(defaults: defaults, storageKey: state)
+        if ["failed", "interrupted"].contains(state) {
+            #expect(try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) != id)
+        } else {
+            #expect(throws: APIError.self) { try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) }
+        }
+    }
+}
+
+@Test func composerFollowsPauseAppendRestartContract() {
+    #expect(ComposerAction.resolve(text: "", hasImages: false, running: true, interrupted: false) == .pause)
+    #expect(ComposerAction.resolve(text: "追加", hasImages: false, running: true, interrupted: false) == .send)
+    #expect(ComposerAction.resolve(text: "", hasImages: false, running: false, interrupted: true) == .restart)
+    #expect(ComposerAction.resolve(text: "新内容", hasImages: false, running: false, interrupted: true) == .send)
+    #expect(ComposerAction.resolve(text: "", hasImages: true, running: false, interrupted: true) == .send)
+    #expect(ComposerAction.resolve(text: "  ", hasImages: false, running: false, interrupted: false) == .unavailable)
 }

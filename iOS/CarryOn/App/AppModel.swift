@@ -3,10 +3,12 @@ import CarryOnCore
 
 @MainActor @Observable final class AppModel {
     var addressText = UserDefaults.standard.string(forKey: "carryon.server") ?? ""
+    var username = ""
     var credential = ""
     var authenticated = false
     var busy = false
     var error: String?
+    var runtimeLog = RuntimeLog(storageURL: LocalFiles.directory.appendingPathComponent("runtime-log-v1.json"))
     var devices: [Record] = []
     var selectedDevice = ""
     var status: JSONValue = .null
@@ -15,6 +17,8 @@ import CarryOnCore
     var selectedThread: Record?
     var selectedProject: Record?
     var activityCount: Int?
+    var otherActivityCount = 0
+    private var activityRequestVersion = UUID()
     var history: JSONValue = .null
     var historyFailure: String?
     var historyCache = DisplayHistoryCache()
@@ -26,8 +30,8 @@ import CarryOnCore
     var requests: [Record] = []
     var requestHistory: [Record] = []
     var requestHistoryError: String?
-    var drafts: [String: String] = [:]
-    var attachments: [String: [String]] = [:]
+    var drafts: [String: String] = [:] { didSet { scheduleDraftSave() } }
+    var attachments: [String: [String]] = [:] { didSet { scheduleDraftSave() } }
     var foreground = true
     var writing = false
     var notice: String?
@@ -40,6 +44,55 @@ import CarryOnCore
     private var directoryVersion = 0
     private var directoryUpdates: Task<Void, Never>?
     private let pending = PendingWrites()
+    private let workspacePreferences = WorkspacePreferences()
+    private let draftFile = LocalFiles.directory.appendingPathComponent("drafts-v1.json")
+    private var draftsLoaded = false
+    private var draftSave: Task<Void, Never>?
+
+    private func loadDrafts() {
+        draftsLoaded = false
+        do {
+            let saved = try LocalFiles.read(DraftSnapshot.self, from: draftFile) ?? DraftSnapshot()
+            drafts = saved.texts; attachments = saved.images; draftsLoaded = true
+        } catch { report(APIError("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存"), operation: "读取草稿", blocking: false) }
+    }
+    private func scheduleDraftSave() {
+        guard draftsLoaded else { return }
+        draftSave?.cancel()
+        draftSave = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            self?.saveDrafts()
+        }
+    }
+    func saveDrafts() {
+        draftSave?.cancel(); draftSave = nil
+        guard draftsLoaded else { return }
+        do { try LocalFiles.write(DraftSnapshot(texts: drafts, images: attachments), to: draftFile) }
+        catch { report(APIError("草稿未能保存到本机，当前内容仍保留在页面中"), operation: "保存草稿", blocking: false) }
+    }
+    func restoreLogin() async {
+        guard !authenticated, !busy, !addressText.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        let requestedAddress = addressText, version = epoch
+        var client: ConsoleAPI?
+        do {
+            let address = try ConsoleAddress(requestedAddress)
+            let restored = ConsoleAPI(address: address, credentials: KeychainSessionCredentials())
+            client = restored
+            guard try await restored.restoreSession() else { await restored.invalidate(); return }
+            let session = try await restored.request("session")
+            guard version == epoch, requestedAddress == addressText, !Task.isCancelled else { await restored.invalidate(); return }
+            guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
+            devices = try values.map(Record.init); api = restored
+            addressText = address.base.absoluteString
+            loadDrafts(); authenticated = true
+            switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
+        } catch {
+            await client?.invalidate()
+            if version == epoch && requestedAddress == addressText { report(error, operation: "恢复登录", blocking: false) }
+        }
+    }
 
     var activityBadgeCount: Int { authenticated ? max(0, activityCount ?? 0) + requests.count : 0 }
     var device: Record? { devices.first { $0.id == selectedDevice } }
@@ -66,39 +119,95 @@ import CarryOnCore
         guard !busy else { return }
         busy = true; error = nil
         defer { busy = false }
+        var pendingClient: ConsoleAPI?
         do {
             let address = try ConsoleAddress(addressText)
-            let client = ConsoleAPI(address: address)
-            _ = try await client.request("login", body: .object(["token": .string(credential.trimmingCharacters(in: .whitespacesAndNewlines))]))
-            let session = try await client.request("session")
-            guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
-            api = client; devices = try values.map(Record.init); credential = ""
-            addressText = address.base.absoluteString
-            UserDefaults.standard.set(addressText, forKey: "carryon.server")
-            authenticated = true
-            switchDevice(devices.first?.id ?? "")
-        } catch { report(error) }
+            let client = ConsoleAPI(address: address, credentials: KeychainSessionCredentials())
+            pendingClient = client
+            _ = try await client.request("login", body: .object(["username": .string(username.trimmingCharacters(in: .whitespacesAndNewlines)), "password": .string(credential)]))
+            try await finishLogin(client, address: address)
+        } catch {
+            await abandonLogin(pendingClient)
+            report(error, operation: "登录")
+        }
     }
-    func report(_ failure: Error) {
+    private func finishLogin(_ client: ConsoleAPI, address: ConsoleAddress) async throws {
+        let directory = try await client.completeLogin()
+        try Task.checkCancellation()
+        api = client; devices = directory; credential = ""
+        addressText = address.base.absoluteString
+        UserDefaults.standard.set(addressText, forKey: "carryon.server")
+        loadDrafts(); authenticated = true
+        switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
+    }
+
+    func loginWithQRCode(_ code: LoginCode, verification: @escaping (String) -> Void) async throws {
+        guard !busy else { throw APIError("正在登录，请稍后重试") }
+        busy = true
+        defer { busy = false }
+        let client = ConsoleAPI(address: code.address, credentials: KeychainSessionCredentials())
+        do {
+            let claim = UUID().uuidString
+            let result = try await client.request("qr/claim", body: .object(["id": .string(code.id), "secret": .string(code.secret), "claim": .string(claim)]))
+            guard let number = result["verification"].string else { throw APIError("扫码响应无效") }
+            verification(number)
+            for _ in 0..<120 {
+                try await Task.sleep(for: .milliseconds(1500))
+                let state = try await client.request("qr/poll", body: .object(["id": .string(code.id), "claim": .string(claim)]))
+                try Task.checkCancellation()
+                if state["authenticated"].bool == true {
+                    try await finishLogin(client, address: code.address)
+                    return
+                }
+                if state["state"].string == "rejected" { throw APIError("电脑已拒绝本次登录") }
+            }
+            throw APIError("二维码已过期，请在电脑重新生成")
+        } catch {
+            await abandonLogin(client)
+            throw error
+        }
+    }
+
+    private func abandonLogin(_ client: ConsoleAPI?) async {
+        guard let client else { return }
+        do { try await client.cancelLogin() }
+        catch {
+            runtimeLog.record(error, operation: "撤销未完成登录", workspace: "", blocking: true, secrets: [credential])
+            self.error = error.localizedDescription
+        }
+    }
+
+    func report(_ failure: Error, operation: String = "操作失败", blocking: Bool = true) {
         guard !Task.isCancelled, !(failure is CancellationError) else { return }
+        let alert = runtimeLog.record(failure, operation: operation, workspace: device?.title ?? "", blocking: blocking, secrets: [credential])
         if (failure as? APIError)?.status == 401 { resetSession() }
-        error = failure.localizedDescription
+        if alert { error = failure.localizedDescription }
     }
     private func resetSession() {
+        saveDrafts(); draftsLoaded = false
         epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
         let previous = api; api = nil
         Task { await previous?.invalidate() }
-        authenticated = false; connected = false; status = .null; history = .null; historyFailure = nil
-        devices = []; selectedDevice = ""; selectedThread = nil; selectedProject = nil; activityCount = nil; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
+        authenticated = false; connected = false; reconnecting = false; status = .null; history = .null; historyFailure = nil
+        devices = []; selectedDevice = ""; selectedThread = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
     }
     func logout() async {
         guard let api else { return }
-        do { _ = try await api.request("logout", method: "POST"); resetSession() }
-        catch { report(error) }
+        do {
+            var body: JSONValue? = nil
+            if let installation = UserDefaults.standard.string(forKey: "carryon.push.installation") {
+                body = .object(["installationId": .string(installation), "revision": try PushNotifications.nextRevision()])
+            }
+            _ = try await api.request("logout", body: body, method: "POST")
+            resetSession()
+        }
+        catch { report(error, operation: "退出登录") }
     }
     func switchDevice(_ id: String) {
+        saveDrafts()
+        workspacePreferences.selectDevice(id, server: addressText)
         epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
-        selectedDevice = id; selectedThread = nil; selectedProject = nil; activityCount = nil; history = .null; historyFailure = nil; status = .null
+        selectedDevice = id; selectedThread = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; history = .null; historyFailure = nil; status = .null
         connected = false; readSequence = 0; workspaceRevision += 1
         startUpdates()
     }
@@ -117,9 +226,22 @@ import CarryOnCore
     }
     func open(_ thread: Record) {
         historyLimit = 40; historyFailure = nil
+        otherActivityCount = 0
         selectedThread = thread; history = historyCache.get(scope + "\n" + thread.id) ?? .null; readSequence = 0
         connected = false
         updateSelection()
+    }
+    func openNotification(_ target: PushTarget) async {
+        guard authenticated, (try? ConsoleAddress(addressText).base.absoluteString) == target.server else { return }
+        do {
+            try await refreshDirectory()
+            guard devices.contains(where: { $0.id == target.deviceID }) else { throw APIError("通知对应的工作区已不可用") }
+            if selectedDevice != target.deviceID { switchDevice(target.deviceID) }
+            let result = try await page("/api/workspace/threads?threadId=" + ConsoleAddress.component(target.threadID), key: "threads")
+            guard let record = result.records.first(where: { $0.id == target.threadID }) else { throw APIError("通知对应的会话已不可用") }
+            selectedProject = nil
+            open(record)
+        } catch { report(error, operation: "打开通知会话") }
     }
     func retryHistory() { historyFailure = nil; updateSelection() }
     func loadEarlierHistory() {
@@ -131,9 +253,11 @@ import CarryOnCore
         updateSelection()
     }
     func setForeground(_ active: Bool) {
+        if !active { saveDrafts() }
         foreground = active
         updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); connected = false
         if active && authenticated { startUpdates() }
+        else if active { Task { await restoreLogin() } }
     }
     func console(_ route: String, body: JSONValue? = nil, method: String? = nil) async throws -> JSONValue {
         guard let api else { throw APIError("请先登录") }
@@ -167,13 +291,22 @@ import CarryOnCore
         requests = try values.map(Record.init)
         requestHistory = try result["history"].array.map(Record.init)
         requestHistoryError = result["historyError"].string
-        if connected && status["enabled"].bool == true && !selectedDevice.isEmpty {
-            let activity = try await deviceRequest("/api/activity?limit=1")
-            if version == directoryVersion { activityCount = activity["total"].int }
-        }
+        try await refreshActivityCounts()
         } catch {
             if version == directoryVersion { throw error }
         }
+    }
+    func refreshActivityCounts() async throws {
+        guard connected, status["enabled"].bool == true, !selectedDevice.isEmpty else { return }
+        let version = UUID(), currentThread = selectedThread?.id
+        activityRequestVersion = version
+        let current = currentThread.map { "&currentThreadId=" + ConsoleAddress.component($0) } ?? ""
+        let activity = try await deviceRequest("/api/activity?limit=1" + current)
+        guard version == activityRequestVersion, currentThread == selectedThread?.id else { return }
+        guard let total = activity["total"].int, total >= 0,
+              let included = activity["currentThreadIncluded"].bool else { throw APIError("动态统计格式不正确") }
+        activityCount = total
+        otherActivityCount = max(0, total - (included ? 1 : 0))
     }
     private func startUpdates() {
         guard !removingDevice else { return }
@@ -182,7 +315,7 @@ import CarryOnCore
             while !Task.isCancelled {
                 guard let self else { return }
                 do { try await self.refreshDirectory() }
-                catch { if Task.isCancelled { return }; self.report(error) }
+                catch { if Task.isCancelled { return }; self.report(error, operation: "刷新工作区与动态", blocking: false) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
@@ -265,7 +398,7 @@ import CarryOnCore
     func markDisplayed(threadID: String, sequence: Int) async {
         guard foreground, selectedThread?.id == threadID, connected, sequence > 0 else { return }
         do { _ = try await deviceRequest("/api/notifications/read", body: .object(["threadId": .string(threadID), "sequence": .number(Double(sequence))])) }
-        catch { report(error) }
+        catch { report(error, operation: "同步已读状态", blocking: false) }
     }
     @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
@@ -287,20 +420,21 @@ import CarryOnCore
             }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
+            try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
             let state = result["state"].text
+            if ["failed", "interrupted"].contains(state) {
+                throw APIError(result["error"].string ?? (state == "interrupted" ? "操作已暂停" : "操作失败"))
+            }
             guard ["preparing", "dispatching", "completed", "accepted", "inProgress"].contains(state) else {
                 throw APIError((result["error"].string ?? "操作结果尚未确认") + "；请在请求记录与 Codex App 核对，原请求编号已保留。")
             }
             if ["accepted", "completed", "inProgress"].contains(state) { try pending.accepted(scope: capturedScope, target: target) }
             return true
-        } catch { if version == epoch { report(error) }; return false }
+        } catch { if version == epoch { report(error, operation: path.hasSuffix("/compose") ? "发送消息" : "提交操作") }; return false }
     }
     func reconcile(_ jobs: [JSONValue]) {
         for job in jobs { mergeOutgoing(job, live: true) }
-        for job in jobs where ["accepted", "completed", "inProgress", "acknowledged"].contains(job["state"].text) {
-            try? pending.resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
-            try? pending.resolve(scope: scope, target: "new", requestID: job["id"].text)
-        }
+        for job in jobs { try? pending.reconcile(scope: scope, job: job) }
     }
     var visibleOutgoing: [JSONValue] {
         outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == selectedThread?.id }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
@@ -318,11 +452,7 @@ import CarryOnCore
     }
     private func reportStreamFailure(_ failure: Error) {
         connected = false; reconnecting = true
-        let native = failure as NSError
-        if native.domain == NSURLErrorDomain || native.domain == NSPOSIXErrorDomain { return }
-        if let api = failure as? APIError,
-           [502, 503, 504].contains(api.status ?? 0) || api.message == "实时连接超时，请重新连接" { return }
-        report(failure)
+        report(failure, operation: "实时连接", blocking: false)
     }
     func confirmJob(_ job: JSONValue) async {
         do {
@@ -331,7 +461,25 @@ import CarryOnCore
             }
             try pending.resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
             try pending.resolve(scope: scope, target: "new", requestID: job["id"].text)
-        } catch { report(error) }
+        } catch { report(error, operation: "核对请求结果") }
+    }
+    var editContext: JSONValue = .null
+    var editingMessage: JSONValue {
+        editContext["scope"].text == scope && editContext["threadId"].text == selectedThread?.id ? editContext["item"] : .null
+    }
+    func beginEditing(_ item: JSONValue) {
+        guard let thread = selectedThread, canWrite, state == "idle", item["turnId"] == history["controls"]["lastTurnId"] else { return }
+        if editingMessage == .null {
+            editContext = .object(["scope": .string(scope), "threadId": .string(thread.id),
+                "draft": .string(draft), "images": .array(draftImages.map(JSONValue.string)), "item": item])
+        }
+        draft = history["controls"]["lastUserText"].text
+        draftImages = []
+    }
+    func cancelEditing() {
+        guard editingMessage != .null else { return }
+        draft = editContext["draft"].text; draftImages = editContext["images"].array.compactMap(\.string)
+        editContext = .null
     }
     func compose(images: [JSONValue] = []) async -> Bool {
         guard let thread = selectedThread else { return false }
@@ -341,11 +489,22 @@ import CarryOnCore
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return false }
         var body: JSONValue = .object(["prompt": .string(text)])
         if !images.isEmpty { body = body.setting("images", .array(images)) }
-        let success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body)
+        let edit = editingMessage
+        let success: Bool
+        if edit != .null {
+            success = await operation("edit", fields: ["turnId": edit["turnId"], "prompt": .string(text), "confirmed": .bool(true)])
+        } else {
+            success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body)
+        }
+        if success, edit != .null {
+            if editingMessage == edit { cancelEditing() }
+            return true
+        }
         if success {
             var current = ConversationDraft(text: drafts[capturedKey] ?? "", images: attachments[capturedKey] ?? [])
             current.didSubmit(sent)
             drafts[capturedKey] = current.text; attachments[capturedKey] = current.images
+            saveDrafts()
         }
         return success
     }

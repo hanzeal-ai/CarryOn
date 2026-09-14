@@ -65,3 +65,30 @@ class ComposeTests(unittest.TestCase):
         job=self.bridge.compose(T,'compose-reset-read','hello')
         self.assertEqual(self.wait(job['id'])['state'],'failed')
         self.assertEqual(self.bridge.ipc.calls,[])
+
+    def test_running_and_waiting_images_preserve_native_inputs_and_retry(self):
+        from test_images import PNG
+        for waiting in (False, True):
+            native = state('active')
+            if waiting:
+                native['requests'] = [{'id': 1, 'method': 'item/tool/requestUserInput'}]
+            self.bridge.ipc.snapshot = lambda tid: ('owner', native)
+            self.bridge.ipc.current = lambda tid: native
+            key = 'compose-images-' + str(waiting)
+            job = self.bridge.compose(T, key, '  ', [PNG])
+            self.assertEqual(self.wait(key)['state'], 'completed')
+            params = self.bridge.ipc.calls[-1][1]
+            restored = params['state'][T][-1] if waiting else params['restoreMessage']
+            self.assertEqual(restored['context']['imageAttachments'][0]['src'], PNG)
+            if not waiting:
+                self.assertEqual(params['input'], [{'type': 'image', 'url': PNG}])
+            before = len(self.bridge.ipc.calls)
+            self.bridge.compose(T, key, '  ', [PNG])
+            self.assertEqual(len(self.bridge.ipc.calls), before)
+            with self.assertRaises(BridgeError): self.bridge.compose(T, key, 'changed', [PNG])
+
+    def test_invalid_running_image_is_rejected_before_dispatch(self):
+        native = state('active')
+        self.bridge.ipc.snapshot = lambda tid: ('owner', native)
+        with self.assertRaises(ValueError): self.bridge.compose(T, 'bad-images-123', '', ['data:image/png;base64,xxx'])
+        self.assertEqual(self.bridge.ipc.calls, [])

@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carryon-local"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local Codex desktop bridge, CLI and outbound cloud connector"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = []
+
+[project.optional-dependencies]
+apns = ["httpx[http2]>=0.28,<0.29", "cryptography>=44,<47"]
 
 [project.scripts]
 carryon = "carryon.cli:main"

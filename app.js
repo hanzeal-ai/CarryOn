@@ -567,7 +567,7 @@ init().finally(()=>document.body.classList.remove('booting'));
 
 function draftScope(){return cloudMode?client.storageScope:location.origin;}
 let composeHistory=null;
-function canAttach(){return canWrite()&&!!selected&&composeHistory?.status?.state==='idle'&&!imageBusy;}
+function canAttach(){return canWrite()&&!!selected&&['idle','running','waiting'].includes(composeHistory?.status?.state)&&!imageBusy;}
 function updateCompose(history){composeHistory=history;updateComposeButton();$('attach-images').disabled=!canAttach();window.MobileUI?.sync();}
 function updateComposeButton(){
   const running=composeHistory?.runtime?.type==='active';

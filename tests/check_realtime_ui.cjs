@@ -38,6 +38,7 @@ const assert=require('node:assert/strict');
   window.fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'重新设计手机端的会话体验，让它更简洁，也更容易使用。'},{id:'a1',type:'agentMessage',text:'我会围绕阅读和回复，重新整理这段体验。\n\n界面会更专注于内容：\n• 消息自然展开，执行细节按需查看\n• 主要操作留在拇指容易触达的位置\n• 需要确认时，再呈现完整上下文'}]};
   await receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history:fixture,readSequence:2},()=>true);
  });
+ assert.equal(await page.locator('#attach-images').isEnabled(),true,'running conversation accepts image selection');
  await page.locator('#prompt').fill('即时追加验证');await page.locator('#send').click();
  await page.locator('[data-outgoing]').waitFor();
  assert.equal(await page.locator('[data-outgoing] small').textContent(),'发送中…');

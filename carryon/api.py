@@ -17,7 +17,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         bridge.require()
         if not hasattr(bridge,'standby'):return 200,{'supported':False,'enabled':False,'effective':False}
         return 200,bridge.standby.status()
-    if not remote and (path in ('/api/projects','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',path)):
+    if not remote and (path in ('/api/projects','/api/workspace/threads','/api/activity','/api/notifications','/api/notifications/read','/api/notifications/preferences','/api/notifications/push') or re.fullmatch(r'/api/projects/[0-9a-f]{64}/threads',path)):
         if not hasattr(bridge,'workspace'):raise BridgeError('工作区功能尚未启用，请升级本机服务',503)
         return bridge.workspace.dispatch('local',method,path,data,parse_qs(parsed.query))
     if remote:
@@ -25,7 +25,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -48,7 +48,10 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
                       'threadFlags': {k: dict(v) for k, v in ipc.events.flags.items()}}
         respond(200, result)
         return result
-    if method == "GET" and path == "/api/threads":
+    if method == "GET" and path == "/api/models":
+        from .models import catalog
+        respond(200, catalog(bridge.catalog.home))
+    elif method == "GET" and path == "/api/threads":
         q = parse_qs(parsed.query)
         limit = min(100, max(1, int(q.get("limit", ["100"])[0])))
         offset = max(0, int(q.get("offset", ["0"])[0]))

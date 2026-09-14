@@ -4,6 +4,7 @@ import CarryOnCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab = 0
+    @AppStorage("carryon.projectView") private var projectView = true
     @State private var switcher = false
     var body: some View {
         @Bindable var model = model
@@ -52,7 +53,13 @@ struct RootView: View {
         } message: { Text(model.notice ?? "") }
     }
     private func tabButton(_ index: Int, _ label: String, _ icon: String) -> some View {
-        Button { tab = index } label: {
+        Button {
+            if index == 0 && tab == 0 {
+                model.selectedProject = nil
+                projectView.toggle()
+            }
+            tab = index
+        } label: {
             VStack(spacing: 4) {
                 Image(systemName: icon).font(.system(size: 22)).overlay(alignment: .topTrailing) {
                     let count = model.activityBadgeCount
@@ -60,15 +67,23 @@ struct RootView: View {
                         Text(count > 99 ? "99+" : "\(count)").font(.system(size: 9, weight: .medium)).foregroundStyle(.white).padding(.horizontal, 4).frame(minWidth: 15, minHeight: 15).background(.red, in: Capsule()).offset(x: 12, y: -6)
                     }
                 }
-                Text(label).font(.system(size: 10))
+                HStack(spacing: 3) {
+                    Text(label)
+                    if index == 0 {
+                        Image(systemName: "arrow.left.arrow.right")
+                    }
+                }.font(.system(size: 10))
             }
                 .foregroundStyle(tab == index ? Design.ink : Design.secondary)
                 .frame(maxWidth: .infinity).frame(minHeight: 54)
                 .background(tab == index ? Design.background : .clear, in: Capsule())
         }.accessibilityAddTraits(tab == index ? .isSelected : [])
+            .accessibilityValue(index == 0 ? (projectView ? "项目视图" : "会话视图") : "")
+            .accessibilityHint(index == 0 ? (tab == 0 ? "再次点击切换项目和会话视图" : "打开会话") : "")
     }
 }
 struct LoginView: View {
+    @State private var scan = false
     @Environment(AppModel.self) private var model
     var body: some View {
         @Bindable var model = model
@@ -76,21 +91,24 @@ struct LoginView: View {
             VStack(alignment: .leading, spacing: 24) {
                 Text("CarryOn").font(.system(size: 20, weight: .semibold)).padding(.top, 35)
                 Spacer(minLength: 50)
-                Image(systemName: "arrow.up.right").font(.system(size: 45, weight: .light))
+                Image("CarryOnLogo").resizable().scaledToFit().frame(width: 62, height: 62).accessibilityHidden(true)
                 Text("查看进展，\n继续对话。").font(.system(size: 36, weight: .semibold)).tracking(-1)
                 Text("换个设备，接着做。").foregroundStyle(Design.secondary)
                 VStack(alignment: .leading, spacing: 12) {
                     Text("云端地址").font(.caption).foregroundStyle(Design.secondary)
                     TextField("https://…", text: $model.addressText).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
-                    Text("控制台登录凭证").font(.caption).foregroundStyle(Design.secondary)
-                    SecureField("输入登录凭证", text: $model.credential).textContentType(.password).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    Text("账号").font(.caption).foregroundStyle(Design.secondary)
+                    TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    Text("密码").font(.caption).foregroundStyle(Design.secondary)
+                    SecureField("输入密码", text: $model.credential).textContentType(.password).submitLabel(.go).onSubmit { if !model.username.isEmpty && !model.credential.isEmpty { Task { await model.login() } } }.padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
                     Button { Task { await model.login() } } label: {
                         HStack { Spacer(); if model.busy { ProgressView().tint(.white) } else { Text("登录").fontWeight(.semibold) }; Spacer() }.frame(minHeight: 50)
                     }.background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).foregroundStyle(.white)
-                        .disabled(model.busy || model.addressText.isEmpty || model.credential.isEmpty)
-                    Text("登录后选择已登记的电脑。登录凭证与设备配对码用途不同。").font(.caption).foregroundStyle(Design.secondary).lineSpacing(4)
+                        .disabled(model.busy || model.addressText.isEmpty || model.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.credential.isEmpty)
+                    Button { scan = true } label: { Label("扫码登录", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 44) }.disabled(model.busy)
                 }.padding(.top, 12)
             }.padding(28).frame(maxWidth: 500)
         }.frame(maxWidth: .infinity).background(Design.background).scrollDismissesKeyboard(.interactively)
+        .sheet(isPresented: $scan) { QRLoginView() }
     }
 }

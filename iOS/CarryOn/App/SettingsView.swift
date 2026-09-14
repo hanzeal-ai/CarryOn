@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var links = false
     @State private var notifications = false
     @State private var logout = false
+    @State private var logs = false
     @State private var standby: JSONValue = .null
     var body: some View {
         ScrollView {
@@ -30,14 +31,19 @@ struct SettingsView: View {
                 SectionCaption(title: "通知")
                 Paper { Button { notifications = true } label: { SettingRow(icon: "bell", title: "消息通知", chevron: true) } }
                 SectionCaption(title: "关于")
-                Paper { SettingRow(icon: "bubble", title: "CarryOn", value: "1.0") }
+                Paper {
+                    Button { logs = true } label: { SettingRow(icon: "doc.text", title: "运行日志", chevron: true) }
+                    Divider().padding(.leading, 60)
+                    SettingRow(icon: "bubble", title: "CarryOn", value: "1.0", imageName: "CarryOnLogo")
+                }
                 Button("退出登录", role: .destructive) { logout = true }.foregroundStyle(.red).font(.system(size: 15)).frame(maxWidth: .infinity).frame(minHeight: 50).background(.white, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
             }.padding(20)
         }
-        .task(id: model.scope) { do { standby = try await model.deviceRequest("/api/standby") } catch { standby = .null } }
+        .task(id: model.scope) { do { standby = try await model.deviceRequest("/api/standby") } catch { standby = .null; model.report(error, operation: "读取待机状态", blocking: false) } }
         .sheet(isPresented: $switcher) { WorkspaceSwitcher() }
         .sheet(isPresented: $links) { ConnectionRequestsView() }
         .sheet(isPresented: $notifications) { NotificationPreferencesView() }
+        .sheet(isPresented: $logs) { RuntimeLogView() }
         .confirmationDialog("退出登录？", isPresented: $logout, titleVisibility: .visible) { Button("退出登录", role: .destructive) { Task { await model.logout() } } }
 
     }
@@ -65,8 +71,8 @@ struct NotificationPreferencesView: View {
                                 if key != "approval" { Divider().padding(.leading, 16) }
                             }
                         }.disabled(saving)
-                        Text("这些设置控制当前绑定的通知偏好。静音不会移除动态或未读标记。").font(.caption).foregroundStyle(Design.secondary)
-                        Text("系统推送尚未接入；当前可在 App 前台查看更新。").font(.caption).foregroundStyle(Design.secondary)
+                        Text("开启的消息类型会显示在动态中。关闭不会删除消息或未读标记。").font(.caption).foregroundStyle(Design.secondary)
+                        Text("系统通知还需云端 APNs 配置及 iOS 通知权限。").font(.caption).foregroundStyle(Design.secondary)
                     }
                 }.padding(20)
             }.background(Design.background).navigationTitle("消息通知").navigationBarTitleDisplayMode(.inline)
@@ -74,7 +80,7 @@ struct NotificationPreferencesView: View {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button { Task {
                         saving = true; defer { saving = false }
-                        do { _ = try await model.deviceRequest("/api/notifications/preferences", body: .object(values.mapValues(JSONValue.bool))); dismiss() } catch { failure = error.localizedDescription }
+                        do { _ = try await model.deviceRequest("/api/notifications/preferences", body: .object(values.mapValues(JSONValue.bool))); dismiss() } catch { failure = error.localizedDescription; model.report(error, operation: "保存消息通知设置") }
                     } } label: { if saving { ProgressView("保存中…") } else { Text("保存") } }.disabled(values.count != 4 || saving || loading) }
                 }.task(id: model.scope) { values = [:]; await load() }
         }
@@ -91,7 +97,7 @@ struct NotificationPreferencesView: View {
                 guard let value = result["preferences"][key].bool else { throw APIError("通知偏好格式不正确") }; next[key] = value
             }
             values = next; failure = nil
-        } catch { if version == loadVersion && scope == model.scope && !Task.isCancelled { failure = error.localizedDescription } }
+        } catch { if version == loadVersion && scope == model.scope && !Task.isCancelled { failure = error.localizedDescription; model.report(error, operation: "读取消息通知设置", blocking: false) } }
     }
 }
 struct ConnectionRequestsView: View {
@@ -144,7 +150,7 @@ struct ConnectionRequestsView: View {
                 }.padding(20)
             }.background(Design.background).navigationTitle("连接申请").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-                .task { do { try await model.refreshDirectory() } catch { model.report(error) } }
+                .task { do { try await model.refreshDirectory() } catch { model.report(error, operation: "刷新连接申请", blocking: false) } }
                 .alert("清空历史申请？", isPresented: $clearHistory) {
                     Button("取消", role: .cancel) {}
                     Button("清空", role: .destructive) { Task {
@@ -156,7 +162,7 @@ struct ConnectionRequestsView: View {
                         } catch { model.report(error) }
                     } }
                 } message: { Text("仅清空历史记录，待处理申请和已连接设备不受影响。") }
-                .refreshable { do { try await model.refreshDirectory() } catch { model.report(error) } }
+                .refreshable { do { try await model.refreshDirectory() } catch { model.report(error, operation: "刷新连接申请", blocking: false) } }
                 .alert("确认设备名称、时间与两端确认码一致？", isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
                     Button("取消", role: .cancel) { selected = nil }
                     Button("确认连接") { if let request = selected { Task { await respond(request, approve: true) } }; selected = nil }

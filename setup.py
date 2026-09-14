@@ -3,7 +3,7 @@ from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
 
-ASSETS=('example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','console-login.js','qrcode.js','style.css','mobile.css','mobile-ui.js')
+ASSETS=('logo.svg','favicon.png','apple-touch-icon.png','example.html','app.js','notification-client.js','client.js','timeline.js','operations.js','cloud-console-client.js','console-login.js','qrcode.js','style.css','mobile.css','mobile-ui.js')
 class Build(build_py):
     def run(self):
         super().run()

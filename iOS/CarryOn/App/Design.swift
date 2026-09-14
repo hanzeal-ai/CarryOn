@@ -67,9 +67,14 @@ struct SettingRow: View {
     var value = ""
     var chevron = false
     var badgeCount = 0
+    var imageName: String? = nil
     var body: some View {
         HStack(spacing: 12) {
-            SymbolTile(name: icon)
+            if let imageName {
+                Image(imageName).resizable().scaledToFit().frame(width: 38, height: 38).accessibilityHidden(true)
+            } else {
+                SymbolTile(name: icon)
+            }
             Text(title).font(.system(size: 15)).foregroundStyle(Design.ink)
             Spacer(minLength: 8)
             if badgeCount > 0 {
@@ -83,11 +88,12 @@ struct SettingRow: View {
     }
 }
 struct ThreadRow: View {
+    @Environment(AppModel.self) private var model
     let record: Record
     var body: some View {
         let state = record.value["status"]["state"].text
         HStack(spacing: 13) {
-            SymbolTile(name: state == "waiting" ? "lock" : state == "running" ? "chevron.left.forwardslash.chevron.right" : "bubble", color: state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
+            SymbolTile(name: "bubble.left.and.bubble.right", color: state == "running" && model.connected ? Design.green : Design.secondary)
             VStack(alignment: .leading, spacing: 7) {
                 HStack { Text(record.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
                     if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7).accessibilityLabel("未读") }

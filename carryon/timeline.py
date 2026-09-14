@@ -137,6 +137,10 @@ def project_turn(turn, position):
         entries.append(entry)
         if not entry["supported"]:
             unsupported.add(entry["type"])
+    # The params placeholder and the first native user item represent one row.
+    first_user = next((entry for entry in entries if entry['type'] == 'userMessage'), None)
+    if first_user is not None:
+        first_user['id'] = f"{tid}:user"
     if turn.get("diff"):
         entries.append({"id":f"{tid}:diff", "turnId":tid, "type":"turnDiff", "title":"本轮修改汇总",
                         "data":{"diff":turn["diff"]}})

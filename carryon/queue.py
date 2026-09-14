@@ -6,10 +6,10 @@ import uuid
 from .contracts import digest, text
 
 
-def message(prompt, state):
+def message(prompt, state, images=None):
     return {'id': str(uuid.uuid4()), 'text': prompt, 'cwd': state.get('cwd'),
             'createdAt': int(time.time() * 1000), 'context': {
-                'prompt': prompt, 'commentAttachments': [], 'imageAttachments': [],
+                'prompt': prompt, 'commentAttachments': [], 'imageAttachments': [{'id': str(uuid.uuid4()), 'src': url} for url in (images or [])],
                 'fileAttachments': [], 'pastedTextAttachments': [], 'addedFiles': [],
                 'workspaceRoots': [state['cwd']] if state.get('cwd') else []}}
 
@@ -27,7 +27,11 @@ def transform(action, data, state, original):
         raise ValueError('排队消息已变化，请读取最新队列后再操作')
     messages = copy.deepcopy(original)
     if action == 'queue-add':
-        messages.append(message(text(data.get('prompt')), state))
+        from .images import validate_images
+        images = validate_images(data.get('images'))
+        prompt = data.get('prompt')
+        prompt = '' if images and isinstance(prompt, str) and len(prompt) <= 16000 and not prompt.strip() else text(prompt)
+        messages.append(message(prompt, state, images))
     elif action == 'clear-queue':
         if data.get('confirmed') is not True:
             raise ValueError('请确认清空排队消息')

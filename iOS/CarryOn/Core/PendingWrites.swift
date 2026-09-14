@@ -29,6 +29,11 @@ import CryptoKit
         try save()
         return id
     }
+    public func reconcile(scope: String, job: JSONValue) throws {
+        guard ["accepted", "completed", "inProgress", "acknowledged", "failed", "interrupted"].contains(job["state"].text) else { return }
+        try resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
+        try resolve(scope: scope, target: "new", requestID: job["id"].text)
+    }
     public func accepted(scope: String, target: String) throws {
         entries.removeValue(forKey: hash(scope + "\n" + target)); try save()
     }

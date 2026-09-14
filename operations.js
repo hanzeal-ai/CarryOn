@@ -2,13 +2,14 @@
 const Operations = (() => {
   let selected = null, signature = '', transport, notify, writable=false;
   const seenQuestions=new Set();
+  let messageEditor=null, messageEditorKey='';
   const labels = {'interrupt':'停止任务','steer':'补充指令','compact':'压缩上下文','settings':'会话设置',
     'queue-add':'添加排队任务','queue-edit':'编辑排队任务','queue-delete':'删除排队任务','queue-reorder':'调整排队顺序','queue-resume':'恢复排队任务','edit':'编辑最后一轮','clear-queue':'清空排队消息','command-approval':'命令审批',
     'file-approval':'文件审批','permissions-approval':'权限申请','user-input':'回答问题','mcp-response':'MCP 交互'};
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
   box('question-later').onclick=()=>box('question-dialog').close();
-  function reset() {window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  function reset() {messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
   async function send(target, action, fields, button) {
     if(target!==selected||!writable)return;
     button.disabled=true;
@@ -25,11 +26,34 @@ const Operations = (() => {
     n.dataset.draftKey=label;
     n.maxLength=16000;if(multiline)n.rows=3;l.append(n);parent.append(l);return n;
   }
+  function syncMessageEditor(history, threadId) {
+    const c=history.controls;
+    const last=(history.timeline||[]).filter(item=>item.type==='userMessage').at(-1);
+    const key=JSON.stringify([threadId,c?.lastTurnId,last?.id]);
+    if(key!==messageEditorKey){messageEditor?.remove();messageEditor=null;messageEditorKey=key;}
+    const row=last&&[...box('messages').querySelectorAll('.message.user')].find(el=>el.dataset.messageId===last.id);
+    if(!writable||history.syncing===true||history.status?.state!=='idle'||!c?.lastUserText||!c.lastTurnId||last?.turnId!==c.lastTurnId||!row){messageEditor?.remove();return;}
+    if(!messageEditor){
+      const editor=el('details');editor.className='message-editor';editor.append(el('summary','编辑'));
+      const input=field(editor,'修改最后一条消息',c.lastUserText,true);
+      button(editor,'取消',()=>{input.value=c.lastUserText;editor.open=false;});
+      const submit=button(editor,'重新发送',async b=>{
+        if(!input.value.trim()||!editor.isConnected||threadId!==selected)return;
+        input.disabled=true;
+        if(await send(threadId,'edit',{turnId:c.lastTurnId,prompt:input.value,confirmed:true},b)){editor.open=false;}
+        input.disabled=false;
+      });
+      input.oninput=()=>{submit.disabled=!input.value.trim();};
+      messageEditor=editor;
+    }
+    row.append(messageEditor);
+  }
   function render(history, threadId, api, notice, canWrite=true) {
     writable=canWrite;
     transport=api;notify=notice;
     const c=history.controls;
     if(!c||history.syncing===true){reset();return;}
+    syncMessageEditor(history,threadId);
     const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite]);
     if(next===signature)return;
     window.MobileUI?.beforeOperationsRender();
@@ -50,15 +74,6 @@ const Operations = (() => {
       const detail=el('details');detail.append(el('summary','补充指令'));root.append(detail);
       const input=field(detail,'给正在执行的任务补充说明','',true);
       button(detail,'发送补充指令',b=>send(threadId,'steer',{expectedTurnId:c.activeTurnId,prompt:input.value},b));
-    }
-    if(idle){
-      button(root,'压缩上下文',b=>send(threadId,'compact',{},b));
-      if(c.lastUserText){
-        const edit=el('details');edit.classList.add('mobile-edit-composer');edit.append(el('summary','编辑最后一轮'));root.append(edit);
-        const input=field(edit,'修改后的内容',c.lastUserText,true);
-        button(edit,'替换并重新执行',b=>{if(confirm('这会替换最后一轮用户输入及其后续结果，并重新执行。继续吗？'))send(threadId,'edit',{turnId:c.lastTurnId,prompt:input.value,confirmed:true},b);});
-      }
-
     }
     if(['active','idle'].includes(history.runtime?.type)){
       const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
