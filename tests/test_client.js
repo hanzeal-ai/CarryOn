@@ -41,6 +41,28 @@ test('network failure survives reload with the original request ID; success rele
   assert.notEqual(restored.requests[1].body.requestId,original);
 });
 
+test('side chat requests retain uncertain identity and isolate parent and target', async()=>{
+  const f=fixture();f.respond(async()=>{throw Error('network interrupted');});
+  await assert.rejects(f.client.sideAction('parent','child','compose',{prompt:'hello'}),/interrupted/);
+  const original=f.requests[0].body.requestId;
+  const restored=fixture(f.storage);
+  await restored.client.sideAction('parent','child','compose',{prompt:'hello'});
+  assert.equal(restored.requests[0].body.requestId,original);
+  assert.equal(restored.requests[0].path,'/api/side-chats/child/compose');
+  assert.equal(restored.requests[0].body.parentId,'parent');
+  await restored.client.sideAction('other-parent','child','compose',{prompt:'hello'});
+  assert.notEqual(restored.requests[1].body.requestId,original);
+  await restored.client.sideAction('parent','other-child','interrupt',{expectedTurnId:'turn'});
+  assert.equal(restored.requests[2].path,'/api/side-chats/other-child/operations');
+  assert.equal(restored.requests[2].body.action,'interrupt');
+});
+
+test('side chat rejects a stale selection before a network write', async()=>{
+  const f=fixture();
+  await assert.rejects(f.client.sideAction('parent','child','compose',{prompt:'hello'},()=>false),/已改变/);
+  assert.equal(f.requests.length,0);
+});
+
 test('reconnect authenticates and resubscribes; replaced sockets cannot change the page', async()=>{
   const f=fixture();const id=f.client.subscribe({threadId:'a',threadIds:['a']});
   const first=f.sockets[0];first.open();

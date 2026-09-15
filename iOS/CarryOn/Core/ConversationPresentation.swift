@@ -1,6 +1,33 @@
 import Foundation
 
 public enum ConversationPresentation {
+    public static func visibleReasoning(_ items: [JSONValue]) -> [JSONValue] {
+        var result: [JSONValue] = []
+        var turnID: String?
+        var activeTurn = false
+        var latestSummary: Int?
+        for item in items {
+            let currentTurn = item["turnId"].string
+            if item["type"].text == "turn" || currentTurn != turnID {
+                turnID = currentTurn
+                latestSummary = nil
+                activeTurn = item["type"].text == "turn" && item["status"].text == "inProgress"
+            }
+            guard item["type"].text == "reasoning" else { result.append(item); continue }
+            if !item["text"].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                latestSummary = result.count
+                result.append(item)
+            } else if activeTurn && item["status"].text == "inProgress" {
+                if let latestSummary {
+                    result[latestSummary] = result[latestSummary].setting("status", .string("inProgress"))
+                } else {
+                    result.append(item.setting("text", .string("思考中")))
+                }
+            }
+        }
+        return result
+    }
+
     public static func activityText(_ item: JSONValue) -> String {
         let data = item["data"]
         for value in [item["text"], data["command"], data["query"], data["path"], data["explanation"]] {

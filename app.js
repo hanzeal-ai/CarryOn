@@ -19,10 +19,41 @@ let enabled = false, selected = null, controllerId = null, threads = [], offset 
 let refreshBusy = false, lastHistory = '', listVersion = 0, noticeTimer;
 let subscription = null, streamReady = true;
 let sideOpen=false, sideSelected=null, sideSignature='',sideHistoryLimit=40;
+let sideComposeHistory=null, sideSending=false, sideDraftKey=null, sideJob=null;
+const sideDrafts=new Map();
+function resetSideComposer(){
+  if(sideDraftKey)sideDrafts.set(sideDraftKey,$('side-prompt').value);
+  sideDraftKey=sideOpen&&sideSelected?draftScope()+':'+selected+':'+sideSelected:null;
+  sideComposeHistory=null;sideJob=null;$('side-prompt').value=sideDrafts.get(sideDraftKey)||'';$('side-send-status').textContent='';updateSideComposer();
+}
+function canSendSide(){return canWrite()&&sideOpen&&!!sideSelected&&!!sideComposeHistory&&sideComposeHistory.access?.canInteract===true&&sideComposeHistory.access?.nativeReady===true&&['idle','running','waiting'].includes(sideComposeHistory.status?.state)&&!sideSending;}
+function updateSideComposer(){
+  $('side-prompt').disabled=!canSendSide();$('side-send').disabled=!canSendSide();
+  $('side-send').textContent=sideComposeHistory?.status?.state==='running'&&!$('side-prompt').value.trim()?'停止任务':'发送 ↑';
+}
+$('side-prompt').addEventListener('input',()=>{if(sideDraftKey)sideDrafts.set(sideDraftKey,$('side-prompt').value);updateSideComposer();});
+$('side-prompt').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();$('side-composer').requestSubmit();}});
+$('side-composer').onsubmit=async event=>{
+  event.preventDefault();if(!canSendSide())return;
+  const parent=selected,target=sideSelected,scope=draftScope(),key=sideDraftKey,prompt=$('side-prompt').value;
+  const current=()=>sideOpen&&selected===parent&&sideSelected===target&&draftScope()===scope;
+  const stop=!prompt.trim()&&sideComposeHistory.status?.state==='running';if(!stop&&!prompt.trim())return;
+  sideSending=true;updateSideComposer();$('side-send-status').textContent='正在提交…';
+  try{
+    const job=await client.sideAction(parent,target,stop?'interrupt':'compose',stop?{expectedTurnId:sideComposeHistory.controls.activeTurnId}:{prompt},current);
+    if(!current())return;
+    sideJob=job.id;
+    if(['failed','uncertain'].includes(job.state))throw Error(job.error||'结果待核对，请勿重复发送');
+    if(!stop&&$('side-prompt').value===prompt){$('side-prompt').value='';sideDrafts.set(key,'');}
+    $('side-send-status').textContent=stop?'停止请求已提交':'已提交，等待同步';
+  }catch(error){if(current())$('side-send-status').textContent=error.message;}
+  finally{sideSending=false;updateSideComposer();}
+};
 const historyImageLoader=(thread,parent)=>(id,kind='images')=>api(parent?'/side-chats/'+encodeURIComponent(thread)+'/'+kind+'/'+id+'?parentId='+encodeURIComponent(parent):'/threads/'+encodeURIComponent(thread)+'/'+kind+'/'+id);
 const SideTimeline=Timeline.create({runtime:'side-runtime',info:'side-info',source:'side-source'});
 function closeSide(){
   sideOpen=false;sideSelected=null;sideSignature='';sideHistoryLimit=40;SideTimeline.reset();
+  resetSideComposer();
   $('side-drawer').hidden=true;document.body.classList.remove('side-open');
   $('side-messages').replaceChildren();$('side-select').replaceChildren();$('side-discovery').textContent='';
 }
@@ -34,6 +65,7 @@ function renderSides(data){
   $('side-discovery').textContent=data.error||(data.scanning?'正在核验已登记的临时聊天，找到后会自动显示。':chats.length?`已确认 ${chats.length} 个临时聊天。`:'未发现可读取的临时聊天。请先在 Codex App 打开；未登记或已过期的聊天可能无法发现。');
   if(sideSelected&&!chats.some(c=>c.id===sideSelected)){
     sideSelected=null;sideSignature='';SideTimeline.reset();$('side-messages').replaceChildren();
+    resetSideComposer();
   }
   if(sideSelected){const c=chats.find(c=>c.id===sideSelected);if(c)$('side-runtime').textContent=c.label;}
 }
@@ -123,6 +155,7 @@ function applyStatus(status) {
   $('attach-images').disabled=!canAttach(); $('prompt').disabled = !canInteract() || !selected; $('send').disabled = !canInteract() || !selected;
   $('open-side').disabled=!enabled||!selected;
   $('open-subagents').disabled=!enabled||!selected;
+  updateSideComposer();
   $('controller-note').textContent = controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
   if(enabled&&!selected)welcomeState(true);
   $('prompt').placeholder=enabled?(selected?'发送新的任务…':'请先选择会话'): '请先开启本机桥接';
@@ -299,8 +332,10 @@ async function receiveUpdate(data, current) {
   if(data.threadId !== selected || data.subscription !== subscription)return;
   if(sideOpen&&data.sideChats)renderSides(data.sideChats);
   if(sideOpen&&data.sideThreadId===sideSelected){
-    if(data.sideError){$('side-source').textContent='同步暂不可用';$('side-runtime').textContent='状态未知';$('side-discovery').textContent=data.sideError;}
-    else if(data.sideHistory){const signature=data.sideHistory.historyRevision||JSON.stringify(data.sideHistory);if(signature!==sideSignature){sideSignature=signature;SideTimeline.render(data.sideHistory,$('side-messages'),historyImageLoader(sideSelected,selected)); }}
+    if(data.sideError){sideComposeHistory=null;$('side-source').textContent='同步暂不可用';$('side-runtime').textContent='状态未知';$('side-discovery').textContent=data.sideError;}
+    else if(data.sideHistory){sideComposeHistory=data.sideHistory;const signature=JSON.stringify([data.sideHistory.historyRevision,data.sideHistory.queue]);if(signature!==sideSignature){sideSignature=signature;SideTimeline.render(data.sideHistory,$('side-messages'),historyImageLoader(sideSelected,selected)); }}
+    const job=data.jobs?.find(job=>job.id===sideJob);if(job)$('side-send-status').textContent=job.error||({accepted:'已接收',completed:'已完成',failed:'发送失败',uncertain:'结果待核对，请勿重复发送',preparing:'正在提交…',dispatching:'正在提交…'}[job.state]||job.state);
+    updateSideComposer();
   }
   if(data.error) { Operations.reset();lastHistory='';$('history-source').textContent='同步暂不可用';if(!$('messages').dataset.loaded||$('messages').querySelector('[data-state=loading]'))$('messages').replaceChildren(viewState('加载失败',{detail:data.error,retry:retryHistory,symbol:'offline'}));else notice(data.error);return; }
   if(data.history) {
@@ -314,6 +349,7 @@ async function receiveUpdate(data, current) {
 }
 function streamDisconnected(event) {
   streamReady=false;
+  sideComposeHistory=null;updateSideComposer();
   $('status').textContent='重连中';
   $('send').disabled=true;$('attach-images').disabled=true;$('create').disabled=true;
   subagentNavigation.reset();
@@ -327,7 +363,7 @@ function streamDisconnected(event) {
 $('expand-events').onclick=()=>Timeline.setExpanded(true);
 $('open-side').onclick=()=>{if(!enabled||!selected)return;sideOpen=true;$('side-drawer').hidden=false;document.body.classList.add('side-open');$('side-discovery').textContent='正在查找临时聊天…';loadHistory();};
 $('close-side').onclick=()=>{closeSide();loadHistory();};
-$('side-select').onchange=()=>{sideHistoryLimit=40;sideSelected=$('side-select').value||null;sideSignature='';SideTimeline.reset();delete $('side-messages').dataset.loaded;$('side-messages').replaceChildren(node('div','empty-small',sideSelected?'正在读取临时聊天…':'请选择临时聊天'));loadHistory();};
+$('side-select').onchange=()=>{sideHistoryLimit=40;sideSelected=$('side-select').value||null;sideSignature='';resetSideComposer();SideTimeline.reset();delete $('side-messages').dataset.loaded;$('side-messages').replaceChildren(node('div','empty-small',sideSelected?'正在读取临时聊天…':'请选择临时聊天'));loadHistory();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&sideOpen){closeSide();loadHistory();}});
 $('collapse-events').onclick=()=>Timeline.setExpanded(false);
 function renderJobs(jobs) {

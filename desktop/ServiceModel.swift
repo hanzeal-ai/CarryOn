@@ -77,6 +77,7 @@ struct ServiceRecord: Identifiable, Equatable {
     @Published var catalogError = ""
     @Published var running = false
     @Published var enabled = false
+    @Published var bridgeRequested = false
     @Published var standby = false
     @Published var standbyDescription = ""
     @Published var bindings: [CloudBinding] = []
@@ -102,28 +103,12 @@ struct ServiceRecord: Identifiable, Equatable {
         let target = NSString(string: path ?? directory).expandingTildeInPath
         return await Task.detached { executeCLI(arguments, directory: target) }.value
     }
-    func configureAccount(url: String, action: String, fields: [String: String]) async -> CommandResult {
-        guard let data = try? JSONSerialization.data(withJSONObject: fields) else {
-            return CommandResult(code: 1, text: "账号输入格式无效")
-        }
-        let target = directory
-        return await Task.detached {
-            executeCLI(["cloud", "account", action, "--url", url, "--input-json"], directory: target, input: data)
-        }.value
-    }
-    func qrRequest(url: String, fields: [String: String]) async -> CommandResult {
-        guard let data = try? JSONSerialization.data(withJSONObject: fields) else { return CommandResult(code: 1, text: "扫码输入无效") }
-        let target = directory
-        return await Task.detached {
-            executeCLI(["cloud", "qr", "--url", url, "--input-json"], directory: target, input: data)
-        }.value
-    }
     func object(_ text: String) -> [String: Any]? {
         guard let data = text.data(using: .utf8) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
     func clearService() {
-        running = false; enabled = false; standby = false; bindings = []; processID = nil
+        running = false; enabled = false; bridgeRequested = false; standby = false; bindings = []; processID = nil
         controller = ""; linkDescription = ""; linkIsError = false; linkCanRetry = false; linkURL = ""; preferences = [:]; standbyDescription = ""
     }
     func reload() async {
@@ -155,7 +140,7 @@ struct ServiceRecord: Identifiable, Equatable {
         let link = await call(["cloud", "link-status"], at: target)
         let notifications = active ? await call(["notifications", "status"], at: target) : CommandResult(code: 0, text: "{}")
         guard directory == target else { return }
-        running = true; enabled = active
+        running = true; enabled = active; bridgeRequested = bridge["requested"] as? Bool ?? active
         if let service = state["service"] as? [String: Any] {
             if let number = service["port"] as? Int { port = String(number) }
             if let path = service["codexHome"] as? String { codexHome = path }
@@ -233,7 +218,7 @@ struct ServiceRecord: Identifiable, Equatable {
         diagnostics = [:]; diagnosticText = ""
         loadedStartupDirectory = record.directory
         directory = record.directory; self.port = String(record.port); codexHome = record.codexHome; clearService()
-        message = "工作区已添加，可以启动服务"; messageIsError = false; await reload(); return true
+        message = "工作区已保存，请继续设置"; messageIsError = false; await reload(); return true
     }
     func diagnose() async {
         guard !busy else { return }; busy = true; defer { busy = false }; await refreshTask?.value

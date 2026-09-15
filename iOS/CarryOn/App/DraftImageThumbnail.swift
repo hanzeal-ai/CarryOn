@@ -23,8 +23,6 @@ struct DraftImageThumbnail: View {
                             .frame(width: 32, height: 32)
                     }.buttonStyle(.plain).accessibilityLabel("删除此图片")
                 }
-            Button("删除", action: remove).font(.caption).foregroundStyle(.red)
-                .frame(minHeight: 32).accessibilityLabel("删除此图片")
         }
         .background(ImageLightboxPresenter(image: image, isPresented: $preview, onDelete: remove).frame(width: 0, height: 0))
         .task(id: dataURL) {

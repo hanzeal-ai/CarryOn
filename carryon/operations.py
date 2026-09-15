@@ -162,18 +162,18 @@ def permission_subset(granted, requested):
     return type(granted) is type(requested) and granted == requested
 
 
-def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None):
+def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, parent_id=None):
     from .errors import BridgeError
     from .catalog import valid_id
     valid_id(thread_id)
-    bridge.subagents.assert_interactive(thread_id)
+    bridge.assert_target(thread_id, parent_id)
     ipc, generation = bridge.require()
     action, request_id = data.get('action'), data.get('requestId')
     if action not in METHODS:
         raise ValueError('不支持的会话操作')
     if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', request_id):
         raise ValueError('requestId 必须为 8–100 位字母、数字、横线或下划线')
-    fingerprint = digest([thread_id, data])
+    fingerprint = digest([thread_id, data] + ([parent_id] if parent_id else []))
     with bridge.lock:
         bridge.check_generation(ipc, generation)
         previous = bridge.journal.get(request_id)
@@ -189,6 +189,7 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None):
         job = {'id': request_id, 'fingerprint': fingerprint, 'kind': 'operation:' + action,
                'threadId': thread_id, 'created': time.time(), 'state': 'preparing'}
         if source:job.update(source)
+        if parent_id is not None: job['sideParentId'] = parent_id
         bridge.journal.insert(job)
     import threading
     threading.Thread(target=dispatch, args=(bridge, ipc, generation, job, data, authorize, prepared), daemon=True).start()
@@ -202,21 +203,22 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
             owner, state = prepared
         else:
             owner, state = ipc.snapshot(job['threadId'])
+        bridge.assert_target(job['threadId'], job.get('sideParentId'), state)
         if data['action'] in QUEUE_ACTIONS:
-            state = {**state, 'nativeQueue': bridge.queue(job['threadId'])['messages']}
+            state = {**state, 'nativeQueue': bridge.queue(job['threadId'], job.get('sideParentId'))['messages']}
         method, version, params = build(data['action'], data, state)
         def guarded(write):
             nonlocal sent
             with bridge.lock:
                 bridge.check_generation(ipc, generation)
                 if authorize:authorize()
-                bridge.subagents.assert_interactive(job['threadId'])
+                bridge.assert_target(job['threadId'], job.get('sideParentId'))
                 # Recheck streamed state immediately before writing, when available.
                 current = ipc.current(job['threadId']) if hasattr(ipc, 'current') else None
                 if prepared is not None and current is None:
                     raise IPCError('会话状态正在重新同步，此请求未投递')
                 if data['action'] in QUEUE_ACTIONS:
-                    current = {**(current or state), 'nativeQueue': bridge.queue(job['threadId'])['messages']}
+                    current = {**(current or state), 'nativeQueue': bridge.queue(job['threadId'], job.get('sideParentId'))['messages']}
                 if current is not None:
                     build(data['action'], data, current)
                 bridge.journal.update(job['id'], state='dispatching')

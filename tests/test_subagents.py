@@ -192,6 +192,27 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual([row['id'] for row in self.bridge.catalog.children(P)], [C, R])
         self.assertEqual([row['id'] for row in self.bridge.catalog.children(C)], [R])
 
+    def test_inline_and_directory_use_current_conversation_title(self):
+        item = project_item({'type': 'subAgentActivity', 'id': 'event', 'agentThreadId': R,
+                             'agentPath': '/root/old_task_name', 'kind': 'completed'}, {'turnId': 't'}, 0)
+        history = {'timeline': [item], 'historyRevision': 'original'}
+        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+            conn.execute('UPDATE threads SET title=? WHERE id=?', ('实际子会话标题', R))
+        result = self.bridge.subagents.resolve_titles(history)
+        self.assertEqual(result['timeline'][0]['subagents'][0]['title'], '实际子会话标题')
+        self.assertEqual(self.bridge.subagents.list(P)['threads'][1]['title'], '实际子会话标题')
+        self.assertEqual(item['subagents'][0]['title'], 'Old task name')
+        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+            conn.execute('UPDATE threads SET title=? WHERE id=?', ('重命名后', R))
+        renamed = self.bridge.subagents.resolve_titles(history)
+        self.assertEqual(renamed['timeline'][0]['subagents'][0]['title'], '重命名后')
+        self.assertNotEqual(renamed['historyRevision'], result['historyRevision'])
+
+    def test_collaboration_reference_prefers_conversation_title_to_agent_name(self):
+        item = project_item({'type': 'collabAgentToolCall', 'receiverThreadIds': [C],
+                             'receiverThreads': [{'threadId': C, 'thread': {'title': '会话标题', 'name': 'Agent 昵称'}}]}, {'turnId': 't'}, 0)
+        self.assertEqual(item['subagents'][0]['title'], '会话标题')
+
     def test_inline_event_has_stable_target_without_name_inference(self):
         item = project_item({'type': 'subAgentActivity', 'id': 'event', 'agentThreadId': R, 'agentPath': '/root/sol_release_review', 'kind': 'completed'}, {'turnId': 't'}, 0)
         self.assertEqual(item['subagents'][0]['id'], R)

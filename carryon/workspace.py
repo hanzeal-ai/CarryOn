@@ -182,7 +182,7 @@ class Workspace:
             retained={tid for tid,kind in self.db.execute('''SELECT DISTINCT e.thread_id,e.kind FROM notification_events e
                 LEFT JOIN activity_cleared c ON c.reader=? AND c.thread_id=e.thread_id
                 WHERE e.sequence>COALESCE(c.sequence,0)''',(activity_owner or reader,)) if preferences.get(kind,False)}
-        ipc,_=self.bridge.require();groups={};threads=[]
+        ipc,_=self.bridge.require();groups={};threads=[];project_activity={}
         for row in rows:
             tid=row['id'];native=ipc.current(tid)
             status=project_status(native)
@@ -200,9 +200,10 @@ class Workspace:
             if completed is not None:thread['completedAt']=completed
             threads.append(thread)
             group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('projectRoot',row.get('cwd','')),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
+            project_activity[pid]=max(project_activity.get(pid,0),row.get('updated_at') or 0)
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
-        return sorted(groups.values(),key=lambda g:(-bool(g['waiting']),-bool(g['running']),g['name'],g['id'])),threads
+        return sorted(groups.values(),key=lambda g:(-project_activity[g['id']],g['name'],g['id'])),threads
 
     def push_snapshot(self,reader,after=None):
         # Optimistic consistency avoids taking workspace -> bridge locks in reverse order.
@@ -255,6 +256,9 @@ class Workspace:
             if include_read:
                 threads=[t for t in threads if t['activityRetained'] or (t['activity'] and t['readSequence']==0)]
             else:threads=[t for t in threads if t['activity']]
+            # An earlier notification must not turn the activity page into a live task list.
+            # Keep the notification stored; it becomes visible again once execution settles.
+            threads=[t for t in threads if t['status']['state']!='running']
             threads=[t for t in threads if t['id']!=query.get('excludeThreadId',[''])[0]]
         elif path.startswith('/api/projects/') and path.endswith('/threads'):
             pid=path.split('/')[3];threads=[t for t in threads if t['projectId']==pid]

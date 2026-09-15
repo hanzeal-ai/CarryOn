@@ -1,5 +1,6 @@
 """Native subagent topology and access policy, shared by every transport/client."""
 import json
+import hashlib
 from .catalog import ID
 from .operations import turns
 from .errors import BridgeError
@@ -41,7 +42,7 @@ def references(items):
                 if isinstance(tid, str) and ID.fullmatch(tid):
                     receiver = receivers.get(tid, {})
                     source = spawn_source(receiver)
-                    result[tid] = {'id': tid, 'title': receiver.get('name') or receiver.get('agentNickname') or source.get('agent_nickname') or tid}
+                    result[tid] = {'id': tid, 'title': receiver.get('title') or receiver.get('name') or receiver.get('agentNickname') or source.get('agent_nickname') or tid}
     return list(result.values())
 
 
@@ -82,8 +83,30 @@ class Subagents:
     def describe(self, row):
         source = spawn_source(row)
         name = agent_name(source.get('agent_path') or row.get('agent_path'))
-        return {'id': row['id'], 'title': row.get('name') or name or row.get('agent_nickname') or row.get('title') or row['id'],
+        return {'id': row['id'], 'title': row.get('title') or row.get('name') or name or row.get('agent_nickname') or row['id'],
                 'cwd': row.get('cwd', ''), 'access': self.access(row)}
+
+    def resolve_titles(self, history):
+        timeline = history.get('timeline', [])
+        ids = {agent['id'] for item in timeline for agent in item.get('subagents', [])}
+        titles = {}
+        for tid in ids:
+            try:
+                row = self.bridge.catalog.get(tid)
+            except ValueError:
+                continue
+            if row.get('title'):
+                titles[tid] = row['title']
+        if not titles:
+            return history
+        result = dict(history)
+        result['timeline'] = [
+            {**item, 'subagents': [{**agent, 'title': titles.get(agent['id'], agent['title'])}
+                                   for agent in item['subagents']]} if item.get('subagents') else item
+            for item in timeline]
+        if 'historyRevision' in result:
+            result['historyRevision'] += ':' + hashlib.sha256(json.dumps(titles, sort_keys=True).encode()).hexdigest()
+        return result
 
     def decorate(self, history, row):
         result = dict(history)

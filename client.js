@@ -142,6 +142,16 @@ class CarryOnClient {
       key, this.operations, 'carryon-operations', true);
   }
 
+  async sideAction(parent, target, action, fields, isCurrent = () => true) {
+    const epoch = this.epoch;
+    const body = {parentId: parent, ...fields, ...(action === 'compose' ? {} : {action})};
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([parent, target, action, body])));
+    if (epoch !== this.epoch || !isCurrent()) throw Error('当前临时聊天已改变，请重新操作');
+    const key = 'side:' + Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, '0')).join('');
+    return this.requestJob('/side-chats/' + target + (action === 'compose' ? '/compose' : '/operations'),
+      body, key, this.operations, 'carryon-operations', true);
+  }
+
   subscribe(selection) {
     this.selection = {historyProtocol:1, historyLimit:40, ...selection, type: 'subscribe', subscription: crypto.randomUUID()};
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(this.selection));

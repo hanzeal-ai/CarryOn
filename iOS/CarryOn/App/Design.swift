@@ -7,6 +7,7 @@ enum Design {
     static let secondary = Color(red: 0.43, green: 0.43, blue: 0.45)
     static let blue = Color(red: 0, green: 0.40, blue: 0.875)
     static let green = Color(red: 0.145, green: 0.518, blue: 0.255)
+    static let link = green
     static let orange = Color(red: 0.65, green: 0.38, blue: 0.03)
 }
 struct Paper<Content: View>: View {

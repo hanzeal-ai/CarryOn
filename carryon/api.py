@@ -25,7 +25,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -65,6 +65,16 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "GET" and path.startswith('/api/side-chats/') and path.endswith('/history'):
         history = bridge.side_history(parse_qs(parsed.query).get('parentId', [''])[0], path.split('/')[3])
         respond(200, {k:v for k,v in history.items() if k != 'turns'})
+    elif method == 'POST' and path.startswith('/api/side-chats/') and path.endswith(('/compose', '/operations')):
+        parent = data.get('parentId')
+        from .catalog import valid_id
+        valid_id(parent)
+        tid = path.split('/')[3]
+        if path.endswith('/compose'):
+            respond(202, bridge.compose(tid, data.get('requestId'), data.get('prompt'), data.get('images'), source, authorize, parent_id=parent))
+        else:
+            from .operations import submit
+            respond(202, submit(bridge, tid, data, source, authorize, parent_id=parent))
     elif method == 'GET' and ('/images/' in path or '/artifacts/' in path):
         parts = path.split('/')
         parent = parse_qs(parsed.query).get('parentId', [''])[0] if parts[2] == 'side-chats' else None

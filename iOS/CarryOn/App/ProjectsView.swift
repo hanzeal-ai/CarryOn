@@ -8,10 +8,6 @@ struct ProjectsView: View {
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Text("会话").font(.system(size: 24, weight: .semibold))
-                Spacer()
-            }.padding(.horizontal, 20).padding(.top, 8)
             RecordListView(path: projectView ? "/api/projects" : "/api/workspace/threads",
                            key: projectView ? "projects" : "threads", isProjectList: projectView,
                            create: { creating = true }) { record in
@@ -53,50 +49,62 @@ struct RecordListView: View {
     @State private var clearing = false
     private var queryIdentity: String { model.scope + path + search + (excludedThreadID ?? "") }
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                HStack(spacing: 8) {
-                    SearchField(text: $search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
-                    if let create { Button(action: create) { Image(systemName: "plus").font(.system(size: 25)).frame(width: 44, height: 44) }.disabled(!model.canWrite).accessibilityLabel("新建会话") }
-                }.padding(.top, 12)
-                if retainReadActivity {
-                    HStack {
-                        Text("动态").font(.system(size: 24, weight: .semibold))
-                        Spacer()
-                        Button("清空已读") { Task { await clearRead() } }
-                            .font(.subheadline).disabled(clearing || loading || model.selectedDevice.isEmpty)
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                SearchField(text: $search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
+            }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+            ScrollView {
+                VStack(spacing: 16) {
+                    if records.isEmpty {
+                        if model.selectedDevice.isEmpty { BlankState(text: "请先选择工作区", symbol: "laptopcomputer") }
+                        else if loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
+                        else if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
+                        else if loadKind != .refresh {
+                            BlankState(text: search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
+                        }
+                    } else if let failure {
+                        HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
                     }
-                }
-                if records.isEmpty {
-                    if model.selectedDevice.isEmpty { BlankState(text: "请先选择工作区", symbol: "laptopcomputer") }
-                    else if loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
-                    else if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
-                    else if loadKind != .refresh {
-                        BlankState(text: search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
-                    }
-                } else if let failure {
-                    HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
-                }
-                if isProjectList {
-                    LazyVStack(spacing: 12) {
-                        ForEach(records) { record in
-                            Button { select(record) } label: { Paper { projectRow(record) } }
-                                .buttonStyle(.plain)
+                    if isProjectList {
+                        LazyVStack(spacing: 12) {
+                            ForEach(records) { record in
+                                Button { select(record) } label: { Paper { projectRow(record) } }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    } else if !records.isEmpty {
+                        LazyVStack(spacing: 0) {
+                            ForEach(records) { record in
+                                Button { select(record) } label: { ThreadRow(record: record, dimmed: retainReadActivity && record.value["activityRead"].bool == true) }.buttonStyle(.plain)
+                                if record.id != records.last?.id { Divider().padding(.leading, 16) }
+                            }
                         }
                     }
-                } else if !records.isEmpty {
-                    Paper {
-                        ForEach(records) { record in
-                            Button { select(record) } label: { ThreadRow(record: record, dimmed: retainReadActivity && record.value["activityRead"].bool == true) }.buttonStyle(.plain)
-                            if record.id != records.last?.id { Divider().padding(.leading, 16) }
+                    if !records.isEmpty && records.count < total {
+                        Button { Task { await load(reset: false, kind: .more) } } label: { if loadKind == .more { ProgressView("加载更多…") } else { Text("加载更多（\(records.count)/\(total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
+                    }
+                }.padding(.bottom, 8)
+            }.frame(minHeight: 0, maxHeight: .infinity)
+                .background(isProjectList ? Color.clear : Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 19))
+                .scrollDismissesKeyboard(.interactively)
+                .refreshable { await load(reset: true, kind: .refresh) }
+                .padding(.horizontal, 20).padding(.bottom, 12)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if create != nil || retainReadActivity {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if let create {
+                            Button(action: create) { Image(systemName: "plus") }
+                                .disabled(!model.canWrite).accessibilityLabel("新建会话")
+                        } else if retainReadActivity {
+                            Button("清空已读") { Task { await clearRead() } }
+                                .disabled(clearing || loading || model.selectedDevice.isEmpty)
                         }
                     }
                 }
-                if !records.isEmpty && records.count < total {
-                    Button { Task { await load(reset: false, kind: .more) } } label: { if loadKind == .more { ProgressView("加载更多…") } else { Text("加载更多（\(records.count)/\(total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
-                }
-            }.padding(.horizontal, 20).padding(.bottom, 24)
-        }.scrollDismissesKeyboard(.interactively).refreshable { await load(reset: true, kind: .refresh) }
+            }
             .task(id: queryIdentity) { records = []; total = 0; offset = 0; await load(reset: true, debounce: !search.isEmpty) }
             .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true, kind: .background) } }
     }

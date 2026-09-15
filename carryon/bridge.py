@@ -102,7 +102,7 @@ class Bridge:
         else:
             try: result['queue'] = self.queue(thread_id)
             except (ValueError, OSError): pass
-        result = self.subagents.decorate(result, row)
+        result = self.subagents.resolve_titles(self.subagents.decorate(result, row))
         result['historyRevision'] += ':' + hashlib.sha256(json.dumps([result['access'], result.get('queue')], sort_keys=True).encode()).hexdigest()
         with self.lock:
             self.check_generation(ipc, generation)
@@ -258,23 +258,36 @@ class Bridge:
                 self.side_scanned_at = time.monotonic() if self.generation == generation else 0
             self.notify()
 
-    def side_history(self, parent_id, side_id, limit=None):
+    def side_state(self, parent_id, side_id, state=None):
         valid_id(side_id)
         self.catalog.get(parent_id)
         ipc, generation = self.require()
         with self.lock:
             if self.side_registry.get(side_id, {}).get('parentId') != parent_id:
                 raise ValueError('尚未核验此临时聊天属于当前会话')
-        state = ipc.current(side_id)
+        state = state if state is not None else ipc.current(side_id)
         if state is None:
             _, state = ipc.sidebar_snapshot(side_id)
-        if (state.get('sideConversation') is not True or state.get('ephemeral') is not True
+        if (state.get('id') != side_id or state.get('sideConversation') is not True or state.get('ephemeral') is not True
                 or state.get('forkedFromId') != parent_id):
             raise ValueError('临时聊天关联已失效')
         with self.lock:
             self.check_generation(ipc, generation)
+        return state
+
+    def assert_target(self, thread_id, parent_id=None, state=None):
+        if parent_id is not None:
+            self.side_state(parent_id, thread_id, state)
+        else:
+            self.subagents.assert_interactive(thread_id)
+
+    def side_history(self, parent_id, side_id, limit=None):
+        state = self.side_state(parent_id, side_id)
         result = self.history_cache.project(state, snapshot_history, segmented=True, limit=limit)
         result['parentId'] = parent_id
+        result['access'] = {'canInteract': True, 'nativeReady': True}
+        try: result['queue'] = self.queue(side_id, parent_id)
+        except (ValueError, OSError): result['queue'] = {'error': '无法读取原生排队消息，请稍后刷新'}
         return result
 
     def image(self, thread_id, identifier, parent_id=None):
@@ -336,13 +349,15 @@ class Bridge:
             if str(exc) != "no-client-found":
                 raise
             result = self.catalog.history(thread_id)
+        result = self.subagents.resolve_titles(result)
         with self.lock:
             self.check_generation(ipc, generation)
         return result
 
-    def queue(self, thread_id):
+    def queue(self, thread_id, parent_id=None):
         from .queue import projection
-        self.catalog.get(thread_id)
+        if parent_id is not None: self.side_state(parent_id, thread_id)
+        else: self.catalog.get(thread_id)
         ipc, generation = self.require()
         cached = None
         if hasattr(ipc, 'events'):
@@ -360,7 +375,7 @@ class Bridge:
         if not self.enabled or self.ipc is not ipc or self.generation != generation:
             raise BridgeError("桥接已取消，此请求未获准继续", 403)
 
-    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None):
+    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None):
         from .contracts import digest
         from .operations import controls,submit as operate
         from .images import validate_images
@@ -368,8 +383,8 @@ class Bridge:
         if not isinstance(prompt,str):raise ValueError('消息必须是文本')
         if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_id):raise ValueError('requestId 无效')
         valid_id(thread_id)
-        self.subagents.assert_interactive(thread_id)
-        fingerprint=digest([thread_id,prompt,images])
+        self.assert_target(thread_id, parent_id)
+        fingerprint=digest([thread_id,prompt,images] + ([parent_id] if parent_id else []))
         ipc,generation=self.require()
         previous=self.journal.get(request_id)
         if previous:
@@ -379,18 +394,19 @@ class Bridge:
         with self.lock:
             self.check_generation(ipc,generation)
             if authorize:authorize()
+            self.assert_target(thread_id, parent_id, state)
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
-            if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize)
+            if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id)
             if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
             data={'requestId':request_id,'prompt':prompt}
             if images:data['images']=images
             if status=='waiting':
-                data.update(action='queue-add',queueFingerprint=self.queue(thread_id)['fingerprint'])
+                data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id)['fingerprint'])
             else:
                 data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
-            return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state))
+            return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id)
 
-    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None):
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None):
         from .images import validate_images
         images=validate_images(images)
         if images and kind!="message":raise ValueError("请先创建会话，再发送图片")
@@ -405,7 +421,7 @@ class Bridge:
             if not thread_id:
                 raise BridgeError("请先选择一个已加载、空闲的控制会话")
             valid_id(thread_id)
-            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else []), ensure_ascii=False).encode()).hexdigest()
+            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else []), ensure_ascii=False).encode()).hexdigest()
             previous = self.journal.get(request_id)
             if previous:
                 if previous["fingerprint"] != fingerprint:
@@ -414,11 +430,12 @@ class Bridge:
             if any(j["threadId"] == thread_id and j["state"] in (
                     "preparing", "dispatching", "accepted", "uncertain") for j in self.journal.list()):
                 raise BridgeError("此会话已有未完成或结果待确认的请求，请先核对请求状态")
-            self.subagents.assert_interactive(thread_id)
+            self.assert_target(thread_id, parent_id)
             job = {"id": request_id, "kind": kind, "threadId": thread_id,
                    "state": "preparing", "created": time.time(), "fingerprint": fingerprint,
                    "clientMessageId": str(uuid.uuid4())}
             if source:job.update(source)
+            if parent_id is not None: job['sideParentId'] = parent_id
             if kind == "create":
                 job["expectedTitle"] = "CarryOn · " + prompt[:28] + " [" + request_id[:8] + "]"
             self.journal.insert(job)
@@ -429,6 +446,7 @@ class Bridge:
         dispatched = False
         try:
             owner, state = ipc.snapshot(job["threadId"])
+            self.assert_target(job['threadId'], job.get('sideParentId'), state)
             idle_snapshot(state)
             if job["kind"] == "create":
                 payload = json.dumps({"prompt": prompt, "title": job["expectedTitle"]}, ensure_ascii=False)
@@ -446,7 +464,7 @@ class Bridge:
                 with self.lock:
                     self.check_generation(ipc, generation)
                     if authorize:authorize()
-                    self.subagents.assert_interactive(job['threadId'])
+                    self.assert_target(job['threadId'], job.get('sideParentId'))
                     self.journal.update(job["id"], state="dispatching")
                     dispatched = True
                     write()
@@ -469,10 +487,11 @@ class Bridge:
             with self.lock:
                 self.refreshing_jobs.discard(job_id)
 
-    def turn_evidence(self, thread_id, turn_id):
+    def turn_evidence(self, thread_id, turn_id, parent_id=None):
         """Read only the requested native turn; job tracking needs no display timeline."""
         from .operations import turns
-        self.catalog.get(thread_id)
+        if parent_id is not None: self.side_state(parent_id, thread_id)
+        else: self.catalog.get(thread_id)
         ipc, generation = self.require()
         try:
             state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
@@ -497,7 +516,7 @@ class Bridge:
         if job["state"] not in ("accepted", "uncertain") or not job.get("turnId"):
             return job
         try:
-            turn = self.turn_evidence(job["threadId"], job["turnId"])
+            turn = self.turn_evidence(job["threadId"], job["turnId"], **({"parent_id": job["sideParentId"]} if job.get("sideParentId") else {}))
         except (ValueError, IPCError):
             return job  # Unavailable evidence is never interpreted as completion.
         if not turn or turn["status"] not in ("completed", "failed", "interrupted"):

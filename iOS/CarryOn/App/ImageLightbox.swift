@@ -8,49 +8,69 @@ struct ImageLightboxPresenter: UIViewControllerRepresentable {
     var onDelete: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeUIViewController(context: Context) -> UIViewController {
-        let controller = UIViewController()
-        controller.view.backgroundColor = .clear
-        controller.view.isUserInteractionEnabled = false
+    func makeUIViewController(context: Context) -> ImagePresentationHost {
+        let controller = ImagePresentationHost()
+        let coordinator = context.coordinator
+        controller.ready = { [weak controller, weak coordinator] in
+            if let controller { coordinator?.presentIfReady(from: controller) }
+        }
         return controller
     }
-    func updateUIViewController(_ controller: UIViewController, context: Context) {
+    func updateUIViewController(_ controller: ImagePresentationHost, context: Context) {
         let coordinator = context.coordinator
         coordinator.binding = $isPresented
-        if isPresented, let image, coordinator.preview == nil, !coordinator.scheduled {
-            coordinator.scheduled = true
-            DispatchQueue.main.async { [weak controller, weak coordinator] in
-                guard let coordinator else { return }
-                coordinator.scheduled = false
-                guard let controller, controller.view.window != nil, coordinator.binding?.wrappedValue == true,
-                      coordinator.preview == nil else { return }
-                let preview = ImageLightboxController(image: image)
-                preview.onDelete = onDelete
-                preview.onClose = { [weak coordinator] in
-                    coordinator?.preview = nil
-                    coordinator?.binding?.wrappedValue = false
-                }
-                coordinator.preview = preview
-                // Present from the attached hosting controller, not the zero-sized child.
-                var presenter = controller
-                while let parent = presenter.parent { presenter = parent }
-                while let presented = presenter.presentedViewController, !presented.isBeingDismissed { presenter = presented }
-                presenter.present(preview, animated: !UIAccessibility.isReduceMotionEnabled)
-            }
-        } else if !isPresented, let preview = coordinator.preview {
-            preview.close()
-        }
+        coordinator.image = image
+        coordinator.onDelete = onDelete
+        coordinator.presentIfReady(from: controller)
+        if !isPresented { coordinator.preview?.close() }
     }
-    static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
+    static func dismantleUIViewController(_ controller: ImagePresentationHost, coordinator: Coordinator) {
+        controller.ready = nil
         coordinator.preview?.dismiss(animated: false)
         coordinator.preview = nil
         coordinator.binding = nil
     }
-    final class Coordinator {
+    @MainActor final class Coordinator {
         var binding: Binding<Bool>?
+        var image: UIImage?
+        var onDelete: (() -> Void)?
         var preview: ImageLightboxController?
         var scheduled = false
+        func presentIfReady(from controller: UIViewController) {
+            guard binding?.wrappedValue == true, image != nil, preview == nil, !scheduled else { return }
+            scheduled = true
+            DispatchQueue.main.async { [weak self, weak controller] in
+                guard let self else { return }
+                self.scheduled = false
+                guard let controller, self.binding?.wrappedValue == true, let image = self.image,
+                      self.preview == nil, var presenter = controller.view.window?.rootViewController else { return }
+                while let presented = presenter.presentedViewController, !presented.isBeingDismissed { presenter = presented }
+                let preview = ImageLightboxController(image: image)
+                preview.onDelete = self.onDelete
+                preview.onClose = { [weak self] in self?.preview = nil; self?.binding?.wrappedValue = false }
+                self.preview = preview
+                presenter.present(preview, animated: !UIAccessibility.isReduceMotionEnabled)
+            }
+        }
     }
+}
+
+// A Markdown link can load its image before its background presenter joins the window.
+// Retry on attachment instead of losing that first presentation request.
+final class ImagePresentationHost: UIViewController {
+    var ready: (() -> Void)?
+    override func loadView() {
+        let anchor = ImagePresentationAnchor()
+        anchor.backgroundColor = .clear
+        anchor.isUserInteractionEnabled = false
+        anchor.ready = { [weak self] in self?.ready?() }
+        view = anchor
+    }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); ready?() }
+}
+private final class ImagePresentationAnchor: UIView {
+    var ready: (() -> Void)?
+    override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { ready?() } }
 }
 
 final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
@@ -103,8 +123,11 @@ final class ImageLightboxController: UIViewController, UIScrollViewDelegate, UIG
         view.addSubview(closeButton)
         if onDelete != nil {
             deleteButton.setTitle("删除图片", for: .normal)
-            deleteButton.tintColor = .white
-            deleteButton.backgroundColor = .systemRed
+            deleteButton.setTitleColor(.systemRed, for: .normal)
+            deleteButton.tintColor = .systemRed
+            deleteButton.backgroundColor = .clear
+            deleteButton.layer.borderWidth = 1
+            deleteButton.layer.borderColor = UIColor.systemRed.cgColor
             deleteButton.layer.cornerRadius = 12
             deleteButton.addTarget(self, action: #selector(deleteImage), for: .touchUpInside)
             view.addSubview(deleteButton)

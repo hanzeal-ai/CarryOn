@@ -28,7 +28,7 @@ struct SubagentsView: View {
     }
     private func open(_ thread: Record) {
         guard model.selectedThread?.id == parentID else { return }
-        dismiss(); onOpen(); model.open(thread)
+        dismiss(); onOpen(); model.enterSubconversation(thread, from: parentID)
     }
     private func load() async {
         let scope = model.scope
@@ -50,14 +50,16 @@ struct SubagentLinks: View {
     let parentID: String
     @State private var opening = false
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
         ForEach(item["subagents"].array, id: \.stableID) { agent in
             Button {
                 opening = true
                 Task { await model.openSubagent(agent["id"].text, parentID: parentID); opening = false }
             } label: {
-                Label(item["type"].text == "subAgentActivity" ? item["title"].text : agent["title"].text, systemImage: "person.crop.circle")
-                    .font(.caption).multilineTextAlignment(.leading)
-            }.disabled(opening)
+                Label(agent["title"].text, systemImage: "person.crop.circle")
+                    .font(.caption).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }.buttonStyle(.plain).foregroundStyle(Design.link).disabled(opening)
+        }
         }
     }
 }

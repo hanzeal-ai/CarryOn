@@ -22,10 +22,37 @@ struct ConversationView: View {
     @State private var submitting = false
     private var timeline: [JSONValue] { groupedTimeline(model.history["timeline"].array) }
     @State private var chatMessages: [ExyteChat.Message] = []
+    @State private var tableUpdates: TableUpdateTransaction?
+    @State private var disclosureState = ConversationDisclosureState()
+    @State private var refreshingMessages = false
+    @State private var messagesNeedRefresh = false
     private func refreshMessages() {
+        messagesNeedRefresh = true
+        guard !refreshingMessages else { return }
+        refreshingMessages = true
+        Task { @MainActor in
+            defer { refreshingMessages = false }
+            while messagesNeedRefresh {
+                messagesNeedRefresh = false
+                let next = projectedMessages()
+                guard next != chatMessages else { continue }
+                if let tableUpdates {
+                    // Serialize snapshots: overlapping transactions can consume each other's animation mode.
+                    await tableUpdates(animationMode: bottomVisible ? .none : .keepStable) { chatMessages = next }
+                } else { chatMessages = next }
+            }
+        }
+    }
+    private func projectedMessages() -> [ExyteChat.Message] {
         let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let rows = Array(timeline.suffix(visibleCount))
-        chatMessages = rows.enumerated().map { index, item in
+        let supplemental: JSONValue = .object([
+            "showEmpty": .bool(model.historyFailure == nil && model.history != .null && timeline.isEmpty),
+            "syncing": model.history["syncing"], "readOnly": .bool(model.conversationReadOnly),
+            "requests": model.history["controls"]["requests"], "pendingRequests": model.history["pendingRequests"],
+            "queue": model.history["queue"], "outgoing": .array(model.visibleOutgoing)
+        ])
+        return rows.enumerated().map { index, item in
             let date = Date(timeIntervalSince1970: Double(index))
             if var message = previous[item.stableID], message.customData["entry"] as? JSONValue == item {
                 message.createdAt = date
@@ -38,7 +65,7 @@ struct ConversationView: View {
             return message
         } + [ExyteChat.Message(id: "carryon:status", user: .init(id: "status", name: "", avatarURL: nil, type: .system),
                              createdAt: Date(timeIntervalSince1970: Double(rows.count)),
-                             text: [model.state, model.history["controls"]["requests"].formatted, model.history["queue"].formatted, model.history["pendingRequests"].formatted, model.visibleOutgoing.map(\.formatted).joined()].joined(separator: "\n"))]
+                             text: supplemental.formatted, customData: ["supplemental": supplemental])]
     }
     var body: some View {
         ChatView(messages: chatMessages, didSendMessage: { _ in }, messageBuilder: { params in
@@ -49,6 +76,7 @@ struct ConversationView: View {
             if let item = message.customData["entry"] as? JSONValue { UIPasteboard.general.string = item["text"].text }
         })
         .setAvailableInputs([.text])
+        .updateTransaction($tableUpdates)
         .showDateHeaders(false)
         .showAvatar(false)
         .showMessageMenuOnLongPress(false)
@@ -61,17 +89,31 @@ struct ConversationView: View {
             if bottomVisible { markRead() }
         }
         .carryOnChatAppearance()
+        .environment(\.conversationDisclosureState, disclosureState)
         .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))
         .navigationTitle(thread.title).navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(!model.threadParents.isEmpty)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                if model.otherActivityCount > 0 {
-                    Button { activity = true } label: {
-                        Text(model.otherActivityCount > 99 ? "99+" : String(model.otherActivityCount))
-                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
-                            .background(Design.blue, in: Capsule()).frame(minHeight: 44)
-                    }.accessibilityLabel("其他 \(model.otherActivityCount) 个会话待查看或处理")
+                HStack(spacing: 8) {
+                    if let parent = model.threadParents.last {
+                        Button { model.returnToParentThread() } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left").fontWeight(.semibold)
+                                Text(parent.title).lineLimit(1).truncationMode(.tail)
+                                    .frame(maxWidth: 112, alignment: .leading)
+                            }.font(.subheadline).frame(minHeight: 44)
+                        }.foregroundStyle(Design.link).accessibilityLabel("返回主会话：" + parent.title)
+                    }
+                    if model.otherActivityCount > 0 {
+                        Button { activity = true } label: {
+                            Text(model.otherActivityCount > 99 ? "99+" : String(model.otherActivityCount))
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
+                                .background(Design.blue, in: Capsule()).frame(minHeight: 44)
+                        }.fixedSize().layoutPriority(1)
+                            .accessibilityLabel("其他 \(model.otherActivityCount) 个会话待查看或处理")
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -91,12 +133,17 @@ struct ConversationView: View {
         }
         .sheet(isPresented: $menu) { ConversationMenu() }
         .sheet(isPresented: $modelInfo) { ModelInformationView() }
+        .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
+            EditMessageView(item: model.editingMessage, threadID: thread.id, scope: model.scope)
+        }
         .onChange(of: model.historyRevision, initial: true) { _, _ in
             refreshMessages()
             if bottomVisible { markRead() }
         }
         .onChange(of: visibleCount) { _, _ in refreshMessages() }
         .onChange(of: model.visibleOutgoing) { _, _ in refreshMessages() }
+        .onChange(of: model.historyFailure) { _, _ in refreshMessages() }
+        .onChange(of: model.conversationReadOnly) { _, _ in refreshMessages() }
         .onChange(of: photos) { _, selection in Task { await loadPhotos(selection) } }
         .onDisappear { selectionGeneration = UUID(); loadingImages = false }
     }
@@ -107,7 +154,9 @@ struct ConversationView: View {
                     .onLongPressGesture {
                         if !CarryOnMessageAction.menuItems(for: params.message).isEmpty { params.showContextMenuClosure() }
                     }
-            } else { supplementalRows }
+            } else if let snapshot = params.message.customData["supplemental"] as? JSONValue {
+                supplementalRows(snapshot)
+            }
         }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
     }
     @ViewBuilder private var composerView: some View {
@@ -124,7 +173,7 @@ struct ConversationView: View {
                     Image(systemName: "plus").frame(width: 44, height: 44)
                 }.disabled(!model.canInteract || !["idle", "running", "waiting"].contains(model.state) || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
                     .accessibilityLabel("添加图片")
-                Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
+                Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").offset(x: -6).frame(width: 44, height: 44) }
                     .accessibilityLabel("模型与思考强度")
             }
         }
@@ -161,55 +210,32 @@ struct ConversationView: View {
 
         }.padding(.horizontal, 16)
     }
-    private var supplementalRows: some View {
+    private func supplementalRows(_ snapshot: JSONValue) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.historyFailure == nil && model.history != .null && timeline.isEmpty && model.visibleOutgoing.isEmpty {
+            if snapshot["showEmpty"].bool == true && snapshot["outgoing"].array.isEmpty {
                 BlankState(
-                    text: model.history["syncing"].bool == true ? "正在同步会话…" : "暂无会话记录", loading: model.history["syncing"].bool == true, symbol: "bubble.left.and.bubble.right")
+                    text: snapshot["syncing"].bool == true ? "正在同步会话…" : "暂无会话记录", loading: snapshot["syncing"].bool == true, symbol: "bubble.left.and.bubble.right")
             }
-            ForEach(model.conversationReadOnly ? [] : model.history["controls"]["requests"].array, id: \.requestKey) { request in
+            ForEach(snapshot["readOnly"].bool == true ? [] : snapshot["requests"].array, id: \.requestKey) { request in
                 NativeRequestView(request: request).id(request.requestKey)
             }
-            let unsupported = model.history["pendingRequests"].array.count - model.history["controls"]["requests"].array.count
+            let unsupported = snapshot["pendingRequests"].array.count - snapshot["requests"].array.count
             if unsupported > 0 { Text("另有 \(unsupported) 项请求尚未适配，请在 Codex App 处理。").font(.caption).foregroundStyle(Design.secondary) }
-            if !model.history["queue"]["messages"].array.isEmpty {
+            if !snapshot["queue"]["messages"].array.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("等待队列").font(.caption).fontWeight(.semibold)
-                    ForEach(model.history["queue"]["messages"].array, id: \.stableID) { Text($0["text"].text).font(.caption).textSelection(.enabled) }
+                    ForEach(snapshot["queue"]["messages"].array, id: \.stableID) { Text($0["text"].text).font(.caption).textSelection(.enabled) }
                 }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
             }
-            ForEach(model.visibleOutgoing, id: \.stableID) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
-                    let labels = ["sending": "发送中…", "preparing": "发送中…", "dispatching": "发送中…", "failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
-                    Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
-                    if item["state"].text == "failed" { Button("清除提示") { model.outgoing.removeValue(forKey: item["id"].text) }.font(.caption) }
-                }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
+            ForEach(snapshot["outgoing"].array, id: \.stableID) { item in
+                OutgoingMessageStatusView(item: item) { model.outgoing.removeValue(forKey: item["id"].text) }
             }
-            if model.historyFailure == nil && model.state == "running" && !timeline.isEmpty && model.history["syncing"].bool != true {
-                HStack {
-                    ProgressView().controlSize(.mini); Text("正在继续处理").font(.caption)
-                }.foregroundStyle(Design.secondary)
-            }
+
 
         }
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !model.conversationReadOnly && model.editingMessage != .null {
-                HStack {
-                    Text("编辑消息").font(.caption)
-                    Spacer()
-                    Button("取消") { model.cancelEditing() }.font(.caption).disabled(submitting)
-                }
-                let item = model.editingMessage
-                let parts = item["data"]["content"].array + item["data"]["input"].array
-                let imagePaths = Set(parts.filter { $0["type"].text == "localImage" }.map { $0["path"].text })
-                MessageThumbnails(parts: parts, refs: item["artifacts"].array.filter { !imagePaths.contains($0["path"].text) }, threadID: thread.id)
-                ForEach(item["artifacts"].array.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in
-                    ArtifactView(ref: ref, threadID: thread.id)
-                }
-            }
             if loadingImages || submitting { ProgressView().controlSize(.small) }
             if !model.conversationReadOnly && !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -267,9 +293,9 @@ struct ConversationTimelineRow: View {
             if item["items"].array.count == 1, let child = item["items"].array.first,
                !ConversationPresentation.hasActivityDetails(child) {
                 ActivityLabel(item: child)
-            } else { DisclosureGroup {
+            } else { ConversationDisclosureGroup(key: threadID + "\n" + item.stableID) {
                 ForEach(item["items"].array, id: \.stableID) { child in TimelineEntry(item: child, threadID: threadID) }
-            } label: { ActivityLabel(item: item["items"].array.last(where: { $0["status"].text == "inProgress" }) ?? item["items"].array.last ?? .null) }
+            } label: { ActivityLabel(item: item["items"].array.last(where: { $0["status"].text == "inProgress" }) ?? item["items"].array.last ?? .null, interactive: true) }
                 .font(.caption).tint(Design.secondary).disclosureGroupStyle(CompactActivityStyle())
             }
         } else { TimelineEntry(item: item, threadID: threadID) }
@@ -305,47 +331,49 @@ struct TimelineEntry: View {
                 let nativePaths = Set(parts.filter { $0["type"].text == "localImage" }.map { $0["path"].text })
                 let refs = item["artifacts"].array.filter { !nativePaths.contains($0["path"].text) && (user || !ConversationPresentation.referencedArtifactIDs(item).contains($0["id"].text)) }
                 MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: user)
-                MessageMarkdown(text: user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item), artifacts: user ? [] : item["artifacts"].array, threadID: threadID)
+                MessageMarkdown(text: user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item), artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
                     .padding(user ? 13 : 0).background(user ? Design.background : .clear, in: RoundedRectangle(cornerRadius: 19))
                     .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
-                if canEdit {
-                    Button { model.beginEditing(item) } label: { Label("编辑", systemImage: "pencil") }
-                        .font(.caption).foregroundStyle(Design.blue)
-                }
+                    .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
+                    .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
                 if !contentContext.isReadOnly { ForEach(item["asyncQuestions"].array, id: \.stableID) { question in AsyncQuestionView(question: question, threadID: threadID) } }
                 ForEach(refs.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
             }.padding(.leading, user ? 32 : 0)
 
         } else if !item["subagents"].array.isEmpty {
-            SubagentLinks(item: item, parentID: threadID)
-            if kind == "collabAgentToolCall" {
-                DisclosureGroup("协作详情") {
-                    Text(item["data"].formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                }.font(.caption).tint(Design.secondary)
-            }
+            VStack(alignment: .leading, spacing: 10) {
+                SubagentLinks(item: item, parentID: threadID)
+                if kind == "collabAgentToolCall" {
+                    ConversationDisclosureGroup(key: threadID + "\n" + item.stableID) {
+                        Text(item["data"].formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    } label: { Text("协作详情") }
+                    .font(.caption).tint(Design.secondary).disclosureGroupStyle(CompactActivityStyle())
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         } else if !item["artifacts"].array.isEmpty {
             MessageThumbnails(parts: [], refs: item["artifacts"].array, threadID: threadID)
             ForEach(item["artifacts"].array.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
         } else if !ConversationPresentation.hasActivityDetails(item) {
             ActivityLabel(item: item)
         } else {
-            DisclosureGroup {
+            ConversationDisclosureGroup(key: threadID + "\n" + item.stableID) {
                 if !(item["data"].object ?? [:]).isEmpty { Text(item["data"].formatted).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 2) }
                 if item["supported"].bool == false { Text("此类型尚未适配，请在 Codex App 查看完整内容。").font(.caption) }
             } label: {
-                ActivityLabel(item: item)
+                ActivityLabel(item: item, interactive: true)
             }.tint(Design.secondary).disclosureGroupStyle(CompactActivityStyle())
         }
     }
 }
 private struct ActivityLabel: View {
     let item: JSONValue
+    var interactive = false
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: item["type"].text == "reasoning" ? "sparkles" : item["type"].text == "fileChange" ? "doc.text" : "terminal")
             Text(ConversationPresentation.activityLabel(item))
                 .lineLimit(1).truncationMode(.tail)
-        }.font(.system(size: 12)).foregroundStyle(Design.secondary)
+        }.font(.system(size: 12)).foregroundStyle(interactive ? Design.link : Design.secondary)
     }
 }
 
@@ -381,6 +409,58 @@ struct MessageImage: View {
         } catch { failure = error.localizedDescription }
     }
 }
+struct EditMessageView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let item: JSONValue
+    let threadID: String
+    let scope: String
+    @State private var sending = false
+    @State private var failed = false
+    @FocusState private var focused: Bool
+    private var canSend: Bool {
+        !sending && model.canInteract && !model.conversationReadOnly && model.scope == scope &&
+        model.selectedThread?.id == threadID && model.editingMessage == item && model.state == "idle" &&
+        model.history["syncing"].bool != true && item["turnId"] == model.history["controls"]["lastTurnId"] &&
+        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    var body: some View {
+        @Bindable var model = model
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                TextEditor(text: $model.draft).focused($focused)
+                    .padding(8).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityLabel("修改消息内容").disabled(sending)
+                let parts = item["data"]["content"].array + item["data"]["input"].array
+                let paths = Set(parts.filter { $0["type"].text == "localImage" }.map { $0["path"].text })
+                MessageThumbnails(parts: parts, refs: item["artifacts"].array.filter { !paths.contains($0["path"].text) }, threadID: threadID)
+                ForEach(item["artifacts"].array.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in
+                    ArtifactView(ref: ref, threadID: threadID)
+                }
+                if failed { Text("发送失败，请重试").font(.caption).foregroundStyle(.red) }
+            }.padding(20)
+                .navigationTitle("编辑消息").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { model.cancelEditing(); dismiss() }.disabled(sending)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("发送") {
+                            guard canSend else { return }
+                            sending = true; failed = false
+                            Task {
+                                let success = await model.compose()
+                                sending = false
+                                if success { dismiss() } else { failed = true }
+                            }
+                        }.disabled(!canSend)
+                    }
+                }
+        }.interactiveDismissDisabled(sending)
+            .onAppear { focused = true }
+    }
+}
+
 struct ModelInformationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -441,7 +521,7 @@ func groupedTimeline(_ items: [JSONValue]) -> [JSONValue] {
             pending = []
         }
     }
-    for item in items {
+    for item in ConversationPresentation.visibleReasoning(items) {
         if !["turn", "userMessage", "steeringUserMessage", "agentMessage", "error"].contains(item["type"].text) && item["artifacts"].array.isEmpty && item["subagents"].array.isEmpty { pending.append(item) }
         else { flush(); result.append(item) }
     }
@@ -474,7 +554,7 @@ struct ArtifactView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !openOnLoad, ref["kind"].text != "image" { Button(ref["name"].text) { Task { await openFile() } }
-                .font(.caption).bold().disabled(loading).accessibilityHint("预览文件") }
+                .font(.caption).bold().foregroundStyle(Design.link).disabled(loading).accessibilityHint("预览文件") }
             if !openOnLoad, let image { Button { showImage = true } label: { Image(uiImage: image).resizable().scaledToFill().frame(width: 88, height: 88).clipped().clipShape(RoundedRectangle(cornerRadius: 12)) }.buttonStyle(.plain).accessibilityLabel("打开原图") }
             if loading { ProgressView() }
             if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
@@ -485,7 +565,10 @@ struct ArtifactView: View {
         .frame(width: ref["kind"].text == "image" ? 88 : nil, height: ref["kind"].text == "image" ? 88 : nil)
         .task(id: ref.stableID) {
             if openOnLoad {
-                if ref["kind"].text == "image" { await load(); showImage = image != nil }
+                if ref["kind"].text == "image" {
+                    await load()
+                    if image != nil { showImage = true } else if let localFile { preview = localFile }
+                }
                 else { await openFile() }
             } else if ref["kind"].text == "image" { await load() }
         }
@@ -528,7 +611,10 @@ struct ArtifactView: View {
             let file = folder.appendingPathComponent(name.isEmpty || name == "." || name == ".." ? "attachment" : name)
             try data.write(to: file, options: .atomic)
             localFile = file; image = UIImage(data: data); failure = nil
-        } catch { failure = error.localizedDescription }
+        } catch {
+            failure = error.localizedDescription
+            if openOnLoad { model.report(error, operation: "预览附件") }
+        }
     }
 }
 
@@ -541,7 +627,7 @@ private struct CompactActivityStyle: DisclosureGroupStyle {
                     Image(systemName: "chevron.down").font(.system(size: 9))
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityValue(configuration.isExpanded ? "已展开" : "已收起")
+            }.buttonStyle(.plain).foregroundStyle(Design.link).accessibilityValue(configuration.isExpanded ? "已展开" : "已收起")
             if configuration.isExpanded { VStack(alignment: .leading, spacing: 0) { configuration.content } }
         }
     }

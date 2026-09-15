@@ -4,17 +4,22 @@ import Highlightr
 import CarryOnCore
 
 struct MessageMarkdown: View {
+    @Environment(AppModel.self) private var model
     let text: String
     var artifacts: [JSONValue] = []
     var threadID: String = ""
+    var resolveCreatedThreads = false
+    @State private var threadTitles: [String: String] = [:]
+    @State private var openingThread = false
+    private var createdIDs: [String] { resolveCreatedThreads ? CreatedThreadReference.threadIDs(in: text) : [] }
     @State private var selectedArtifact: JSONValue?
     @State private var previewID = UUID()
     var body: some View {
-        Markdown(text)
+        Markdown(resolveCreatedThreads ? CreatedThreadReference.render(text, titles: threadTitles) : text)
             .markdownImageProvider(AttachmentImageProvider())
             .markdownInlineImageProvider(AttachmentInlineImageProvider())
             .markdownTextStyle { FontSize(15); ForegroundColor(Design.ink) }
-            .markdownTextStyle(\.link) { ForegroundColor(Design.green) }
+            .markdownTextStyle(\.link) { ForegroundColor(Design.link) }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 CodeBlockView(code: configuration.content, language: configuration.language)
                     .markdownMargin(top: 8, bottom: 8)
@@ -24,8 +29,24 @@ struct MessageMarkdown: View {
                 if url.scheme == "carryon-artifact", let ref = artifacts.first(where: { url.absoluteString == "carryon-artifact:" + $0["id"].text }) {
                     selectedArtifact = ref; previewID = UUID(); return .handled
                 }
+                if url.scheme == "carryon-thread", let id = createdIDs.first(where: { url.absoluteString == "carryon-thread:" + $0 }) {
+                    guard !openingThread else { return .handled }
+                    openingThread = true
+                    Task { await model.openLinkedThread(id, from: threadID); openingThread = false }
+                    return .handled
+                }
                 return ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
             })
+            .task(id: model.scope + createdIDs.joined()) {
+                let scope = model.scope
+                for id in createdIDs {
+                    do {
+                        let result = try await model.page("/api/workspace/threads?threadId=" + ConsoleAddress.component(id), key: "threads")
+                        guard !Task.isCancelled, model.scope == scope else { return }
+                        if let record = result.records.first(where: { $0.id == id }) { threadTitles[id] = record.title }
+                    } catch { if Task.isCancelled { return } }
+                }
+            }
             .background {
                 if let selectedArtifact {
                     ArtifactView(ref: selectedArtifact, threadID: threadID, openOnLoad: true).id(previewID)

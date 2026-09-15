@@ -15,11 +15,21 @@ import CarryOnCore
     var connected = false
     var reconnecting = false
     var selectedThread: Record?
+    private(set) var threadParents: [Record] = []
     var selectedProject: Record?
     var activityCount: Int?
     var otherActivityCount = 0
     private var activityRequestVersion = UUID()
     var history: JSONValue = .null
+    var sideThreadID: String?
+    var sideHistory: JSONValue = .null
+    var sideHistoryFailure: String?
+    var sideHistoryLimit = 40
+    func loadMoreSide() { sideHistoryLimit = min(100000, sideHistoryLimit + 40); updateSelection() }
+    func watchSide(_ id: String?) {
+        sideThreadID = id; sideHistory = .null; sideHistoryFailure = nil; sideHistoryLimit = 40
+        updateSelection()
+    }
     var historyFailure: String?
     var historyCache = DisplayHistoryCache()
     var outgoing: [String: JSONValue] = [:]
@@ -36,7 +46,8 @@ import CarryOnCore
     var writing = false
     var notice: String?
     private(set) var removingDevice = false
-    private(set) var epoch = UUID()
+    private let readReceipts = ReadReceiptSync()
+    private(set) var epoch = UUID() { didSet { readReceipts.reset(); threadParents = [] } }
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
     private var liveStream: ConsoleStream?
@@ -191,7 +202,7 @@ import CarryOnCore
         let previous = api; api = nil
         Task { await previous?.invalidate() }
         authenticated = false; connected = false; reconnecting = false; status = .null; history = .null; historyFailure = nil
-        devices = []; selectedDevice = ""; selectedThread = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
+        devices = []; selectedDevice = ""; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
     }
     func logout() async {
         guard let api else { return }
@@ -200,16 +211,22 @@ import CarryOnCore
             if let installation = UserDefaults.standard.string(forKey: "carryon.push.installation") {
                 body = .object(["installationId": .string(installation), "revision": try PushNotifications.nextRevision()])
             }
+            // Stop subscriptions before the server invalidates their login session.
+            epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
+            connected = false; reconnecting = false; error = nil; notice = nil
             _ = try await api.request("logout", body: body, method: "POST")
             resetSession()
         }
-        catch { report(error, operation: "退出登录") }
+        catch {
+            report(error, operation: "退出登录")
+            if authenticated && foreground { startUpdates() }
+        }
     }
     func switchDevice(_ id: String) {
         saveDrafts()
         workspacePreferences.selectDevice(id, server: addressText)
         epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
-        selectedDevice = id; selectedThread = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; history = .null; historyFailure = nil; status = .null
+        selectedDevice = id; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; history = .null; historyFailure = nil; status = .null
         connected = false; readSequence = 0; workspaceRevision += 1
         startUpdates()
     }
@@ -227,6 +244,20 @@ import CarryOnCore
         if selectedDevice == id { switchDevice(devices.first?.id ?? "") }
     }
     func open(_ thread: Record) {
+        threadParents = []
+        activateThread(thread)
+    }
+    func enterSubconversation(_ thread: Record, from parentID: String) {
+        guard let parent = selectedThread, parent.id == parentID, thread.id != parentID else { return }
+        threadParents.append(parent)
+        activateThread(thread)
+    }
+    func returnToParentThread() {
+        guard let parent = threadParents.popLast() else { return }
+        activateThread(parent)
+    }
+    private func activateThread(_ thread: Record) {
+        sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil
         historyLimit = 40; historyFailure = nil
         otherActivityCount = 0
         selectedThread = thread; history = historyCache.get(scope + "\n" + thread.id) ?? .null; readSequence = 0
@@ -239,8 +270,19 @@ import CarryOnCore
             let result = try await deviceRequest("/api/threads/\(ConsoleAddress.component(parentID))/subagents")
             guard capturedScope == scope, selectedThread?.id == parentID, !Task.isCancelled else { return }
             guard let value = result["threads"].array.first(where: { $0["id"].text == id }) else { throw APIError("此子会话已不可用") }
-            open(try Record(value))
+            enterSubconversation(try Record(value), from: parentID)
         } catch { if capturedScope == scope && selectedThread?.id == parentID { report(error, operation: "打开子会话") } }
+    }
+    func openLinkedThread(_ id: String, from parentID: String) async {
+        let version = epoch
+        do {
+            let result = try await page("/api/workspace/threads?threadId=" + ConsoleAddress.component(id), key: "threads")
+            guard version == epoch, selectedThread?.id == parentID, !Task.isCancelled else { return }
+            guard let record = result.records.first(where: { $0.id == id }) else { throw APIError("此会话尚未同步或已不可用，请稍后重试") }
+            open(record)
+        } catch {
+            if version == epoch, selectedThread?.id == parentID { report(error, operation: "打开关联会话") }
+        }
     }
     func openNotification(_ target: PushTarget) async {
         guard authenticated, (try? ConsoleAddress(addressText).base.absoluteString) == target.server else { return }
@@ -260,11 +302,12 @@ import CarryOnCore
         updateSelection()
     }
     func closeThread() {
-        selectedThread = nil; history = .null; historyFailure = nil; readSequence = 0
+        threadParents = []
+        selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; history = .null; historyFailure = nil; readSequence = 0
         updateSelection()
     }
     func setForeground(_ active: Bool) {
-        if !active { saveDrafts() }
+        if !active { saveDrafts(); readReceipts.reset() }
         foreground = active
         updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); connected = false
         if active && authenticated { startUpdates() }
@@ -333,18 +376,20 @@ import CarryOnCore
     }
     private func selection(_ threadID: String?) -> JSONValue {
         .object(["threadId": threadID.map(JSONValue.string) ?? .null,
-                 "threadIds": .array([]), "historyProtocol": .number(1), "historyLimit": .number(Double(historyLimit)), "subscription": .string(UUID().uuidString)])
+                 "threadIds": .array([]), "historyProtocol": .number(1), "historyLimit": .number(Double(historyLimit)), "subscription": .string(UUID().uuidString),
+                 "includeSideChats": .bool(sideThreadID != nil), "sideThreadId": sideThreadID.map(JSONValue.string) ?? .null, "sideHistoryLimit": .number(Double(sideHistoryLimit))])
     }
     private func updateSelection() {
         connected = false
+        sideHistory = .null
         guard let connection = liveStream, connection.canResubscribe else {
             updates?.cancel(); liveStream?.close(); liveStream = nil; startStream(); return
         }
-        let previous = selectionUpdate, generation = epoch, threadID = selectedThread?.id, limit = historyLimit
+        let previous = selectionUpdate, generation = epoch, threadID = selectedThread?.id, limit = historyLimit, sideID = sideThreadID
         selectionUpdate = Task { [weak self] in
             await previous?.value
             guard let self, self.epoch == generation, self.selectedThread?.id == threadID, self.historyLimit == limit,
-                  self.liveStream === connection else { return }
+                  self.liveStream === connection, self.sideThreadID == sideID else { return }
             do { try await connection.resubscribe(self.selection(threadID)) }
             catch {
                 guard !Task.isCancelled, self.epoch == generation, self.liveStream === connection else { return }
@@ -392,7 +437,13 @@ import CarryOnCore
     }
     private func apply(_ packet: JSONValue, threadID: String?) {
         status = packet["status"]; connected = true; reconnecting = false
+        if let sideThreadID, packet["sideThreadId"].string == sideThreadID {
+            sideHistoryFailure = packet["sideError"].string
+            if sideHistoryFailure != nil { sideHistory = .null }
+            else if packet["sideHistory"].object != nil { sideHistory = packet["sideHistory"] }
+        }
         reconcile(packet["jobs"].array)
+        reconcileOutgoing()
         if let revision = packet["workspaceRevision"].int, revision != workspaceRevision { workspaceRevision = revision }
         if packet["error"].string != nil { historyFailure = packet["error"].string; return }
         historyFailure = nil
@@ -408,8 +459,16 @@ import CarryOnCore
     }
     func markDisplayed(threadID: String, sequence: Int) async {
         guard foreground, selectedThread?.id == threadID, connected, sequence > 0 else { return }
-        do { _ = try await deviceRequest("/api/notifications/read", body: .object(["threadId": .string(threadID), "sequence": .number(Double(sequence))])) }
-        catch { report(error, operation: "同步已读状态", blocking: false) }
+        let version = epoch
+        readReceipts.enqueue(threadID: threadID, sequence: sequence, send: { [weak self] thread, cursor in
+            guard let self, self.epoch == version, self.foreground, self.authenticated else { throw CancellationError() }
+            _ = try await self.deviceRequest("/api/notifications/read", body: .object(["threadId": .string(thread), "sequence": .number(Double(cursor))]))
+        }, failure: { [weak self] failure, persistent in
+            guard let self, self.epoch == version else { return }
+            if persistent {
+                self.report(APIError("已读状态暂未同步，将自动重试（" + failure.localizedDescription + "）"), operation: "同步已读状态", blocking: false)
+            } else { self.report(failure, operation: "同步已读状态", blocking: false) }
+        })
     }
     @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
@@ -449,7 +508,10 @@ import CarryOnCore
         for job in jobs { try? pending.reconcile(scope: scope, job: job) }
     }
     var visibleOutgoing: [JSONValue] {
-        outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == selectedThread?.id }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
+        outgoingFor(selectedThread?.id)
+    }
+    func outgoingFor(_ threadID: String?) -> [JSONValue] {
+        outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == threadID }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
     }
     private func mergeOutgoing(_ job: JSONValue, live: Bool = false) {
         let id = job["id"].text
@@ -457,13 +519,15 @@ import CarryOnCore
         outgoing[id] = OutgoingMessageProjection.merge(previous, job, live: live)
     }
     private func reconcileOutgoing() {
-        for item in visibleOutgoing {
-            let found = OutgoingMessageProjection.isReflected(item, in: history)
-            if found { outgoing.removeValue(forKey: item["id"].text) }
+        for snapshot in [history, sideHistory] {
+            for item in outgoingFor(snapshot["thread"]["id"].string) {
+                if OutgoingMessageProjection.isReflected(item, in: snapshot) { outgoing.removeValue(forKey: item["id"].text) }
+            }
         }
     }
     private func reportStreamFailure(_ failure: Error) {
         connected = false; reconnecting = true
+        sideHistory = .null
         report(failure, operation: "实时连接", blocking: false)
     }
     func confirmJob(_ job: JSONValue) async {

@@ -74,6 +74,24 @@ class WorkspaceTests(unittest.TestCase):
         all_page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'offset':['100']})[1]
         self.assertEqual(len(all_page['threads']),25);self.assertEqual(all_page['total'],125)
 
+    def test_projects_sort_by_latest_session_activity_before_pagination(self):
+        self.observe(T, request=True)
+        self.observe(U, status='completed')
+        self.workspace.rows[T]['updated_at'] = 10
+        self.workspace.rows[U]['updated_at'] = 20
+        self.workspace.rows['older'] = {'id': 'older', 'title': 'Older', 'cwd': '/two/same', 'updated_at': 1}
+        self.workspace.rows['missing'] = {'id': 'missing', 'title': 'No timestamp', 'cwd': '/zero'}
+        def page(offset=0):
+            return self.workspace.dispatch('local', 'GET', '/api/projects', None,
+                                           {'limit': ['1'], 'offset': [str(offset)]})[1]
+        self.assertEqual(page()['projects'][0]['cwd'], '/two/same')
+        self.assertEqual(page()['projects'][0]['total'], 2)
+        self.assertEqual(page(1)['projects'][0]['cwd'], '/one/same')
+        self.assertEqual(page(2)['projects'][0]['cwd'], '/zero')
+        self.assertEqual(page()['total'], 3)
+        self.workspace.rows[T]['updated_at'] = 30
+        self.assertEqual(page()['projects'][0]['cwd'], '/one/same')
+
     def test_read_cursor_is_bounded_and_does_not_clear_concurrent_events(self):
         state=self.observe(request=True);first=self.workspace.latest_sequence(T)
         state=copy.deepcopy(state);state['requests'][0]['params']['extra']='changed';self.workspace.observe(state)
@@ -291,6 +309,20 @@ class WorkspaceTests(unittest.TestCase):
         self.observe(U);self.observe(U,status='completed')
         self.bridge.ipc.states={}
         self.assertEqual([t['id'] for t in self.activity()['threads']],[U])
+
+    def test_activity_hides_running_threads_and_respects_enabled_notifications(self):
+        self.observe();self.observe(status='completed')
+        self.assertEqual(self.activity(includeRead=['true'])['total'],1)
+        self.observe(status='inProgress')
+        self.assertEqual(self.activity(includeRead=['true'])['total'],0)
+        self.assertEqual(self.activity()['total'],0)
+        self.assertEqual(len(self.workspace.events('local')['events']),2)
+        self.observe(status='completed')
+        self.assertEqual(self.activity(includeRead=['true'])['total'],1)
+        self.workspace.preferences('local',dict.fromkeys(('message','done','failed','approval'),False))
+        self.assertEqual(self.activity(includeRead=['true'])['total'],0)
+        self.workspace.preferences('local',{'message':False,'done':True,'failed':False,'approval':False})
+        self.assertEqual(self.activity(includeRead=['true'])['total'],1)
 
     def test_projectless_threads_share_recent_group_and_preserve_working_directories(self):
         self.workspace.rows[T]['projectless'] = True

@@ -182,7 +182,7 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 
 最多 16 个实时连接；请求消息最大 100 KB，响应最大 32 MiB。空闲时发送 Ping 保活。客户端断线后可退避重连、重新认证和订阅，恢复的是当前快照，不是断线事件回放。仅有旧 rollout 的会话仍属于降级文件历史，不具备原生实时事件保证。
 
-### 临时聊天抽屉（只读）
+### 临时聊天抽屉
 
 在现有 subscribe 消息中添加 `includeSideChats: true`，并设置主会话 `threadId`。服务返回 `sideChats: {chats,scanning,error,scope}`，每个 chat 含 `id,parentId,title,state,label`。首次异步扫描 App 的 client-thread-bindings-v1 候选记录，必须再由原生快照证实 ephemeral/sideConversation 为 true 且 forkedFromId 匹配主会话。候选最多 100 条，未找到不代表不存在；扫描后最早 30 秒可再次启动。
 
@@ -193,7 +193,14 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 - `GET /api/side-chats?parentId=主会话UUID`：触发/查看发现结果。
 - `GET /api/side-chats/临时聊天UUID/history?parentId=主会话UUID`：必须先发现并核验父子关系；每次读取再次检查原生关联。
 
-不提供临时聊天创建或发送接口，不修改 App 布局、侧聊天生命周期或 Codex 数据库。未知父子关系拒绝访问；临时聊天过期时不退回另一会话的历史。
+已有临时聊天支持交互，创建仍不提供：
+
+- `POST /api/side-chats/{id}/compose`：`parentId/requestId/prompt`，可选 `images`；空闲发送新一轮、执行中追加、等待处理时排队，复用普通会话投递与幂等请求账本。
+- `POST /api/side-chats/{id}/operations`：`parentId/requestId/action` 及普通 operations 对应字段，复用停止、队列、设置与回应请求适配器。
+- 两者需要当前控制权限；每次调用与实际写入前核验已登记父子关系、原生 `id/ephemeral/sideConversation/forkedFromId`，并通过原生 owner 投递。临时会话不需要数据库行，未知或失效关系拒绝，绝不退回主会话。
+- 历史附带 `access.canInteract/nativeReady`、`controls` 和 `queue`。Web 与 iOS 输入框支持文字对话和停止，内容、草稿、实时订阅及请求按设备、父会话和临时聊天隔离。
+
+不修改 App 布局、侧聊天生命周期或 Codex 数据库。
 
 
 ## 会话操作 API

@@ -5,7 +5,6 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab = 0
     @AppStorage("carryon.projectView") private var projectView = true
-    @State private var switcher = false
     var body: some View {
         @Bindable var model = model
         Group {
@@ -13,16 +12,6 @@ struct RootView: View {
             else {
               NavigationStack {
                 VStack(spacing: 0) {
-                    if tab != 2 {
-                        HStack {
-                            Button { switcher = true } label: {
-                                Label(model.device?.title ?? "选择工作区", systemImage: "laptopcomputer")
-                                Image(systemName: "chevron.down").font(.caption2)
-                            }.font(.system(size: 13)).foregroundStyle(Design.secondary)
-                            Spacer()
-                            HStack(spacing: 4) { Circle().fill(model.connected ? Design.green : Design.secondary).frame(width: 5, height: 5); Text(model.connectionLabel).font(.caption2) }
-                        }.padding(.horizontal, 20).frame(minHeight: 50)
-                    }
                     Group {
                         switch tab {
                         case 1: ActivityView()
@@ -30,6 +19,8 @@ struct RootView: View {
                         default: ProjectsView()
                         }
                     }.id(model.selectedDevice)
+                        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                        .clipped()
                     HStack(spacing: 3) {
                         tabButton(0, "会话", "bubble")
                         tabButton(1, "动态", "clock.arrow.circlepath")
@@ -44,7 +35,6 @@ struct RootView: View {
         }
         .foregroundStyle(Design.ink)
         .background(KeyboardDismissal())
-        .sheet(isPresented: $switcher) { WorkspaceSwitcher() }
         .alert("暂时无法完成", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("知道了", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
@@ -109,13 +99,18 @@ struct LoginView: View {
                     }.background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).foregroundStyle(.white)
                         .disabled(model.busy || model.addressText.isEmpty || model.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.credential.isEmpty || (registering && (model.credential.count < 12 || model.credential != confirmation)))
                     Button(registering ? "已有账号？登录" : "创建账号") { registering.toggle(); confirmation = "" }.frame(maxWidth: .infinity, minHeight: 36).disabled(model.busy)
-                    Button { scan = true } label: { Label("扫码登录", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 44) }.disabled(model.busy)
-                    Button("高级设置") { advancedSettings = true }
-                        .font(.footnote).foregroundStyle(Design.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 44).disabled(model.busy)
                 }
             }.padding(28).frame(maxWidth: 500)
         }.frame(maxWidth: .infinity).background(Design.background).scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 4) {
+                Button { scan = true } label: { Label("扫码登录", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 44) }.disabled(model.busy)
+                Button("高级设置") { advancedSettings = true }
+                    .font(.footnote).foregroundStyle(Design.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 44).disabled(model.busy)
+            }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 8)
+                .frame(maxWidth: .infinity).background(Design.background)
+        }
         .sheet(isPresented: $scan) { QRLoginView() }
         .sheet(isPresented: $advancedSettings) { CloudSettingsView() }
     }

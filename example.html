@@ -70,7 +70,10 @@
     <div class="timeline-toolbar"><span id="side-runtime"></span><span id="side-source"></span></div>
     <div id="side-messages" class="messages"><div class="empty-small">选择一个临时聊天，查看状态和内容。</div></div>
     <details class="side-info"><summary>临时聊天信息</summary><div id="side-info"></div></details>
-    <p class="footnote">只读同步已存在的临时聊天；发送任务请在 Codex App 中操作。</p>
+    <form id="side-composer" class="composer">
+      <textarea id="side-prompt" rows="2" placeholder="继续对话…" aria-label="临时聊天消息" disabled></textarea>
+      <div class="composer-footer"><small id="side-send-status" role="status"></small><button id="side-send" type="submit" class="primary" disabled>发送 ↑</button></div>
+    </form>
   </section>
   <dialog id="question-dialog" aria-labelledby="question-heading"><div class="dialog-head"><h2 id="question-heading">Codex 需要你的回答</h2><button id="question-later" type="button">稍后回答</button></div><div id="question-content"></div></dialog>
   <dialog id="requests-dialog"><h2>待连接设备</h2><p>请与本机核对确认码，再批准连接。</p><div id="connection-requests" role="status"></div><button id="requests-close">关闭</button></dialog>
