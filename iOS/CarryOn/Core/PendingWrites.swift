@@ -33,6 +33,9 @@ import CryptoKit
         guard ["accepted", "completed", "inProgress", "acknowledged", "failed", "interrupted"].contains(job["state"].text) else { return }
         try resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
         try resolve(scope: scope, target: "new", requestID: job["id"].text)
+        if let project = job["creationProject"]["groupId"].string {
+            try resolve(scope: scope, target: "new:" + project, requestID: job["id"].text)
+        }
     }
     public func accepted(scope: String, target: String) throws {
         entries.removeValue(forKey: hash(scope + "\n" + target)); try save()

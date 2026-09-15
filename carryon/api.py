@@ -25,7 +25,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|models|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|usage|bridge|coordination|threads|controller|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -49,7 +49,10 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
                       'threadFlags': {k: dict(v) for k, v in ipc.events.flags.items()}}
         respond(200, result)
         return result
-    if method == "GET" and path == "/api/models":
+    if method == "GET" and path == "/api/usage":
+        from .usage import read
+        respond(200, read(bridge.catalog.home))
+    elif method == "GET" and path == "/api/models":
         from .models import catalog
         respond(200, catalog(bridge.catalog.home))
     elif method == "GET" and path == "/api/threads":
@@ -90,7 +93,11 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "GET" and path.startswith('/api/threads/') and path.endswith('/queue'):
         respond(200, bridge.queue(path.split('/')[3]))
     elif method == "POST" and path == "/api/threads":
-        respond(202, bridge.submit("create", data.get("requestId"), data.get("prompt"), **({"source":source,"authorize":authorize} if source else {})))
+        if 'projectId' in data:
+            from .creation import submit
+            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data['projectId'], source, authorize))
+        else:
+            respond(202, bridge.submit("create", data.get("requestId"), data.get("prompt"), source=source, authorize=authorize))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/operations"):
         from .operations import submit
         if len(path.split('/')) != 5:

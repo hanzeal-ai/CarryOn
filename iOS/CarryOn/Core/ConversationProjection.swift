@@ -15,12 +15,13 @@ public struct DisplayHistoryCache {
         order.removeAll { $0 == key }; order.append(key)
         return value
     }
-    public mutating func set(_ key: String, _ value: JSONValue) {
+    /// Byte measurement is supplied by the background projection, never encoded on the UI thread.
+    public mutating func set(_ key: String, _ value: JSONValue, encodedBytes size: Int) {
         if let revision = value["historyRevision"].string, entries[key]?.value["historyRevision"].string == revision {
             _ = get(key); return
         }
         remove(key)
-        guard let size = try? value.encoded().count, size <= maxBytes else { return }
+        guard size >= 0, size <= maxBytes else { return }
         entries[key] = (value, size); order.append(key); bytes += size
         while entries.count > maxEntries || bytes > maxBytes {
             guard let first = order.first else { break }

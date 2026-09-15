@@ -119,15 +119,30 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
 
 @Test func displayCacheUsesRecencyAndEncodedByteLimit() {
     var cache = DisplayHistoryCache(maxEntries: 2, maxBytes: 100)
-    cache.set("a", .string("a")); cache.set("b", .string("b"))
+    cache.set("a", .string("a"), encodedBytes: 3); cache.set("b", .string("b"), encodedBytes: 3)
     #expect(cache.get("a") == .string("a"))
-    cache.set("c", .string("c"))
+    cache.set("c", .string("c"), encodedBytes: 3)
     #expect(cache.get("b") == nil)
     #expect(cache.get("a") == .string("a"))
-    cache.set("huge", .string(String(repeating: "x", count: 200)))
+    cache.set("huge", .string(String(repeating: "x", count: 200)), encodedBytes: 202)
     #expect(cache.get("huge") == nil)
     #expect(cache.bytes <= 100)
     cache.clear(); #expect(cache.bytes == 0)
+}
+
+@Test func displayCacheReplacesMeasuredSnapshotAndRejectsOversizedRevision() {
+    var cache = DisplayHistoryCache(maxBytes: 100)
+    let first: JSONValue = .object(["historyRevision": .string("1"), "timeline": .array([])])
+    let second = first.setting("historyRevision", .string("2"))
+    cache.set("thread", first, encodedBytes: 60)
+    cache.set("thread", second, encodedBytes: 80)
+    #expect(cache.bytes == 80)
+    #expect(cache.get("thread") == second)
+    cache.set("thread", second.setting("historyRevision", .string("3")), encodedBytes: 101)
+    #expect(cache.get("thread") == nil)
+    #expect(cache.bytes == 0)
+    cache.set("failed-measurement", first, encodedBytes: -1)
+    #expect(cache.get("failed-measurement") == nil)
 }
 
 @Test func historyWireAppliesSpliceAndRejectsMissingBase() throws {
@@ -216,4 +231,16 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     #expect(ComposerAction.resolve(text: "新内容", hasImages: false, running: false, interrupted: true) == .send)
     #expect(ComposerAction.resolve(text: "", hasImages: true, running: false, interrupted: true) == .send)
     #expect(ComposerAction.resolve(text: "  ", hasImages: false, running: false, interrupted: false) == .unavailable)
+}
+
+@Test @MainActor func projectCreationReceiptClearsOnlyItsPendingProject() throws {
+    let defaults = UserDefaults(suiteName: UUID().uuidString)!
+    let writes = PendingWrites(defaults: defaults)
+    let body: JSONValue = .object(["projectId": .string("project-a"), "prompt": .string("hello")])
+    let id = try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body)
+    let other = try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body)
+    try writes.reconcile(scope: "scope", job: .object(["id": .string(id), "threadId": .string("controller"),
+        "state": .string("completed"), "creationProject": .object(["groupId": .string("project-a")])]))
+    #expect(try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body) != id)
+    #expect(try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body) == other)
 }

@@ -5,8 +5,8 @@ import ExyteChat
 struct NewConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var controllers: [Record] = []
-    @State private var controller = ""
+    @State private var projects: [Record] = []
+    @State private var project = ""
     @State private var selecting = false
     private var text: String { model.drafts[model.scope + "\nnew"] ?? "" }
     private var draftBinding: Binding<String> {
@@ -16,20 +16,20 @@ struct NewConversationView: View {
     @State private var loading = false
     @State private var offset = 0
     @State private var hasMore = true
+    @State private var loadVersion = UUID()
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite || controller.isEmpty || loading,
+                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite || !projects.contains(where: { $0.id == project }) || loading,
                                     send: { Task { await create() } }) { EmptyView() }
             })
             .setAvailableInputs([.text])
             .mainHeaderBuilder {
                 VStack(alignment: .leading, spacing: 16) {
-                    SectionCaption(title: "控制会话")
+                    SectionCaption(title: "项目")
                     Paper {
-                        Button { selecting = true } label: { SettingRow(icon: "bubble", title: controllers.first(where: { $0.id == controller })?.title ?? "选择控制会话", chevron: true) }
+                        Button { selecting = true } label: { SettingRow(icon: "folder", title: projects.first(where: { $0.id == project })?.title ?? "选择项目", chevron: true) }
                     }
-                    Text("通过电脑端已打开的控制会话创建新会话。").font(.caption).foregroundStyle(Design.secondary)
                     if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
                 }.padding(20)
             }
@@ -37,40 +37,40 @@ struct NewConversationView: View {
             .disabled(loading)
             .navigationTitle("新建会话").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-                .task { controller = model.status["controllerId"].text; await loadControllers(reset: true) }
+                .task(id: model.scope) { projects = []; project = model.selectedProject?.id ?? ""; await loadProjects(reset: true) }
                 .sheet(isPresented: $selecting) {
                     NavigationStack {
                         List {
-                            ForEach(controllers) { item in Button { controller = item.id; selecting = false } label: { HStack { Text(item.title); Spacer(); if controller == item.id { Image(systemName: "checkmark") } } } }
-                            if hasMore { Button("加载更多") { Task { await loadControllers(reset: false) } }.disabled(loading) }
+                            ForEach(projects) { item in Button { project = item.id; selecting = false } label: { HStack { Text(item.title); Spacer(); if project == item.id { Image(systemName: "checkmark") } } } }
+                            if hasMore { Button("加载更多") { Task { await loadProjects(reset: false) } }.disabled(loading) }
                             if let failure { Text(failure).foregroundStyle(.red) }
-                        }.navigationTitle("选择控制会话").navigationBarTitleDisplayMode(.inline)
+                            if projects.isEmpty && !loading && failure == nil { Text("暂无可用项目").foregroundStyle(Design.secondary) }
+                        }.navigationTitle("选择项目").navigationBarTitleDisplayMode(.inline)
                             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { selecting = false } } }
                     }
                 }
         }
     }
-    private func loadControllers(reset: Bool) async {
-        loading = true; defer { loading = false }
+    private func loadProjects(reset: Bool) async {
+        let scope = model.scope, version = UUID(); loadVersion = version
+        loading = true; defer { if loadVersion == version { loading = false } }
         do {
-            let result = try await model.deviceRequest("/api/threads?limit=50&offset=\(reset ? 0 : offset)")
-            guard case .array(let rows) = result["threads"] else { throw APIError("会话目录格式不正确") }
-            let items = try rows.map(Record.init)
-            controllers = reset ? items : controllers + items.filter { item in !controllers.contains { $0.id == item.id } }
-            offset = result["nextOffset"].int ?? offset + items.count; hasMore = items.count == 50; failure = nil
-        } catch { failure = error.localizedDescription }
+            let result = try await model.deviceRequest("/api/projects?limit=50&offset=\(reset ? 0 : offset)")
+            guard scope == model.scope, loadVersion == version, !Task.isCancelled else { return }
+            guard case .array(let rows) = result["projects"] else { throw APIError("项目目录格式不正确") }
+            let items = try rows.filter { !$0["cwd"].text.isEmpty }.map(Record.init)
+            projects = reset ? items : projects + items.filter { item in !projects.contains { $0.id == item.id } }
+            offset = result["nextOffset"].int ?? offset + items.count; hasMore = offset < (result["total"].int ?? offset); failure = nil
+        } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard model.canWrite else { return }
+        guard model.canWrite, projects.contains(where: { $0.id == project }) else { return }
         loading = true; defer { loading = false }
-        do {
-            _ = try await model.deviceRequest("/api/controller", body: .object(["threadId": .string(controller)]))
-            let draftKey = model.scope + "\nnew", sent = text
-            if await model.write(path: "/api/threads", target: "new", body: .object(["prompt": .string(sent)])) {
-                if model.drafts[draftKey] == sent { model.drafts[draftKey] = ""; model.saveDrafts() }
-                dismiss()
-            }
-        } catch { failure = error.localizedDescription }
+        let draftKey = model.scope + "\nnew", sent = text
+        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(["prompt": .string(sent), "projectId": .string(project)])) {
+            if model.drafts[draftKey] == sent { model.drafts[draftKey] = ""; model.saveDrafts() }
+            dismiss()
+        }
     }
 }
 struct ConversationMenu: View {
@@ -91,6 +91,14 @@ struct ConversationMenu: View {
                         Divider().padding(.leading, 60)
                         Button { metadata = true } label: { SettingRow(icon: "info.circle", title: "会话信息", chevron: true) }
                         Divider().padding(.leading, 60)
+                        if let thread = model.selectedThread, !model.conversationReadOnly {
+                            Button {
+                                let target = ConversationActionTarget(scope: model.scope, threadID: thread.id)
+                                Task { if await model.perform("compact", target: target) { dismiss() } }
+                            } label: { SettingRow(icon: "arrow.down.right.and.arrow.up.left", title: "压缩上下文") }
+                                .disabled(!model.canInteract || model.state != "idle" || !model.history["controls"]["requests"].array.isEmpty)
+                            Divider().padding(.leading, 60)
+                        }
                         Button { jobs = true } label: { SettingRow(icon: "clock", title: "请求记录", chevron: true) }
                     }
                 }.padding(20)

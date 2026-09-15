@@ -154,6 +154,15 @@ class Catalog:
                 raise ValueError("会话不存在或已归档")
             return dict(row)
 
+    def created_thread_id(self, result):
+        """Resolve a queued native worktree creation from the desktop's binding."""
+        if result.get('threadId'):
+            return valid_id(result['threadId'])
+        client_id = valid_id(result.get('clientThreadId'))
+        state = json.loads((self.home / '.codex-global-state.json').read_text())
+        bindings = state.get('electron-persisted-atom-state', {}).get('client-thread-bindings-v1', {})
+        return valid_id(bindings.get(client_id))
+
     def side_candidates(self):
         data = json.loads((self.home / '.codex-global-state.json').read_text())
         bindings = data.get('electron-persisted-atom-state', {}).get('client-thread-bindings-v1', {})

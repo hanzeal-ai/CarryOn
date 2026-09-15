@@ -7,6 +7,14 @@ import CarryOnCore
     var expanded: Set<String> = []
 }
 
+@MainActor final class ConversationReadingState {
+    let disclosure = ConversationDisclosureState()
+    var offset: CGFloat = 0
+    var anchorID: String?
+    var visibleCount = 120
+    var historyLimit = 40
+}
+
 private struct ConversationDisclosureStateKey: EnvironmentKey {
     static let defaultValue: ConversationDisclosureState? = nil
 }
@@ -65,22 +73,29 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var stopping = false
     var resuming = false
     let send: () -> Void
+    var queue: (() -> Void)?
     var stop: (() -> Void)?
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
     private var action: ComposerAction { .resolve(text: text, hasImages: hasImages, running: stopping, interrupted: resuming) }
-    private var buttonLabel: String { action == .pause ? "暂停任务" : action == .restart ? "启动任务" : "发送" }
+    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "重新执行" : stopping ? "补充指令" : "发送" }
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
             HStack(alignment: .bottom, spacing: 0) {
                 accessories.foregroundStyle(theme.colors.mainTint)
-                TextField("继续对话…", text: $text, axis: .vertical)
+                TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
                     .font(.system(size: 16)).lineLimit(1...6)
                     .padding(.vertical, 12).padding(.horizontal, 10)
                     .foregroundStyle(theme.colors.inputText)
             }.background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 18))
+            if action == .send, stopping, let queue {
+                Menu {
+                    Button("加入队列", systemImage: "text.badge.plus", action: queue)
+                    if let stop { Button("停止当前执行", systemImage: "stop", action: stop) }
+                } label: { Image(systemName: "chevron.down").frame(width: 32, height: 44) }.disabled(disabled).accessibilityLabel("发送方式")
+            }
             Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
-                Image(systemName: action == .pause ? "pause.fill" : action == .restart ? "play.fill" : "arrow.up")
+                Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 44, height: 44).background(theme.colors.sendButtonBackground, in: Circle())
             }.disabled(disabled || action == .unavailable)

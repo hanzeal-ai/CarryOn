@@ -167,14 +167,45 @@ public actor ConsoleAPI {
 
 
 /// One ordered read stream. Cancellation never retries a submitted operation.
+protocol ConsoleSocket: Sendable {
+    func send(_ message: URLSessionWebSocketTask.Message) async throws
+    func receive() async throws -> URLSessionWebSocketTask.Message
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+}
+extension URLSessionWebSocketTask: ConsoleSocket {}
+
 public final class ConsoleStream: @unchecked Sendable {
-    private let task: URLSessionWebSocketTask
+    private let task: any ConsoleSocket
     private let selectionLock = NSLock()
     private var subscription: String
     private var supportsResubscribe = false
     private var historyWire = HistoryWireProjection()
+    private var receiveDeadline: ContinuousClock.Instant? = .now.advanced(by: .seconds(45))
+    public func setForeground(_ active: Bool) {
+        selectionLock.withLock { receiveDeadline = active ? .now.advanced(by: .seconds(45)) : nil }
+    }
+    public func checkHealth() async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    self.task.sendPing { error in
+                        if let error { continuation.resume(throwing: error) }
+                        else { continuation.resume() }
+                    }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(8))
+                self.close()
+                throw APIError("实时连接检查超时")
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
     public var canResubscribe: Bool { selectionLock.withLock { supportsResubscribe } }
-    fileprivate init(task: URLSessionWebSocketTask, subscription: String) {
+    init(task: any ConsoleSocket, subscription: String) {
         self.task = task; self.subscription = subscription
     }
     public func resubscribe(_ selection: JSONValue) async throws {
@@ -182,7 +213,16 @@ public final class ConsoleStream: @unchecked Sendable {
         let text = String(decoding: payload, as: UTF8.self)
         guard canResubscribe else { throw APIError("此服务端需要重新建立订阅") }
         selectionLock.withLock { subscription = selection["subscription"].text }
-        try await task.send(.string(text))
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await self.task.send(.string(text)) }
+            group.addTask {
+                try await Task.sleep(for: .seconds(8))
+                self.close()
+                throw APIError("实时订阅更新超时")
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
     }
     public func next() async throws -> JSONValue {
         try await withTaskCancellationHandler {
@@ -209,12 +249,22 @@ public final class ConsoleStream: @unchecked Sendable {
         } onCancel: { self.close() }
     }
     private func receiveWithTimeout() async throws -> URLSessionWebSocketTask.Message {
-        try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+        selectionLock.withLock {
+            if receiveDeadline != nil { receiveDeadline = .now.advanced(by: .seconds(45)) }
+        }
+        return try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
             group.addTask { try await self.task.receive() }
             group.addTask {
-                try await Task.sleep(for: .seconds(45))
-                self.close()
-                throw APIError("实时连接超时，请重新连接")
+                while true {
+                    try await Task.sleep(for: .seconds(1))
+                    let expired = self.selectionLock.withLock {
+                        self.receiveDeadline.map { ContinuousClock.now >= $0 } ?? false
+                    }
+                    if expired {
+                        self.close()
+                        throw APIError("实时连接超时，请重新连接")
+                    }
+                }
             }
             defer { group.cancelAll() }
             guard let message = try await group.next() else { throw CancellationError() }

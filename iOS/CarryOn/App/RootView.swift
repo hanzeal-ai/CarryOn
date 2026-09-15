@@ -35,6 +35,9 @@ struct RootView: View {
         }
         .foregroundStyle(Design.ink)
         .background(KeyboardDismissal())
+        .background(ImageLightboxPresenter(image: model.previewImage, isPresented: Binding(
+            get: { model.previewImage != nil }, set: { if !$0 { model.previewImage = nil } }
+        )).frame(width: 0, height: 0))
         .alert("暂时无法完成", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("知道了", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }

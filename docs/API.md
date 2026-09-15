@@ -4,6 +4,8 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 
 每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/CarryOn/token`）；普通启动日志不输出 Token，`carryon open` 自动配对页面。所有调用方共享一个桥接开关、控制会话选择和请求日志；当前不是多租户 API。
 
+新建会话传入 `/projects` 返回的 `projectId`：服务从该项目中选择可操作、空闲且没有未确认投递的会话，发送一次原生创建请求。输入 `prompt` 作为新任务首条文案；不会在控制会话执行该文案。没有可用会话时返回 409，不改动全局控制会话。新任务身份只依据原生工具结果及工作树绑定确认。旧 CLI/Web 未传 `projectId` 时仍使用已配置控制会话。
+
 ## 路由
 
 | 方法 | 路径 | 输入 | 返回 |
@@ -13,7 +15,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 | GET | `/threads` | query：`search`、`limit` 1–100、`offset` ≥0 | `{threads:[{id,title,cwd,updated_at,created_at,history_mode}],nextOffset}` |
 | POST | `/controller` | `{"threadId":"UUID"}` | 同 status，需目标已加载且空闲 |
 | GET | `/threads/{id}/history` | `limit`：1–4000，默认 40 | `{thread,messages,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
-| POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案"}` | HTTP 202 + Job |
+| POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案","projectId":"项目列表返回的ID"}` | HTTP 202 + Job；自动选择项目内可用空闲会话 |
 | POST | `/threads/{id}/messages` | `{"requestId":"唯一ID","prompt":"后续任务"}` | HTTP 202 + Job |
 | GET | `/jobs` | 无 | `{jobs:[Job,...]}`，最近 100 个 |
 | GET | `/jobs/{requestId}` | 无 | Job；查询时刷新执行证据 |
@@ -329,3 +331,11 @@ example 支持选择或粘贴图片、预览与移除，浏览器将图片转成
 本机配置由 CLI 和桌面端共享。`POST /api/bridge`、`/api/controller`、`/api/cloud*`、`/api/service*`、`/api/notifications/preferences` 拒绝包含 Origin 或 Sec-Fetch-* 浏览器标记的请求，即使本机 Bearer Token 有效。网页保留会话交互与读取；云端不能选择本机控制会话。
 
 `GET /api/cloud/link/status` 返回当前服务最新申请的安全投影（idle/pending/bound/expired/failed），包含核对码和状态但不含领取秘密或设备 Token。此接口不触发新申请或凭证领取；后台绑定流程仍为唯一执行者。
+
+### Codex 账号额度
+
+`GET /api/usage`：读取目标工作区本机 `catalog.home` 对应 Codex 登录账号的共享额度。沿用本机连接及云端绑定的只读权限，不需要远程控制授权；不支持写入/重置额度。需本机已有 Codex（优先桌面应用附带程序）。
+
+返回 `source: "codex-account"`、`scope: "account"`、`fetchedAt`（Unix 秒）和 `limits` 数组。每个额度池有 `id/name/planType/windows`；每个窗口有 `id/usedPercent/windowDurationMins/resetsAt`。百分比为已用比例，`null` 表示未知，空数组表示暂不可用。优先多额度池数据，兼容原生单池响应；不返回账号标识、邮箱、令牌或充值/重置凭据。
+
+本机通过短生命周期 `codex app-server` 执行 initialize、account/read（refreshToken=false）、account/rateLimits/read；子进程的 CODEX_HOME 明确绑定到工作区。查询超时 15 秒、最多同时 2 个查询，结束后有界清理进程。未登录 ChatGPT、程序缺失或原生读取失败返回 503，超时 504。额度周期按原生返回值显示，不固定假设一定存在 5 小时/7 天两种窗口。

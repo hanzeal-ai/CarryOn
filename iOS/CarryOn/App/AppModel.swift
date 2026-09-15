@@ -8,6 +8,7 @@ import CarryOnCore
     var authenticated = false
     var busy = false
     var error: String?
+    var previewImage: UIImage?
     var runtimeLog = RuntimeLog(storageURL: LocalFiles.directory.appendingPathComponent("runtime-log-v1.json"))
     var devices: [Record] = []
     var selectedDevice = ""
@@ -36,6 +37,13 @@ import CarryOnCore
     var readSequence = 0
     var historyRevision = 0
     var historyLimit = 40
+    var readingStates: [String: ConversationReadingState] = [:]
+    func readingState(for threadID: String) -> ConversationReadingState {
+        let key = scope + "\n" + threadID
+        if let state = readingStates[key] { return state }
+        if readingStates.count >= 8, let oldest = readingStates.keys.sorted().first { readingStates.removeValue(forKey: oldest) }
+        let state = ConversationReadingState(); readingStates[key] = state; return state
+    }
     var workspaceRevision = 0
     var requests: [Record] = []
     var requestHistory: [Record] = []
@@ -47,7 +55,7 @@ import CarryOnCore
     var notice: String?
     private(set) var removingDevice = false
     private let readReceipts = ReadReceiptSync()
-    private(set) var epoch = UUID() { didSet { readReceipts.reset(); threadParents = [] } }
+    private(set) var epoch = UUID() { didSet { readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
     private var liveStream: ConsoleStream?
@@ -198,7 +206,7 @@ import CarryOnCore
     }
     private func resetSession() {
         saveDrafts(); draftsLoaded = false
-        epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
+        epoch = UUID(); updates?.cancel(); updates = nil; selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); directoryUpdates = nil
         let previous = api; api = nil
         Task { await previous?.invalidate() }
         authenticated = false; connected = false; reconnecting = false; status = .null; history = .null; historyFailure = nil
@@ -212,7 +220,7 @@ import CarryOnCore
                 body = .object(["installationId": .string(installation), "revision": try PushNotifications.nextRevision()])
             }
             // Stop subscriptions before the server invalidates their login session.
-            epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
+            epoch = UUID(); updates?.cancel(); updates = nil; selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); directoryUpdates = nil
             connected = false; reconnecting = false; error = nil; notice = nil
             _ = try await api.request("logout", body: body, method: "POST")
             resetSession()
@@ -225,7 +233,7 @@ import CarryOnCore
     func switchDevice(_ id: String) {
         saveDrafts()
         workspacePreferences.selectDevice(id, server: addressText)
-        epoch = UUID(); updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel()
+        epoch = UUID(); updates?.cancel(); updates = nil; selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); directoryUpdates = nil
         selectedDevice = id; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; history = .null; historyFailure = nil; status = .null
         connected = false; readSequence = 0; workspaceRevision += 1
         startUpdates()
@@ -233,7 +241,7 @@ import CarryOnCore
     func removeDevice(_ id: String) async throws {
         guard !removingDevice, devices.contains(where: { $0.id == id }) else { throw APIError("请先选择工作区") }
         removingDevice = true
-        updates?.cancel(); directoryUpdates?.cancel()
+        updates?.cancel(); updates = nil; directoryUpdates?.cancel(); directoryUpdates = nil
         defer {
             removingDevice = false
             if authenticated && foreground { startUpdates() }
@@ -258,7 +266,7 @@ import CarryOnCore
     }
     private func activateThread(_ thread: Record) {
         sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil
-        historyLimit = 40; historyFailure = nil
+        historyLimit = readingState(for: thread.id).historyLimit; historyFailure = nil
         otherActivityCount = 0
         selectedThread = thread; history = historyCache.get(scope + "\n" + thread.id) ?? .null; readSequence = 0
         connected = false
@@ -298,7 +306,7 @@ import CarryOnCore
     }
     func retryHistory() { historyFailure = nil; updateSelection() }
     func loadEarlierHistory() {
-        historyLimit = min(100000, historyLimit + 40)
+        historyLimit = min(100000, max(historyLimit, history["historyWindow"]["limit"].int ?? 0) + 40)
         updateSelection()
     }
     func closeThread() {
@@ -307,11 +315,36 @@ import CarryOnCore
         updateSelection()
     }
     func setForeground(_ active: Bool) {
-        if !active { saveDrafts(); readReceipts.reset() }
+        guard foreground != active else { return }
         foreground = active
-        updates?.cancel(); selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); connected = false
-        if active && authenticated { startUpdates() }
-        else if active { Task { await restoreLogin() } }
+        liveStream?.setForeground(active)
+        if !active {
+            saveDrafts(); readReceipts.reset()
+            directoryUpdates?.cancel(); directoryUpdates = nil
+            return
+        }
+        guard authenticated else { Task { await restoreLogin() }; return }
+        startUpdates()
+        guard let connection = liveStream else { return }
+        let generation = epoch
+        // Serialise the resume probe with selection changes on this socket.
+        let previous = selectionUpdate
+        selectionUpdate = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, self.foreground,
+                  self.epoch == generation, self.liveStream === connection else { return }
+            do {
+                try await connection.checkHealth()
+                guard !Task.isCancelled, self.foreground, self.epoch == generation,
+                      self.liveStream === connection else { return }
+                // A fresh subscription reconciles updates missed during suspension.
+                if connection.canResubscribe { try await connection.resubscribe(self.selection(self.selectedThread?.id)) }
+                else { connection.close() }
+            } catch {
+                guard !Task.isCancelled, self.epoch == generation, self.liveStream === connection else { return }
+                connection.close()
+            }
+        }
     }
     func console(_ route: String, body: JSONValue? = nil, method: String? = nil) async throws -> JSONValue {
         guard let api else { throw APIError("请先登录") }
@@ -352,19 +385,25 @@ import CarryOnCore
     }
     func refreshActivityCounts() async throws {
         guard connected, status["enabled"].bool == true, !selectedDevice.isEmpty else { return }
-        let version = UUID(), currentThread = selectedThread?.id
+        let version = UUID(), currentThread = selectedThread?.id, capturedScope = scope
         activityRequestVersion = version
-        let current = currentThread.map { "&currentThreadId=" + ConsoleAddress.component($0) } ?? ""
-        let activity = try await deviceRequest("/api/activity?limit=1" + current)
-        guard version == activityRequestVersion, currentThread == selectedThread?.id else { return }
-        guard let total = activity["total"].int, total >= 0,
-              let included = activity["currentThreadIncluded"].bool else { throw APIError("动态统计格式不正确") }
+        async let allRequest = deviceRequest("/api/activity?limit=1")
+        let others: JSONValue?
+        if let currentThread {
+            others = try await deviceRequest("/api/activity?limit=1&excludeThreadId=" + ConsoleAddress.component(currentThread))
+        } else { others = nil }
+        let all = try await allRequest
+        guard version == activityRequestVersion, capturedScope == scope, currentThread == selectedThread?.id else { return }
+        guard let total = all["total"].int, total >= 0,
+              let otherTotal = (others ?? all)["total"].int, otherTotal >= 0 else { throw APIError("动态统计格式不正确") }
         activityCount = total
-        otherActivityCount = max(0, total - (included ? 1 : 0))
+        otherActivityCount = otherTotal
     }
+
     private func startUpdates() {
-        guard !removingDevice else { return }
-        startStream()
+        guard !removingDevice, foreground else { return }
+        if updates == nil { startStream() }
+        guard directoryUpdates == nil else { return }
         directoryUpdates = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -383,7 +422,7 @@ import CarryOnCore
         connected = false
         sideHistory = .null
         guard let connection = liveStream, connection.canResubscribe else {
-            updates?.cancel(); liveStream?.close(); liveStream = nil; startStream(); return
+            updates?.cancel(); updates = nil; liveStream?.close(); liveStream = nil; startStream(); return
         }
         let previous = selectionUpdate, generation = epoch, threadID = selectedThread?.id, limit = historyLimit, sideID = sideThreadID
         selectionUpdate = Task { [weak self] in
@@ -399,28 +438,34 @@ import CarryOnCore
     }
     private func startStream() {
         guard !removingDevice, foreground, let client = api, !selectedDevice.isEmpty else { return }
+        updates?.cancel()
         let generation = epoch, deviceID = selectedDevice
         updates = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.epoch == generation else { return }
+                if !self.foreground {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                    continue
+                }
                 var stream: ConsoleStream?
                 do {
                     let connection = try await client.stream(deviceID: deviceID, selection: self.selection(self.selectedThread?.id))
                     stream = connection
                     try Task.checkCancellation()
                     self.liveStream = connection
+                    connection.setForeground(self.foreground)
                     while !Task.isCancelled {
                         let packet = try await connection.next()
                         try Task.checkCancellation()
                         guard self.epoch == generation else { break }
                         guard packet["threadId"].string == self.selectedThread?.id else { continue }
-                        self.apply(packet, threadID: self.selectedThread?.id)
+                        await self.apply(packet, threadID: self.selectedThread?.id)
                     }
                 } catch {
                     if !Task.isCancelled && self.epoch == generation {
                         self.connected = false
                         var failure = error
-                        if (error as? APIError)?.status != 401 {
+                        if self.foreground && (error as? APIError)?.status != 401 {
                             do { _ = try await client.request("session") }
                             catch { if (error as? APIError)?.status == 401 { failure = error } }
                         }
@@ -435,7 +480,19 @@ import CarryOnCore
             }
         }
     }
-    private func apply(_ packet: JSONValue, threadID: String?) {
+    private func apply(_ packet: JSONValue, threadID: String?) async {
+        let generation = epoch, capturedScope = scope, limit = historyLimit
+        let incoming = packet["history"]
+        let changed = incoming["historyRevision"].string.map { $0 != history["historyRevision"].string } ?? (incoming != history)
+        var encodedBytes = -1
+        if changed, incoming.object != nil, packet["threadId"].string == threadID {
+            encodedBytes = await Task.detached(priority: .userInitiated) {
+                (try? incoming.encoded().count) ?? -1
+            }.value
+        }
+        // Selection and logout can change while measuring a large snapshot.
+        guard !Task.isCancelled, epoch == generation, scope == capturedScope,
+              selectedThread?.id == threadID, historyLimit == limit else { return }
         status = packet["status"]; connected = true; reconnecting = false
         if let sideThreadID, packet["sideThreadId"].string == sideThreadID {
             sideHistoryFailure = packet["sideError"].string
@@ -448,10 +505,8 @@ import CarryOnCore
         if packet["error"].string != nil { historyFailure = packet["error"].string; return }
         historyFailure = nil
         if let threadID, packet["threadId"].string == threadID, packet["history"].object != nil {
-            let incoming = packet["history"]
-            let changed = incoming["historyRevision"].string.map { $0 != history["historyRevision"].string } ?? (incoming != history)
             let sequence = packet["readSequence"].int ?? 0
-            if changed { history = incoming; historyCache.set(scope + "\n" + threadID, history) }
+            if changed { history = incoming; historyCache.set(scope + "\n" + threadID, history, encodedBytes: encodedBytes) }
             reconcileOutgoing()
             if changed || sequence != readSequence { historyRevision += 1 }
             readSequence = sequence
@@ -470,7 +525,7 @@ import CarryOnCore
             } else { self.report(failure, operation: "同步已读状态", blocking: false) }
         })
     }
-    @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue, awaitCompletion: Bool = false) async -> Bool {
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
         if target == selectedThread?.id && !canInteract { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
         let version = epoch, capturedScope = scope
@@ -483,11 +538,26 @@ import CarryOnCore
                     "prompt": body["prompt"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
                 historyRevision += 1
             }
-            let result: JSONValue
+            var result: JSONValue
             do { result = try await deviceRequest(path, body: body.setting("requestId", .string(id))) }
             catch {
                 if composing, version == epoch, let item = outgoing[id] { outgoing[id] = OutgoingMessageProjection.merge(item, .object(["state": .string("uncertain")])) }
                 throw error
+            }
+            if awaitCompletion {
+                let deadline = Date().addingTimeInterval(20)
+                while ["preparing", "dispatching"].contains(result["state"].text) {
+                    guard version == epoch, capturedScope == scope else { return false }
+                    guard Date() < deadline else { throw APIError("操作仍在处理，尚未确认结果；原请求已保留，请稍后核对") }
+                    try await Task.sleep(for: .milliseconds(300))
+                    guard version == epoch, capturedScope == scope else { return false }
+                    result = try await deviceRequest("/api/jobs/" + ConsoleAddress.component(id))
+                }
+                guard version == epoch, capturedScope == scope else { return false }
+                guard result["state"].text == "completed" || (composing && ["accepted", "inProgress"].contains(result["state"].text)) else {
+                    try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
+                    throw APIError(result["error"].string ?? "操作结果尚未确认，请核对请求记录")
+                }
             }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
@@ -527,7 +597,6 @@ import CarryOnCore
     }
     private func reportStreamFailure(_ failure: Error) {
         connected = false; reconnecting = true
-        sideHistory = .null
         report(failure, operation: "实时连接", blocking: false)
     }
     func confirmJob(_ job: JSONValue) async {
@@ -537,6 +606,9 @@ import CarryOnCore
             }
             try pending.resolve(scope: scope, target: job["threadId"].text, requestID: job["id"].text)
             try pending.resolve(scope: scope, target: "new", requestID: job["id"].text)
+            if let project = job["creationProject"]["groupId"].string {
+                try pending.resolve(scope: scope, target: "new:" + project, requestID: job["id"].text)
+            }
         } catch { report(error, operation: "核对请求结果") }
     }
     var editContext: JSONValue = .null
@@ -557,7 +629,7 @@ import CarryOnCore
         draft = editContext["draft"].text; draftImages = editContext["images"].array.compactMap(\.string)
         editContext = .null
     }
-    func compose(images: [JSONValue] = []) async -> Bool {
+    func compose(images: [JSONValue] = [], queued: Bool = false) async -> Bool {
         guard let thread = selectedThread else { return false }
         let text = draft
         let capturedKey = scope + "\n" + thread.id
@@ -569,6 +641,8 @@ import CarryOnCore
         let success: Bool
         if edit != .null {
             success = await operation("edit", fields: ["turnId": edit["turnId"], "prompt": .string(text), "confirmed": .bool(true)])
+        } else if queued {
+            success = await perform("queue-add", target: .init(scope: scope, threadID: thread.id), fields: ["prompt": .string(text), "images": .array(images), "queueFingerprint": history["queue"]["fingerprint"]])
         } else {
             success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body)
         }
@@ -592,7 +666,6 @@ import CarryOnCore
     }
     func operation(_ action: String, fields: [String: JSONValue] = [:]) async -> Bool {
         guard let thread = selectedThread else { return false }
-        var fields = fields; fields["action"] = .string(action)
-        return await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/operations", target: thread.id, body: .object(fields))
+        return await perform(action, target: .init(scope: scope, threadID: thread.id), fields: fields)
     }
 }

@@ -38,8 +38,8 @@ public enum ConversationPresentation {
         return item["title"].string ?? item["type"].text
     }
 
-    public static func activityLabel(_ item: JSONValue) -> AttributedString {
-        let text = activityText(item)
+    public static func activityLabel(_ item: JSONValue, text: String? = nil) -> AttributedString {
+        let text = text ?? activityText(item)
         // Shell glob and operator characters are literal command content.
         guard item["type"].text != "commandExecution" else { return AttributedString(text) }
         return (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
