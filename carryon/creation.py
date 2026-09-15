@@ -1,6 +1,8 @@
 """Select a project's idle native conversation without changing the shared controller."""
 import json
+import os
 import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -8,6 +10,21 @@ from .contracts import digest
 from .errors import BridgeError
 from .ipc import IPCError
 from .workspace import project_identity
+
+
+def is_git_repository(root):
+    if not Path(root).is_dir():
+        raise BridgeError('项目目录已不可用，请在 Codex 重新选择项目', 409)
+    try:
+        result = subprocess.run(['git', '-C', str(root), 'rev-parse', '--is-inside-work-tree'],
+                                capture_output=True, text=True, timeout=3, env=dict(os.environ, LC_ALL='C'))
+    except (OSError, subprocess.SubprocessError):
+        raise BridgeError('无法确认项目 Git 状态，请稍后重试', 409) from None
+    if result.returncode == 0 and result.stdout.strip() in ('true', 'false'):
+        return result.stdout.strip() == 'true'
+    if result.returncode == 128 and 'not a git repository' in result.stderr:
+        return False
+    raise BridgeError('无法确认项目 Git 状态，请稍后重试', 409)
 
 
 def resolve_project(catalog, project_id):
@@ -21,7 +38,9 @@ def resolve_project(catalog, project_id):
                 matches.append({'id': native_id, 'cwd': str(Path(root).expanduser().absolute()), 'groupId': project_id})
     if len(matches) != 1:
         raise BridgeError('此项目的 Codex 归属无法确认，请在桌面端重新选择项目', 409)
-    return matches[0]
+    project = matches[0]
+    project['isGitRepository'] = is_git_repository(project['cwd'])
+    return project
 
 
 def belongs(row, project):

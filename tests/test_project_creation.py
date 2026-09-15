@@ -2,6 +2,7 @@ import json
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from carryon.bridge import Bridge
@@ -35,6 +36,8 @@ class Native(FakeIPC):
 
 class ProjectCreationTests(unittest.TestCase):
     def setUp(self):
+        git_state = patch('carryon.creation.is_git_repository', return_value=True)
+        git_state.start(); self.addCleanup(git_state.stop)
         self.temp=tempfile.TemporaryDirectory();self.home=Path(self.temp.name)
         self.state=self.home/'.codex-global-state.json'
         self.state.write_text(json.dumps({'local-projects':{'native-project':{'rootPaths':['/project']}}}))
@@ -83,6 +86,15 @@ class ProjectCreationTests(unittest.TestCase):
         job=submit(self.bridge,'project-create-1','hello',self.project)
         self.assertEqual(self.settled(job)['state'],'failed')
         self.assertEqual(self.bridge.ipc.prompts,[])
+    def test_project_change_before_native_write_blocks_creation(self):
+        native_start=self.bridge.ipc.start
+        def changed(tid, *args, **kwargs):
+            self.bridge.catalog.rows=[]
+            return native_start(tid,*args,**kwargs)
+        self.bridge.ipc.start=changed
+        job=submit(self.bridge,'project-create-1','hello',self.project)
+        self.assertEqual(self.settled(job)['state'],'failed')
+        self.assertEqual(self.bridge.ipc.prompts,[])
     def test_cloud_project_creation_uses_scoped_request_and_preserves_project(self):
         from carryon.remote_scope import scoped_dispatch, request_key
         body={'projectId':self.project,'requestId':'cloud-project-1','prompt':'hello'}
@@ -101,6 +113,11 @@ class ProjectCreationTests(unittest.TestCase):
         self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/worktree','projectRoot':'/project'})
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
         call['arguments']['target']['projectId']='native-project'
+        call['arguments']['target']['environment'] = {'type': 'local'}
+        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
+        call['arguments']['target']['environment'] = {'type': 'worktree', 'startingState': {'type': 'working-tree'}}
+        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
+        call['arguments']['target']['environment'] = {'type': 'worktree'}
         self.assertEqual(self.bridge.refresh_job(job['id'])['createdThreadId'],CHILD)
     def test_queued_worktree_id_requires_native_binding(self):
         catalog=Catalog(self.home)

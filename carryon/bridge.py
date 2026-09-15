@@ -477,6 +477,11 @@ class Bridge:
                     self.assert_target(job['threadId'], job.get('sideParentId'))
                     current = ipc.current(job['threadId']) if hasattr(ipc, 'current') else None
                     if current is not None: idle_snapshot(current)
+                    project = job.get('creationProject')
+                    if project:
+                        from .creation import resolve_project, belongs
+                        if resolve_project(self.catalog, project['groupId']) != project or not any(row['id'] == job['threadId'] and belongs(row, project) for row in self.catalog.list(2147483647)):
+                            raise BridgeError('项目或控制会话归属已改变，请重新选择项目')
                     self.journal.update(job["id"], state="dispatching")
                     dispatched = True
                     write()
@@ -546,7 +551,8 @@ class Bridge:
                 target = args.get('target') or {}
                 project = job.get('creationProject')
                 target_matches = (target.get('type') == 'project' and target.get('projectId') == project['id']
-                                  and target.get('environment', {}).get('type') in ('local', 'worktree')) if project else target == {'type': 'projectless'}
+                                  and isinstance(project.get('isGitRepository'), bool)
+                                  and target.get('environment') == {'type': 'worktree' if project['isGitRepository'] else 'local'}) if project else target == {'type': 'projectless'}
                 if (call.get("status") != "completed" or call.get("error")
                         or not target_matches
                         or args.get("title") != job["expectedTitle"]
