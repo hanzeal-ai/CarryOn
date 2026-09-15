@@ -17,7 +17,7 @@ from .ipc import IPCError
 from .store import Journal
 from .websocket import upgrade, serve
 
-from .paths import assets, state_dir, save_json
+from .paths import default_codex_home, assets, state_dir, save_json
 from . import __version__
 
 ROOT = assets()
@@ -235,7 +235,7 @@ def run(port, codex_home, directory):
 def main():
     parser = argparse.ArgumentParser(description='CarryOn 本地 Codex 桥接')
     parser.add_argument('--port', type=int, default=8769)
-    parser.add_argument('--codex-home', type=Path, default=Path.home()/'.codex')
+    parser.add_argument('--codex-home', type=Path, default=default_codex_home())
     parser.add_argument('--state-dir', type=Path, default=state_dir())
     args = parser.parse_args()
     run(args.port,args.codex_home.expanduser().resolve(),args.state_dir.expanduser().resolve())

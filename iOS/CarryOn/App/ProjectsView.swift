@@ -122,9 +122,11 @@ struct RecordListView: View {
             VStack(alignment: .leading, spacing: 9) {
                 Text(record.title).font(.system(size: 16, weight: .semibold))
                 Text("\(record.value["total"].int ?? 0) 个会话").font(.caption).foregroundStyle(Design.secondary)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 5) { counts(record) }
-                    VStack(alignment: .leading, spacing: 5) { counts(record) }
+                if ["waiting", "running", "unread"].contains(where: { (record.value[$0].int ?? 0) > 0 }) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 5) { counts(record) }
+                        VStack(alignment: .leading, spacing: 5) { counts(record) }
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -136,7 +138,6 @@ struct RecordListView: View {
         if waiting > 0 { CountPill(text: "\(waiting) 待处理", color: Design.orange) }
         if running > 0 { CountPill(text: "\(running) 进行中", color: Design.green) }
         if unread > 0 { CountPill(text: "\(unread) 未读", color: Design.blue) }
-        if waiting + running + unread == 0 { CountPill(text: (record.value["unknown"].int ?? 0) > 0 ? "部分状态未知" : "暂无进行中的任务") }
     }
     private func load(reset: Bool, kind: LoadKind = .initial, debounce: Bool = false) async {
         if (kind == .more || kind == .background) && loading { return }

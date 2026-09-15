@@ -3,6 +3,7 @@ import CoreImage.CIFilterBuiltins
 
 @MainActor struct InitializationView: View {
     @ObservedObject var model: SettingsModel
+    var bindingID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
     @State private var autoStart = true
@@ -10,6 +11,8 @@ import CoreImage.CIFilterBuiltins
     @State private var phase = "new"
     @State private var message = ""
     @State private var busy = false
+    @State private var applyingConfirmed = false
+    @State private var confirmedAccount = ""
     @State private var polling: Task<Void, Never>?
     @State private var accounts: [[String: Any]] = []
     @State private var selectedAccount = ""
@@ -22,7 +25,7 @@ import CoreImage.CIFilterBuiltins
             Text("连接工作区").font(.title2.weight(.semibold))
             Label("本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
             if !codexAvailable { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
-            if phase != "waiting" && phase != "bound" {
+            if phase != "waiting" && phase != "bound" && phase != "confirming" {
                 TextField("云端 HTTPS 地址", text: $url).textFieldStyle(.roundedBorder)
                     .onChange(of: url) { _ in accounts = []; selectedAccount = "" }
                 Button("从已确认账号选择") { Task {
@@ -56,26 +59,45 @@ import CoreImage.CIFilterBuiltins
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
                 Button(phase == "bound" ? "完成" : "稍后继续") { dismiss() }.keyboardShortcut(.cancelAction)
-                if phase != "waiting" && phase != "bound" {
+                if phase == "confirming" {
+                    Button("重试") { Task {
+                        busy = true; defer { busy = false }
+                        if let state = await exchange(["action":"poll"]) { render(state) }
+                    } }.disabled(busy)
+                    Button("应用扫码结果") { applyingConfirmed = true }.disabled(busy)
+                } else if phase == "unverified" {
+                    Button("重试") { Task { await load() } }.disabled(busy)
+                } else if phase != "waiting" && phase != "bound" {
                     Button(selectedAccount.isEmpty ? "生成二维码" : "确认分配") { Task { await prepare() } }.buttonStyle(AccentButton()).disabled(busy || url.isEmpty)
                 }
             }
         }.padding(28).frame(width: 470).background(DesktopDesign.background)
-            .task {
-                if let state = await exchange(["action":"status"]) {
-                    url = state["url"] as? String ?? ""
-                    autoStart = state["autoStart"] as? Bool ?? true
-                    permissions = Set(state["permissions"] as? [String] ?? ["view","files"])
-                    render(state)
-                    if phase == "waiting" { beginPolling() }
-                }
-            }.onDisappear { polling?.cancel() }
+            .task { await load() }.onDisappear { polling?.cancel() }
+            .alert("应用本次扫码绑定？", isPresented: $applyingConfirmed) {
+                Button("取消", role: .cancel) {}
+                Button("应用") { Task {
+                    busy = true; defer { busy = false }
+                    if let state = await exchange(["action":"apply-confirmed"]) { render(state) }
+                } }
+            } message: { Text("将使用本次扫码确认的账号「\(confirmedAccount)」替换此云端当前的绑定。") }
+    }
+    private func load() async {
+        busy = true; defer { busy = false }
+        if let state = await exchange(["action":"status"]) {
+            url = state["url"] as? String ?? ""
+            autoStart = state["autoStart"] as? Bool ?? true
+            permissions = Set(state["permissions"] as? [String] ?? ["view","files"])
+            render(state)
+            if phase == "waiting" { beginPolling() }
+        }
     }
     private func exchange(_ fields: [String: Any]) async -> [String: Any]? {
+        var fields = fields
+        if let bindingID { fields["bindingId"] = bindingID }
         guard let data = try? JSONSerialization.data(withJSONObject: fields) else { return nil }
         let target = model.directory
         let result = await Task.detached { executeCLI(["init", "--input-json"], directory: target, input: data) }.value
-        guard !Task.isCancelled else { return nil }
+        guard !Task.isCancelled, model.directory == target else { return nil }
         guard result.code == 0, let state = model.object(result.text) else { message = result.text; return nil }
         return state
     }
@@ -95,6 +117,9 @@ import CoreImage.CIFilterBuiltins
     private func render(_ state: [String: Any]) {
         codexAvailable = (state["environment"] as? [String: Any])?["ipcAvailable"] as? Bool ?? false
         phase = state["state"] as? String ?? "new"
+        message = state["error"] as? String ?? ""
+        confirmedAccount = (state["confirmedAccount"] as? [String: Any])?["username"] as? String ?? ""
+        qr = nil
         if let link = state["qrURL"] as? String {
             let filter = CIFilter.qrCodeGenerator(); filter.message = Data(link.utf8)
             if let image = filter.outputImage, let cg = CIContext().createCGImage(image, from: image.extent) {
@@ -114,6 +139,7 @@ import CoreImage.CIFilterBuiltins
                 guard let state = await exchange(["action":"poll"]) else { phase = "configured"; qr = nil; return }
                 render(state)
                 if phase == "bound" { await model.refresh(); return }
+                if phase == "confirming" { return }
             }
         }
     }

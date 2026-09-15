@@ -190,7 +190,7 @@ class InitializationTests(unittest.TestCase):
             root = Path(temp); directory = root/'workspace'
             invitation = {'id':'a'*32, 'secret':'b'*43, 'url':'https://example.test/#carryon-bind='+'a'*32+'.'+'c'*43, 'expiresAt':time.time()+300}
             result = {'state':'bound','deviceId':'mac','token':'t'*43,'account':{'id':'alice','username':'Alice'}}
-            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result]) as request, patch('carryon.cli.start') as start:
+            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.cli.start') as start:
                 state = exchange(directory, {'action':'prepare','url':'https://example.test','autoStart':False,'control':False})
                 self.assertEqual(state['state'], 'waiting')
                 self.assertNotIn('secret', state)
@@ -211,3 +211,26 @@ class InitializationTests(unittest.TestCase):
     def test_unknown_operations_fail_closed(self):
         with self.assertRaises(PermissionError): capability('POST','/api/threads/id/operations',{'action':'unknown'})
         self.assertEqual(capability('GET','/api/threads/id/artifacts/hash'),'files')
+
+
+class OnboardingRequestErrorTests(unittest.TestCase):
+    def test_native_binding_error_survives_http_transport(self):
+        import io
+        import urllib.error
+        from carryon.onboarding import request
+        error = urllib.error.HTTPError('https://example.test/console/binding/manage',403,'Forbidden',{},
+            io.BytesIO(json.dumps({'error':'设备凭证无效'}).encode()))
+        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+            factory.return_value.open.side_effect = error
+            with self.assertRaisesRegex(ValueError,'设备凭证无效，请重新绑定'):
+                request('https://example.test','manage',{'action':'list'})
+
+    def test_non_json_http_error_keeps_status(self):
+        import io
+        import urllib.error
+        from carryon.onboarding import request
+        error = urllib.error.HTTPError('https://example.test',502,'Bad Gateway',{},io.BytesIO(b'<html>bad gateway</html>'))
+        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+            factory.return_value.open.side_effect = error
+            with self.assertRaisesRegex(ValueError,'HTTP 502'):
+                request('https://example.test','start',{})

@@ -4,6 +4,7 @@ import CoreImage.CIFilterBuiltins
 @MainActor struct WorkspaceMembersView: View {
     @ObservedObject var model: SettingsModel
     let bindingID: String
+    var rebind: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var members: [[String: Any]] = []
     @State private var knownAccounts: [[String: Any]] = []
@@ -60,6 +61,9 @@ import CoreImage.CIFilterBuiltins
                 Text("请使用者登录自己的账号后扫码接受，再在这里核对并确认。").font(.callout)
             }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(DesktopDesign.secondary).textSelection(.enabled) }
+            if let rebind, !message.isEmpty {
+                Button("检查绑定") { rebind(); dismiss() }.buttonStyle(QuietButton())
+            }
             HStack {
                 if busy { ProgressView().controlSize(.small) }
                 if isMember && invitation == nil { Button("撤销授权", role: .destructive) { revoking = true } }
@@ -91,11 +95,17 @@ import CoreImage.CIFilterBuiltins
     private func save() async {
         busy = true; defer { busy = false }
         if selected.isEmpty {
-            guard let result = await exchange(["action":"invite","permissions":permissions.sorted()]), let url = result["url"] as? String,
-                  let id = result["id"] as? String, let secret = result["secret"] as? String else { message = "邀请响应无效"; return }
-            invitation = result
+            message = ""
+            guard let result = await exchange(["action":"invite","permissions":permissions.sorted()]) else { return }
+            guard let url = result["url"] as? String, let id = result["id"] as? String,
+                  let secret = result["secret"] as? String else { message = "邀请响应无效"; return }
             let filter = CIFilter.qrCodeGenerator(); filter.message = Data(url.utf8)
-            if let output = filter.outputImage, let cg = CIContext().createCGImage(output, from: output.extent) { image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)) }
+            guard let output = filter.outputImage, let cg = CIContext().createCGImage(output, from: output.extent) else {
+                message = "无法生成二维码，请重试"; return
+            }
+            image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            invitation = result
+            poller?.cancel()
             poller = Task {
                 while !Task.isCancelled {
                     do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }

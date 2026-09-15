@@ -31,12 +31,28 @@ def register(directory, *, name=None, port=None, codex_home=None):
     with (root/'services.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         data=records();previous=data.get(directory,{})
-        entry={**previous,'directory':directory,'name':name.strip() if name is not None else previous.get('name',Path(directory).name)}
+        entry={**previous,'removed':False,'directory':directory,'name':name.strip() if name is not None else previous.get('name',Path(directory).name)}
         if port is not None:entry['port']=port
         if codex_home is not None:entry['codexHome']=str(Path(codex_home).expanduser().resolve())
         data[directory]=entry
         save_json(root/'services.json',{'version':1,'services':data})
     return entry
+
+
+def remove(directory):
+    """Remove a catalog registration, retaining service files and Codex data."""
+    from .cli import running
+    directory = str(Path(directory).expanduser().resolve())
+    root = private_dir(catalog_directory())
+    with (root/'services.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if running(Path(directory)):
+            raise ValueError('请先停止此工作区的服务，再删除工作区')
+        data = records()
+        # Keep a tombstone so the implicit default/current candidate stays removed.
+        data[directory] = {**data.get(directory, {}), 'directory': directory, 'removed': True}
+        save_json(root/'services.json', {'version': 1, 'services': data})
+    return {'removed': True, 'directory': directory}
 
 
 def process_directories():
@@ -73,7 +89,7 @@ def list_services(current=None):
            for path in candidates if path not in known}
     # Authenticate every candidate before treating a discovered process as a service.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        rows=list(pool.map(inspect,list(known.values())+list(extra.values())))
+        rows=list(pool.map(inspect,[entry for entry in known.values() if not entry.get('removed')]+list(extra.values())))
     result=[]
     for row in rows:
         if row['running'] and row['directory'] not in known:

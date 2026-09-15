@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
-from .paths import state_dir, private_dir, command
+from .paths import default_codex_home, state_dir, private_dir, command
 
 
 def call(directory, path, body=None, timeout=5):
@@ -116,10 +116,10 @@ def main(argv=None):
             p.add_argument('--no-open', action='store_true', default=True)
             p.add_argument('--open', dest='no_open', action='store_false')
         if name=='services':
-            p.add_argument('action',choices=['list','add'])
+            p.add_argument('action',choices=['list','add','remove'])
             p.add_argument('--name')
             p.add_argument('--port',type=int,default=0)
-            p.add_argument('--codex-home',type=Path,default=Path.home()/'.codex')
+            p.add_argument('--codex-home',type=Path,default=default_codex_home())
         if name in ('bridge','standby'):p.add_argument('action',choices=['on','off','status'])
         if name == 'controller':
             p.add_argument('action',choices=['set','status'])
@@ -157,18 +157,19 @@ def main(argv=None):
         if args.command in ('start', 'serve', 'doctor'):
             from .services import records
             saved = records().get(str(args.state_dir), {})
-            args.codex_home = (args.codex_home or Path(saved.get('codexHome', Path.home()/'.codex'))).expanduser().resolve()
+            args.codex_home = (args.codex_home or Path(saved.get('codexHome', default_codex_home()))).expanduser().resolve()
             if hasattr(args, 'port') and args.port is None:
                 args.port = saved.get('port', 8769)
         elif hasattr(args, 'codex_home'):
             args.codex_home = args.codex_home.expanduser().resolve()
         if args.command=='services':
-            from .services import list_services, register
+            from .services import list_services, register, remove
             if args.action=='add':
                 private_dir(args.state_dir)
                 active=running(args.state_dir)
                 result=register(args.state_dir,name=args.name,port=active['port'] if active else args.port,
                                 codex_home=active['codexHome'] if active else args.codex_home)
+            elif args.action=='remove':result=remove(args.state_dir)
             else:result=list_services(args.state_dir)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command in ('update','uninstall'):

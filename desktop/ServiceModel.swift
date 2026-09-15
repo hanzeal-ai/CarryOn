@@ -1,6 +1,12 @@
 import SwiftUI
 import AppKit
 
+func defaultCodexHome() -> String {
+    let path = ProcessInfo.processInfo.environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+    return NSString(string: path).expandingTildeInPath
+}
+
 struct CommandResult: Sendable { let code: Int32; let text: String }
 func cliExecutable() -> URL {
     URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_DESKTOP_CLI"] ?? Bundle.main.executableURL!
@@ -37,7 +43,7 @@ struct ServiceRecord: Identifiable, Equatable {
         name = value["name"] as? String ?? URL(fileURLWithPath: directory).lastPathComponent
         state = value["state"] as? String ?? "unavailable"
         port = value["port"] as? Int ?? 0
-        codexHome = value["codexHome"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+        codexHome = value["codexHome"] as? String ?? defaultCodexHome()
     }
 }
 
@@ -91,7 +97,7 @@ struct ServiceRecord: Identifiable, Equatable {
     @Published var messageIsError = false
     @Published var busy = false
     @Published var port = "0"
-    @Published var codexHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+    @Published var codexHome = defaultCodexHome()
     @Published var processID: Int?
     @Published var diagnostics: [String: Any] = [:]
     @Published var diagnosticText = ""
@@ -113,10 +119,25 @@ struct ServiceRecord: Identifiable, Equatable {
     }
     func reload() async {
         let target = directory
-        let catalog = await call(["services", "list"], at: target)
-        if let rows = object(catalog.text)?["services"] as? [[String: Any]] {
-            services = rows.map(ServiceRecord.init); catalogError = ""
-        } else { services = []; catalogError = catalog.text }
+        let catalog = await call(["services", "list"], at: target.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn").path : target)
+        guard directory == target else { return }
+        guard catalog.code == 0, let rows = object(catalog.text)?["services"] as? [[String: Any]] else {
+            catalogError = catalog.text; return
+        }
+        services = rows.map(ServiceRecord.init); catalogError = ""
+        if target.isEmpty {
+            if let first = services.first {
+                directory = first.directory; loadedStartupDirectory = nil
+                await reload()
+            } else { clearService() }
+            return
+        }
+        if directory == target, !services.contains(where: { $0.directory == target }) {
+            directory = services.first?.directory ?? ""; loadedStartupDirectory = nil
+            clearService()
+            if !directory.isEmpty { await reload() }
+            return
+        }
         if directory == target, loadedStartupDirectory != target,
            let record = services.first(where: {$0.directory == target}) {
             port = String(record.port); codexHome = record.codexHome; loadedStartupDirectory = target
@@ -219,6 +240,28 @@ struct ServiceRecord: Identifiable, Equatable {
         loadedStartupDirectory = record.directory
         directory = record.directory; self.port = String(record.port); codexHome = record.codexHome; clearService()
         message = "工作区已保存，请继续设置"; messageIsError = false; await reload(); return true
+    }
+    func remove(_ service: ServiceRecord) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }; await refreshTask?.value
+        let status = await call(["status"], at: service.directory)
+        guard let active = object(status.text)?["running"] as? Bool else {
+            message = status.text; messageIsError = true; return
+        }
+        if active {
+            let stopped = await call(["stop"], at: service.directory)
+            guard stopped.code == 0 else { message = stopped.text; messageIsError = true; await reload(); return }
+        }
+        let result = await call(["services", "remove"], at: service.directory)
+        guard result.code == 0 else { message = result.text; messageIsError = true; await reload(); return }
+        services.removeAll { $0.directory == service.directory }
+        if directory == service.directory {
+            directory = services.first?.directory ?? ""
+            loadedStartupDirectory = nil
+            clearService(); diagnostics = [:]; diagnosticText = ""
+        }
+        message = ""; messageIsError = false
+        await reload()
     }
     func diagnose() async {
         guard !busy else { return }; busy = true; defer { busy = false }; await refreshTask?.value

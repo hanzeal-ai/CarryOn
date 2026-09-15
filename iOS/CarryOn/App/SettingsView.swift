@@ -22,9 +22,9 @@ struct SettingsView: View {
                     Divider().padding(.leading, 60)
                     SettingRow(icon: "lock", title: "远程控制", value: model.connected ? (model.status["remoteControl"].bool == true ? "已允许" : "只读") : "状态未知")
 
+                }.overlay(alignment: .topTrailing) {
+                    CodexUsageView().id(model.scope).padding(10)
                 }
-                SectionCaption(title: "用量")
-                Paper { CodexUsageView().id(model.scope) }
                 SectionCaption(title: "账户与配对")
                 Paper {
                     Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", chevron: true, badgeCount: model.requests.count) }

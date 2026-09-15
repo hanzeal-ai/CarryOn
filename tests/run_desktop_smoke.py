@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-cli = ROOT/'dist/carryon/carryon'
-helper = ROOT/'dist/CarryOn.app/Contents/MacOS/carryon-service'
+cli = Path(os.environ.get('CARRYON_TEST_CLI', ROOT/'dist/carryon/carryon'))
+helper = Path(os.environ.get('CARRYON_TEST_HELPER', ROOT/'dist/CarryOn.app/Contents/MacOS/carryon-service'))
 with tempfile.TemporaryDirectory(prefix='carryon-desktop-') as temp:
     state = Path(temp).resolve()/'state'; state.mkdir(mode=0o700)
     os.environ['CARRYON_REGISTRY_DIR']=str(Path(temp)/'registry')

@@ -70,6 +70,16 @@ import Foundation
         precondition(!model.running)
         precondition(ForegroundServices.shared.logs[thirdDirectory]?.contains("已退出") == true)
         precondition(model.services.first(where: {$0.directory == firstDirectory})?.running == true)
+        let stoppedRecord = model.services.first { $0.directory == thirdDirectory }!
+        await model.remove(stoppedRecord)
+        precondition(!model.messageIsError && !model.services.contains { $0.directory == thirdDirectory }, model.message)
+        precondition(model.directory != thirdDirectory)
+        await model.remove(first)
+        precondition(!model.messageIsError && !model.services.contains { $0.directory == firstDirectory }, model.message)
+        precondition(FileManager.default.fileExists(atPath: firstDirectory + "/cloud.json"))
+        await model.refresh()
+        precondition(!model.services.contains { $0.directory == firstDirectory || $0.directory == thirdDirectory })
+        print("PASS: remove stopped and running workspaces, preserve files, refresh does not restore removed entries")
         print("PASS: discovery of two services, workspace switch and mutation isolation, doctor, stop isolation, add and foreground lifecycle")
         print("PASS: desktop writes, external CLI reads/writes, desktop refresh observes the same binding; unrelated binding preserved")
     }

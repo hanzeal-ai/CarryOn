@@ -1,5 +1,6 @@
 """Persistent independent cloud bindings sharing one local Bridge."""
 import json
+import hashlib
 import secrets
 import threading
 from pathlib import Path
@@ -71,7 +72,11 @@ class CloudManager:
         if not isinstance(key,str) or key not in self.connections:raise ValueError('请选择要管理的云端绑定')
         return key,self.connections[key]
 
-    def configure(self,data):
+    @staticmethod
+    def fingerprint(config):
+        return hashlib.sha256(json.dumps([config['url'], config['deviceId'], config['token']]).encode()).hexdigest()
+
+    def configure(self,data, *, start=True):
         self.validate(data)
         with self.lock:
             if not data['enabled']:
@@ -81,13 +86,35 @@ class CloudManager:
                 try:self._save()
                 except BaseException:self.connections[key]=connection;connection.start();raise
                 return self.status()
+            replacement = data.get('replacement')
+            config = {key:value for key,value in data.items() if key != 'replacement'}
+            if replacement is not None:
+                if not isinstance(replacement, dict): raise ValueError('绑定替换参数无效')
+                key, previous = self._select(replacement.get('id'))
+                if self.canonical_url(previous.config['url']) != self.canonical_url(config['url']):
+                    raise ValueError('不能替换其他云端的绑定')
+                if self.fingerprint(previous.config) == self.fingerprint(config):
+                    if start: previous.start()
+                    return self.status()
+                if self.fingerprint(previous.config) != replacement.get('fingerprint'):
+                    raise ValueError('原绑定已改变，请重新检查绑定状态')
+                connection = CloudConnector(self.bridge,self.directory,config=config,binding_id=key)
+                if self.bridge is not None: previous.stop()
+                self.connections[key] = connection
+                try: self._save()
+                except BaseException:
+                    self.connections[key] = previous
+                    if start: previous.start()
+                    raise
+                if start: connection.start()
+                return self.status()
             self.check_available(data['url'])
             key=secrets.token_hex(16)
             connection=CloudConnector(self.bridge,self.directory,config=data,binding_id=key)
             self.connections[key]=connection
             try:self._save()
             except BaseException:self.connections.pop(key);raise
-            connection.start()
+            if start: connection.start()
             return self.status()
 
     def set_control(self,control,key=None):

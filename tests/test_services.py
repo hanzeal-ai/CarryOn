@@ -5,7 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
-from carryon.services import register, records, list_services, process_directories
+from carryon.services import register, records, list_services, process_directories, remove
 
 class ServiceCatalogTests(unittest.TestCase):
     def setUp(self):
@@ -51,3 +51,38 @@ class ServiceCatalogTests(unittest.TestCase):
         entry=records()[str(self.root/'existing')]
         self.assertEqual(entry['port'],8779)
         self.assertEqual(entry['codexHome'],active['codexHome'])
+
+    def test_remove_preserves_files_and_other_entries_and_can_be_readded(self):
+        a=self.root/'a';a.mkdir();(a/'keep').write_text('configuration')
+        b=self.root/'b';register(a,name='A');register(b,name='B')
+        with patch('carryon.cli.running',return_value=None), patch('carryon.services.process_directories',return_value=set()):
+            remove(a)
+            self.assertNotIn(str(a),[row['directory'] for row in list_services(a)['services']])
+            self.assertEqual((a/'keep').read_text(),'configuration')
+            self.assertFalse(records()[str(b)].get('removed'))
+            register(a)
+            self.assertEqual(next(row for row in list_services(a)['services'] if row['directory']==str(a))['name'],'A')
+
+    def test_remove_running_service_is_refused_without_catalog_change(self):
+        a=self.root/'a';register(a)
+        before=records()
+        with patch('carryon.cli.running',return_value={'instanceId':'active'}):
+            with self.assertRaisesRegex(ValueError,'先停止'):remove(a)
+        self.assertEqual(records(),before)
+
+    def test_codex_home_environment_is_used_for_new_service(self):
+        import io
+        from contextlib import redirect_stdout
+        from carryon.cli import main
+        with patch.dict(os.environ, {'CODEX_HOME':str(self.root/'actual-codex')}), patch('carryon.cli.running',return_value=None),redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['services','add','--state-dir',str(self.root/'new')]),0)
+        self.assertEqual(records()[str(self.root/'new')]['codexHome'],str(self.root/'actual-codex'))
+
+    def test_last_default_workspace_stays_removed(self):
+        directory=self.root/'default'
+        with patch('carryon.services.state_dir',return_value=directory), patch('carryon.services.process_directories',return_value=set()), patch('carryon.cli.running',return_value=None):
+            self.assertEqual(len(list_services()['services']),1)
+            remove(directory)
+            self.assertEqual(list_services()['services'],[])
+            register(directory,name='Restored')
+            self.assertEqual(len(list_services()['services']),1)
