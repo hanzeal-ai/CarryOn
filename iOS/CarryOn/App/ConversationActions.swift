@@ -2,6 +2,10 @@ import SwiftUI
 import CarryOnCore
 import ExyteChat
 
+func supportsOperation(_ action: String, in snapshot: JSONValue) -> Bool {
+    snapshot["controls"]["supportedOperations"] == .null || snapshot["controls"]["supportedOperations"].array.contains(.string(action))
+}
+
 struct NewConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -20,7 +24,7 @@ struct NewConversationView: View {
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite || !projects.contains(where: { $0.id == project }) || loading,
+                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite(.create) || !projects.contains(where: { $0.id == project }) || loading,
                                     send: { Task { await create() } }) { EmptyView() }
             })
             .setAvailableInputs([.text])
@@ -58,13 +62,14 @@ struct NewConversationView: View {
             let result = try await model.deviceRequest("/api/projects?limit=50&offset=\(reset ? 0 : offset)")
             guard scope == model.scope, loadVersion == version, !Task.isCancelled else { return }
             guard case .array(let rows) = result["projects"] else { throw APIError("项目目录格式不正确") }
-            let items = try rows.filter { !$0["cwd"].text.isEmpty }.map(Record.init)
+            let items = try rows.filter { !$0["cwd"].text.isEmpty || $0["canCreate"].bool == true }.map(Record.init)
             projects = reset ? items : projects + items.filter { item in !projects.contains { $0.id == item.id } }
+            if project.isEmpty, projects.count == 1 { project = projects[0].id }
             offset = result["nextOffset"].int ?? offset + items.count; hasMore = offset < (result["total"].int ?? offset); failure = nil
         } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard model.canWrite, projects.contains(where: { $0.id == project }) else { return }
+        guard model.canWrite(.create), projects.contains(where: { $0.id == project }) else { return }
         loading = true; defer { loading = false }
         let draftKey = model.scope + "\nnew", sent = text
         if await model.write(path: "/api/threads", target: "new:" + project, body: .object(["prompt": .string(sent), "projectId": .string(project)])) {
@@ -96,7 +101,7 @@ struct ConversationMenu: View {
                                 let target = ConversationActionTarget(scope: model.scope, threadID: thread.id)
                                 Task { if await model.perform("compact", target: target) { dismiss() } }
                             } label: { SettingRow(icon: "arrow.down.right.and.arrow.up.left", title: "压缩上下文") }
-                                .disabled(!model.canInteract || model.state != "idle" || !model.history["controls"]["requests"].array.isEmpty)
+                                .disabled(!model.canInteract(.edit) || model.state != "idle" || !model.history["controls"]["requests"].array.isEmpty)
                             Divider().padding(.leading, 60)
                         }
                         Button { jobs = true } label: { SettingRow(icon: "clock", title: "请求记录", chevron: true) }
@@ -131,7 +136,7 @@ struct RequestLogView: View {
                     DisclosureGroup(record.value["kind"].text + " · " + record.value["state"].text) {
                         Text(record.value.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                         if ["uncertain", "failed"].contains(record.value["state"].text) {
-                            Button("我已在 Codex App 核对结果") { confirmedJob = record }.disabled(!model.canWrite)
+                            Button("我已在 Codex App 核对结果") { confirmedJob = record }.disabled(!model.canWrite(.send))
                         }
                     }
                 }

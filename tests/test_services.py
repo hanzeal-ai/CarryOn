@@ -15,7 +15,7 @@ class ServiceCatalogTests(unittest.TestCase):
     def test_canonical_identity_and_concurrent_registration_keep_both_workspaces(self):
         a=self.root/'a';b=self.root/'b';a.mkdir();b.mkdir()
         with ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(lambda d:register(d,name=d.name,port=0,codex_home=self.root/'codex'),[a,b]))
+            list(pool.map(lambda d:register(d,name=d.name,port=0,codex_home=d/'codex-home'),[a,b]))
         register(a/'..'/'a',port=8771)
         data=records();self.assertEqual(len(data),2)
         self.assertEqual(data[str(a)]['name'],'a');self.assertEqual(data[str(a)]['port'],8771)
@@ -70,13 +70,13 @@ class ServiceCatalogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'先停止'):remove(a)
         self.assertEqual(records(),before)
 
-    def test_codex_home_environment_is_used_for_new_service(self):
+    def test_new_workspace_ignores_inherited_codex_home(self):
         import io
         from contextlib import redirect_stdout
         from carryon.cli import main
         with patch.dict(os.environ, {'CODEX_HOME':str(self.root/'actual-codex')}), patch('carryon.cli.running',return_value=None),redirect_stdout(io.StringIO()):
             self.assertEqual(main(['services','add','--state-dir',str(self.root/'new')]),0)
-        self.assertEqual(records()[str(self.root/'new')]['codexHome'],str(self.root/'actual-codex'))
+        self.assertEqual(records()[str(self.root/'new')]['codexHome'],str(self.root/'new/codex-home'))
 
     def test_last_default_workspace_stays_removed(self):
         directory=self.root/'default'

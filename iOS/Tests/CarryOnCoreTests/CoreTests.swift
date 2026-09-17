@@ -117,34 +117,6 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("acknowledged")]), live: true) == nil)
 }
 
-@Test func displayCacheUsesRecencyAndEncodedByteLimit() {
-    var cache = DisplayHistoryCache(maxEntries: 2, maxBytes: 100)
-    cache.set("a", .string("a"), encodedBytes: 3); cache.set("b", .string("b"), encodedBytes: 3)
-    #expect(cache.get("a") == .string("a"))
-    cache.set("c", .string("c"), encodedBytes: 3)
-    #expect(cache.get("b") == nil)
-    #expect(cache.get("a") == .string("a"))
-    cache.set("huge", .string(String(repeating: "x", count: 200)), encodedBytes: 202)
-    #expect(cache.get("huge") == nil)
-    #expect(cache.bytes <= 100)
-    cache.clear(); #expect(cache.bytes == 0)
-}
-
-@Test func displayCacheReplacesMeasuredSnapshotAndRejectsOversizedRevision() {
-    var cache = DisplayHistoryCache(maxBytes: 100)
-    let first: JSONValue = .object(["historyRevision": .string("1"), "timeline": .array([])])
-    let second = first.setting("historyRevision", .string("2"))
-    cache.set("thread", first, encodedBytes: 60)
-    cache.set("thread", second, encodedBytes: 80)
-    #expect(cache.bytes == 80)
-    #expect(cache.get("thread") == second)
-    cache.set("thread", second.setting("historyRevision", .string("3")), encodedBytes: 101)
-    #expect(cache.get("thread") == nil)
-    #expect(cache.bytes == 0)
-    cache.set("failed-measurement", first, encodedBytes: -1)
-    #expect(cache.get("failed-measurement") == nil)
-}
-
 @Test func historyWireAppliesSpliceAndRejectsMissingBase() throws {
     var wire = HistoryWireProjection()
     let initial: JSONValue = .object(["subscription": .string("a"), "threadId": .string("t"), "history": .object([
@@ -243,4 +215,10 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
         "state": .string("completed"), "creationProject": .object(["groupId": .string("project-a")])]))
     #expect(try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body) != id)
     #expect(try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body) == other)
+}
+
+@Test func initializationGuidanceMatchesCurrentCloud() throws {
+    #expect(try ConsoleAddress(ConsoleAddress.defaultURL).initializationCommand == "carryon init")
+    #expect(try ConsoleAddress("https://self-hosted.test/prefix").initializationCommand == "carryon init --url 'https://self-hosted.test/prefix/'")
+    #expect(try ConsoleAddress("https://self-hosted.test/team's").initializationCommand == "carryon init --url 'https://self-hosted.test/team'\\''s/'")
 }

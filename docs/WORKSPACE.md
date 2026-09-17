@@ -59,3 +59,34 @@
 ### 会话页其他任务角标
 
 会话页左上角按当前工作区、当前绑定的动态规则统计其他会话，排除正在查看的会话，按会话去重，不计连接申请。`GET /api/activity` 支持 `currentThreadId`，返回全量筛选结果中的 `currentThreadIncluded`，客户端从 total 扣除当前会话；`excludeThreadId` 用于点击角标后的其他会话列表。workspaceRevision 变化时刷新统计，后台目录刷新仍会定期核对。已读完成项移出，待审批项阅读后仍保留；不新增系统推送实现。
+
+## 本机工作区运行边界
+
+工作区登记保存 `backend` 和 `codexHome`。默认目录由 `CARRYON_HOME`（未设置时为
+`~/Library/Application Support/CarryOn`）确定；登记后的后端类型在重启时保持。
+
+- 默认工作区使用 `desktop-ipc`，连接 Codex 桌面端的 `CODEX_HOME/ipc/ipc.sock`。
+- 新建工作区使用 `app-server`，默认 Home 为 `<CarryOn 工作区目录>/codex-home`。
+  自定义 Home 经过真实路径解析，不能与其他已登记工作区共用。服务独占 Home 锁，
+  通过 stdio 管理自己的 app-server；关闭、重连只处理自己创建的进程。
+- 首次启动仅复制默认 Codex 的 `auth.json` 和模型、供应商配置。
+  不导入会话数据库、rollout、项目、插件、hooks 或审批策略；已有文件优先，初始化标记
+  防止后续从默认工作区覆盖独立配置。模型配置导入使用运行时自带的 `tomllib`（Python 3.11+）。
+- 独立工作区可以从“最近”直接创建首个会话，不需要控制会话。无项目任务的工作目录为
+  `<CarryOn 工作区目录>/tasks/<请求ID>`。创建和首轮发送均记录投递状态；结果未知时不自动重发。
+- 后端在 `controls.supportedOperations` 声明已适配的操作。当前独立工作区支持发送、
+  补充指令、停止、压缩和原生审批/问题响应；桌面专属队列、编辑/重新执行和设置写入
+  不展示操作入口，服务端也拒绝调用。模型配置可在独立 Home 内维护。
+- 状态列表读取元数据，不批量恢复全部会话；选择会话时才恢复并读取历史，后续通过通知更新。
+
+### 旧共享目录与恢复
+
+旧版本非默认工作区若登记为默认 Codex Home，新版启动时解析为自己的 `codex-home`。
+原有桌面会话仍留在默认 Home，不移动、不删除；这个行为不是历史迁移。
+运行中的旧服务不会因修改源码而切换后端，必须使用新版服务重启后才生效。
+回退程序前保留 `services.json`、工作区 Home 和 CarryOn 状态目录；独立 Home 不应重新连接到
+桌面 IPC。启动失败保留配置，查看工作区的 `server.log` 和 Home 内的 `app-server.log`。
+
+验证：`python3 -m unittest discover -s tests -p test_workspace_backends.py`；
+`python3 tests/run_appserver_regression.py` 使用已安装 Codex、临时 Home 和本地假模型服务，
+验证真实进程隔离、首建、流式历史、重复请求、停止、重启与崩溃恢复，不调用真实模型。

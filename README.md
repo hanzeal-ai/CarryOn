@@ -13,6 +13,7 @@ Switch devices. Carry on.
 当前版本 0.2.2。本机构建的安装包尚未完成 Developer ID 公证及干净设备验收，正式对外分发前请完成签名、公证和目标平台检查。项目未发布到 PyPI，也未提供公共下载域名；使用本项目实际构建产物。
 
 - [GitHub Actions 与阿里云部署](deployment/README.md)：隔离网关、部署开关和回滚。
+- [App 检查更新](docs/APP_UPDATES.md)：iOS 与 Mac 的更新入口、发布清单和渠道配置。
 - [品牌与升级说明](docs/BRANDING.md)：CarryOn 命名及升级步骤。
 - [安装与首次使用](docs/INSTALL.md)：应用、CLI、Python 包、升级、旧数据目录与排错。
 - [接入自定义云端控制台](docs/CLOUD.md)：出站 WSS、参考网关、设备凭证、后端示例和协议。
@@ -30,7 +31,7 @@ carryon open
 carryon stop
 ```
 
-首次 `init` 填写云端 HTTPS 地址、选择权限，用已登录 CarryOn 的 iOS App 扫码确认；绑定后默认自动启动，也可选择仅保存配置。CLI 和桌面端共用初始化进度，重复执行可续办，已有绑定不重复扫码。云端、CLI 和 iOS 需使用支持工作区绑定的新版本。
+首次 `init` 使用默认云端、选择权限，用已登录 CarryOn 的 iOS App 扫码确认；绑定后默认自动启动，也可选择仅保存配置。CLI 和桌面端共用初始化进度，重复执行可续办，已有绑定不重复扫码。云端、CLI 和 iOS 需使用支持工作区绑定的新版本。
 
 日常 `start` 后台启动并主动连接 Codex；Codex 尚未打开时显示等待并自动重连。默认不打开浏览器，按需使用 `open` 或 `start --open`。`members` 管理当前工作区账号权限，详见 [初始化和工作区授权](docs/ONBOARDING.md)。
 
@@ -44,19 +45,17 @@ CLI 和 macOS 桌面端共用同一数据目录和本机服务，设置双向可
 
 ## 云端接入
 
-推荐在 CLI 或桌面端填写云端控制台 HTTPS 地址申请连接，云端收到通知后确认，即可自动登记设备。支持多台本机接入同一云端，以及本机同时绑定多个云端；权限与解除绑定独立管理。见[多云端绑定指南](docs/MULTI_CLOUD.md)。
-
-CLI 提供云端控制台 HTTPS 地址即可申请连接，然后在云端「连接申请」核对确认：
+CLI 执行 `carryon init`，或在桌面端「添加工作区」后生成二维码，在已登录的 CarryOn iOS App 扫码确认。普通连接不需要填写云端地址，也不需要先启动服务或开启桥接。已有同云端账号可直接确认分配。见[初始化和工作区授权](docs/ONBOARDING.md)。
 
 ```sh
-carryon cloud connect --url https://你的云端域名/carryon
+carryon init
 carryon cloud status
-carryon cloud disconnect
+carryon cloud disconnect --binding-id 绑定ID
 ```
 
-命令返回表示申请已提交，绑定由本地服务在云端确认后自动完成。无需输入一次性配对码或设备 Token。多实例时每条命令带上对应的 `--state-dir`。
+自托管、多云端使用 CLI `init --url HTTPS地址`，仍走同一套扫码绑定流程。见[多云端绑定指南](docs/MULTI_CLOUD.md)。
 
-默认只读。允许远程投递、编辑、设置和审批需要明确授权。云端不能开启已关闭的本地桥接。云端支持账号密码自助注册、按工作区授权及原有管理员登录；新账号不会自动看到已有工作区。参考网关及自定义协议见云端接入文档，公共托管及账号恢复尚未提供。
+默认只读。允许远程投递、编辑、设置和审批需要明确授权。云端不能开启已关闭的本地桥接。云端支持邀请码加账号密码注册、按工作区授权及原有管理员登录；新账号不会自动看到已有工作区。参考网关及自定义协议见云端接入文档，公共托管及账号恢复尚未提供。
 
 ## 当前业务能力
 

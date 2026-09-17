@@ -1,17 +1,32 @@
 """Reconcile saved bindings against the cloud before reusing or replacing credentials."""
-import json
 from .cloud_manager import CloudManager
 
 
 def reconcile(directory, state, data):
     from .onboarding import request, InvalidDeviceCredentials
-    path = directory/'cloud.json'
-    stored = json.loads(path.read_text()) if path.exists() else {}
-    bindings = stored.get('bindings', {}) if stored.get('version') == 2 else ({'legacy':stored} if stored.get('enabled') else {})
+    bindings = CloudManager.saved_bindings(directory)
     active = {key:value for key,value in bindings.items() if value.get('enabled')}
     target = data.get('bindingId')
     if target is not None and target not in active:
         raise ValueError('请选择已保存的云端绑定')
+    requested = data.get('url')
+    if requested is not None:
+        from .cloud_wire import endpoint
+        from urllib.parse import urlsplit
+        if not isinstance(requested, str):raise ValueError('云端地址无效')
+        parsed = urlsplit(requested)
+        if parsed.scheme != 'https' or parsed.query or parsed.fragment:raise ValueError('请输入完整的 HTTPS 云端地址')
+        requested = requested.rstrip('/')
+        endpoint('wss'+requested[5:]+'/device')
+        requested_ws = CloudManager.canonical_url('wss'+requested[5:]+'/device')
+        if target is not None and CloudManager.canonical_url(active[target]['url']) != requested_ws:
+            raise ValueError('重新绑定时不能更改云端地址')
+        if target is None:
+            target = next((key for key, config in active.items() if CloudManager.canonical_url(config['url']) == requested_ws), None)
+            if target is None:
+                # An explicitly selected new cloud starts its own binding, leaving existing bindings intact.
+                clean = {k:v for k,v in state.items() if k not in ('deviceId','account','replacement','requestId','error')}
+                return {**clean, 'state':'configured', 'url':requested}, None
     if not active:
         clean = {k:v for k,v in state.items() if k not in ('deviceId','account','replacement')}
         if state['state'] == 'bound': clean['state'] = 'configured'

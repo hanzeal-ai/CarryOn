@@ -4,11 +4,13 @@ import CarryOnCore
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var switcher = false
+    @State private var scanning = false
     @State private var links = false
     @State private var notifications = false
     @State private var logout = false
     @State private var logs = false
-    @State private var standby: JSONValue = .null
+    @State private var updates = false
+    private var standby: JSONValue { model.cachedValue("/api/standby") }
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -22,6 +24,12 @@ struct SettingsView: View {
                     Divider().padding(.leading, 60)
                     SettingRow(icon: "lock", title: "远程控制", value: model.connected ? (model.status["remoteControl"].bool == true ? "已允许" : "只读") : "状态未知")
 
+                }.overlay(alignment: .topLeading) {
+                    Button { scanning = true } label: {
+                        Image(systemName: "qrcode.viewfinder")
+                            .font(.system(size: 22))
+                            .frame(width: 44, height: 44)
+                    }.buttonStyle(.plain).accessibilityLabel("扫一扫，绑定工作区").padding(10)
                 }.overlay(alignment: .topTrailing) {
                     CodexUsageView().id(model.scope).padding(10)
                 }
@@ -36,15 +44,22 @@ struct SettingsView: View {
                 Paper {
                     Button { logs = true } label: { SettingRow(icon: "doc.text", title: "运行日志", chevron: true) }
                     Divider().padding(.leading, 60)
-                    SettingRow(icon: "bubble", title: "CarryOn", value: "1.0", imageName: "CarryOnLogo")
+                    Button { updates = true } label: { SettingRow(icon: "bubble", title: "CarryOn", value: model.appUpdater.currentVersion, chevron: true, imageName: "CarryOnLogo") }.accessibilityLabel("CarryOn " + model.appUpdater.currentVersion + "，检查更新")
                 }
-                Button("退出登录", role: .destructive) { logout = true }.foregroundStyle(.red).font(.system(size: 15)).frame(maxWidth: .infinity).frame(minHeight: 50).background(.white, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
+                Button(role: .destructive) { logout = true } label: {
+                    Text("退出登录").font(.system(size: 15))
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(.red)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
             }.padding(20)
         }
-        .task(id: model.scope) { do { standby = try await model.deviceRequest("/api/standby") } catch { standby = .null; model.report(error, operation: "读取待机状态", blocking: false) } }
+        .task(id: model.scope) { do { _ = try await model.cachedDeviceRequest("/api/standby") } catch { model.report(error, operation: "读取待机状态", blocking: false) } }
         .sheet(isPresented: $switcher) { WorkspaceSwitcher() }
+        .sheet(isPresented: $scanning) { WorkspaceBindingView() }
         .sheet(isPresented: $links) { ConnectionRequestsView() }
         .sheet(isPresented: $notifications) { NotificationPreferencesView() }
+        .sheet(isPresented: $updates) { AppUpdateView(updater: model.appUpdater) }
         .sheet(isPresented: $logs) { RuntimeLogView() }
         .confirmationDialog("退出登录？", isPresented: $logout, titleVisibility: .visible) { Button("退出登录", role: .destructive) { Task { await model.logout() } } }
 

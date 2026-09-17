@@ -72,6 +72,14 @@ class ConsoleServer(Gateway):
     def account_request(self, action, data):
         with self.auth_lock, self.account_settings.locked():
             self.replace_auth(self.account_settings.effective())
+            if action=='invite':
+                token = data.get('issuerToken')
+                expected = self.config.get('registrationInviteIssuerHash', '')
+                if (not isinstance(token, str) or not 32 <= len(token) <= 128
+                    or not isinstance(expected, str) or len(expected) != 64
+                    or not secrets.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)):
+                    raise PermissionError('此电脑未获授权生成邀请码')
+                return self.auth.create_registration_invite()
             if action=='status':
                 return {'configured':self.auth.account is not None}
             username = data.get('username')
@@ -230,7 +238,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','client.js',
+        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','shadcn.css','shadcn-ui.js','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','client.js',
                  'cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
@@ -257,9 +265,9 @@ class ConsoleHandler(Handler):
             if method=='GET' and self.static(path):return
             if not path.startswith('/console/'):
                 return super().handle_api(method)
-            if path in ('/console/account','/console/account/setup','/console/account/change'):
-                # Native administration authenticates with a setup code/current password,
-                # never a browser cookie or a bound device token.
+            if path in ('/console/account','/console/account/setup','/console/account/change','/console/account/invite'):
+                # Native administration uses a setup code, current password, or issuer credential;
+                # browser cookies and workspace device tokens cannot authorize it.
                 if self.headers.get('Origin'):raise PermissionError('请在桌面端或 CLI 管理云端账号')
                 action='status' if path=='/console/account' else path.rsplit('/',1)[-1]
                 if method != ('GET' if action=='status' else 'POST'):
@@ -296,16 +304,20 @@ class ConsoleHandler(Handler):
                 if self.headers.get('Origin'): raise PermissionError('请在电脑端管理授权')
                 self.server.binding_invites.throttle(self.client_address[0])
                 self.reply(200, self.server.binding_invites.bind_known(self.body())); return
-            if path in ('/console/binding/start', '/console/binding/poll') and method == 'POST':
+            if path in ('/console/binding/start', '/console/binding/poll', '/console/binding/cancel') and method == 'POST':
                 if self.headers.get('Origin'): raise PermissionError('请在电脑端发起绑定')
                 if path.endswith('/start'): self.server.binding_invites.throttle(self.client_address[0])
-                action = self.server.binding_invites.start if path.endswith('/start') else self.server.binding_invites.poll
+                action = {'start':self.server.binding_invites.start, 'poll':self.server.binding_invites.poll, 'cancel':self.server.binding_invites.cancel}[path.rsplit('/',1)[-1]]
                 self.reply(200, action(self.body())); return
             self.check_origin(method)
             if path == '/console/register' and method == 'POST':
                 data = self.body()
                 with self.server.auth_lock:
-                    identity = self.server.auth.register(data)
+                    try:identity = self.server.auth.register(data)
+                    except ValueError as exc:
+                        self.reply(400, {'error':str(exc)});return
+                    except OSError:
+                        self.reply(503, {'error':'无法确认注册结果，请先尝试登录；请勿重复提交'});return
                     self.issue_session(identity=identity)
                 self.reply(200, {'authenticated': True}); return
             if path in ('/console/login','/console/qr/login') and method=='POST':
@@ -465,15 +477,28 @@ class ConsoleHandler(Handler):
 
 def main():
     parser=argparse.ArgumentParser(description='example 云端控制台，内置 CarryOn 设备连接')
-    parser.add_argument('action',choices=['configure','bootstrap','serve'])
+    parser.add_argument('action',choices=['configure','bootstrap','serve','authorize-inviter'])
     parser.add_argument('--config',type=Path,required=True)
     parser.add_argument('--public-url')
+    parser.add_argument('--issuer-hash', help='由指定电脑 carryon invate --setup 输出的授权指纹')
     parser.add_argument('--username',help='设置或重设单管理员账号，密码交互输入且不回显')
     parser.add_argument('--state-dir',type=Path,help='可写的设备登记目录，默认配置目录下 console-state')
     parser.add_argument('--port',type=int,default=8780)
     args=parser.parse_args()
     config=json.loads(args.config.read_text()) if args.config.exists() else {'devices':{}}
     if args.action=='serve' and not args.config.exists():parser.error('请先运行 configure 创建控制台配置')
+    if args.action=='authorize-inviter':
+        if not args.config.exists():parser.error('请先配置云端控制台')
+        digest = args.issuer_hash or ''
+        if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+            parser.error('需要 --issuer-hash 指定 64 位授权指纹')
+        metadata = args.config.stat()
+        if os.geteuid() not in (0, metadata.st_uid):raise ValueError('请以配置文件所有者身份运行')
+        config['registrationInviteIssuerHash'] = digest
+        save_json(args.config, config)
+        if os.geteuid() == 0:os.chown(args.config, metadata.st_uid, metadata.st_gid)
+        print('已指定唯一的邀请码生成电脑；重启云端控制台后生效。')
+        return
     if args.action=='bootstrap':
         if args.config.exists() and args.config.stat().st_uid != os.geteuid():
             parser.error('请以配置文件所有者运行 bootstrap，例如 sudo -u carryon')

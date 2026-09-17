@@ -19,8 +19,9 @@ def valid_id(value):
 
 
 class Catalog:
-    def __init__(self, home):
+    def __init__(self, home, independent=False):
         self.home = Path(home).resolve()
+        self.independent = independent
         self.lock = threading.Lock()
         self.cache = {}
         self.rollout_cache = {}
@@ -81,6 +82,8 @@ class Catalog:
             conn.close()
 
     def list(self, limit=100, offset=0, search=""):
+        if self.independent and not any(self.home.glob('state_*.sqlite')):
+            return []
         with self.connection() as conn:
             rows = conn.execute("""SELECT id,
                 substr(COALESCE(NULLIF(name,''), NULLIF(title,''), '未命名会话'),1,120) title,
@@ -164,6 +167,7 @@ class Catalog:
         return valid_id(bindings.get(client_id))
 
     def side_candidates(self):
+        if self.independent: return []
         data = json.loads((self.home / '.codex-global-state.json').read_text())
         bindings = data.get('electron-persisted-atom-state', {}).get('client-thread-bindings-v1', {})
         with self.connection() as conn:
@@ -173,6 +177,7 @@ class Catalog:
 
     def queued(self, thread_id):
         valid_id(thread_id)
+        if self.independent: return []
         data = json.loads((self.home / '.codex-global-state.json').read_text())
         queues = data.get('queued-follow-ups', {})
         if not isinstance(queues, dict):
@@ -234,6 +239,11 @@ class Catalog:
         result = {"thread": {k: row[k] for k in ("id", "title", "cwd")},
                   "messages": list(messages), "truncated": truncated or count > 200,
                   "source": "local-rollout", "turns": turns}
+        result['timeline'] = [{'id': message['id'], 'turnId': message.get('turnId'),
+                               'type': 'userMessage' if message['role'] == 'user' else 'agentMessage',
+                               'text': message['text'], 'phase': message.get('phase'),
+                               'textTruncated': message['textTruncated'], 'time': message.get('time'), 'data': {}}
+                              for message in messages]
         result["thread"]["title"] = row.get("name") or row["title"][:120]
         with self.lock:
             if len(self.cache) > 40:

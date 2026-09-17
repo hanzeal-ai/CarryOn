@@ -1,12 +1,14 @@
 """Single-owner password verification and short-lived, owner-confirmed QR login."""
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from pathlib import Path
 
-from .paths import save_json
+from .paths import private_dir, save_json
 
 SESSION_SECONDS = 30 * 24 * 3600
 
@@ -47,18 +49,59 @@ class ConsoleAuth:
         self.users = json.loads(self.users_path.read_text()) if self.users_path and self.users_path.exists() else {}
         self.identities = {}
 
+    @contextmanager
+    def registration_locked(self):
+        # Serialize separate ConsoleAuth instances/processes as well as HTTP threads.
+        if self.users_path is None:
+            raise ValueError('云端需配置持久化 state-dir')
+        import fcntl
+        private_dir(self.users_path.parent)
+        with (self.users_path.parent / 'registration.lock').open('a+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.users = json.loads(self.users_path.read_text()) if self.users_path.exists() else {}
+            yield
+
+    def save_registration(self, path, data):
+        save_json(path, data)
+        fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:os.fsync(fd)
+        finally:os.close(fd)
+
+    def create_registration_invite(self):
+        with self.registration_locked():
+            path = self.users_path.parent / 'registration-invites.json'
+            invites = json.loads(path.read_text()) if path.exists() else {}
+            code = secrets.token_urlsafe(24)
+            invites[hashlib.sha256(code.encode()).hexdigest()] = True
+            self.save_registration(path, invites)
+            return {'inviteCode': code}
+
     def register(self, data):
         self.throttle()
-        record = password_record(data.get('username'), data.get('password'))
-        if (self.account and record['username'].casefold() == self.account['username'].casefold()
-            or any(a['username'].casefold() == record['username'].casefold() for a in self.users.values())):
-            raise ValueError('账号已存在')
-        identity = secrets.token_hex(16)
-        users = {**self.users, identity: record}
-        if self.users_path:
-            save_json(self.users_path, users)
-        self.users = users
-        return identity
+        if not isinstance(data, dict):
+            raise ValueError('注册参数无效')
+        code = data.get('inviteCode')
+        if not isinstance(code, str) or not 1 <= len(code.strip()) <= 128:
+            raise ValueError('请输入邀请码')
+        digest = hashlib.sha256(code.strip().encode()).hexdigest()
+        with self.registration_locked():
+            path = self.users_path.parent / 'registration-invites.json'
+            invites = json.loads(path.read_text()) if path.exists() else {}
+            if digest not in invites or any(a.get('registrationInviteHash') == digest for a in self.users.values()):
+                raise ValueError('邀请码无效或已使用')
+            record = password_record(data.get('username'), data.get('password'))
+            if (self.account and record['username'].casefold() == self.account['username'].casefold()
+                or any(a['username'].casefold() == record['username'].casefold() for a in self.users.values())):
+                raise ValueError('账号已存在')
+            identity = secrets.token_hex(16)
+            # Account creation and consumption commit in the same atomic rename.
+            record['registrationInviteHash'] = digest
+            users = {**self.users, identity: record}
+            try:self.save_registration(self.users_path, users)
+            finally:
+                # A directory fsync error may follow a visible commit. Never permit reuse.
+                self.users = json.loads(self.users_path.read_text()) if self.users_path.exists() else {}
+            return identity
 
     def identity(self, key):
         return self.identities.get(key, 'owner')

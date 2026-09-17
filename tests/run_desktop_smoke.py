@@ -20,12 +20,12 @@ with tempfile.TemporaryDirectory(prefix='carryon-desktop-') as temp:
     (second/'cloud.json').write_text(config.read_text()); (second/'cloud.json').chmod(0o600)
     binary = Path(temp)/'desktop-smoke'
     subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','5','-D','DESKTOP_TEST',
-                    '-target',platform.machine()+'-apple-macos13.0',*map(str,sorted((ROOT/'desktop').glob('*.swift'))),
+                    '-target',platform.machine()+'-apple-macos13.0',*map(str,sorted((ROOT/'desktop').glob('*.swift'))),str(ROOT/'iOS/CarryOn/Core/AppUpdate.swift'),
                     str(ROOT/'tests/DesktopSmoke.swift'),'-o',str(binary)],check=True)
     try:
-        subprocess.run([str(cli),'start','--no-open','--port','0','--codex-home',str(Path(temp)/'empty-codex'),
+        subprocess.run([str(cli),'start','--no-open','--port','0','--codex-home',str(Path(temp)/'codex-a'),
                         '--state-dir',str(state)],check=True,timeout=30)
-        subprocess.run([str(cli),'start','--no-open','--port','0','--codex-home',str(Path(temp)/'empty-codex'),
+        subprocess.run([str(cli),'start','--no-open','--port','0','--codex-home',str(Path(temp)/'codex-b'),
                         '--state-dir',str(second)],check=True,timeout=30)
         env = dict(os.environ,CARRYON_HOME=str(state),CARRYON_DESKTOP_CLI=str(helper),
                    CARRYON_TEST_EXTERNAL_CLI=str(cli),CARRYON_TEST_SECOND=str(second),CARRYON_TEST_THIRD=str(Path(temp).resolve()/'third'))

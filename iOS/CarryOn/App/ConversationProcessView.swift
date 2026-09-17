@@ -17,9 +17,7 @@ struct ConversationProcessView: View {
         } else { localExpanded = value }
     }
     var body: some View {
-        if let single = ConversationProcess.singleActivity(item) {
-            ProcessContentRow(item: single, threadID: threadID, anchorID: item.stableID)
-        } else { stage }
+        stage
     }
     private var stage: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,9 +41,6 @@ struct ConversationProcessView: View {
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                 }.frame(height: min(contentHeight, 280)).padding(.top, 4)
             }
-        }.onChange(of: running, initial: true) { old, new in
-            if new { setExpanded(true) }
-            else if old { setExpanded(false) }
         }
     }
 }

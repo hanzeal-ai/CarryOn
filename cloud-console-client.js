@@ -7,6 +7,11 @@ class CloudConsoleClient extends CarryOnClient {
     this.device=sessionStorage.getItem('carryon-cloud-device')||'';
     this.loop=0;this.active=false;
   }
+  get initializationCommand() {
+    if(this.base.href==='https://carryon.hanzeal.com/')return 'carryon init';
+    if(this.base.protocol!=='https:')return '';
+    return "carryon init --url '"+this.base.href.replaceAll("'","'\\''")+"'";
+  }
   async consoleRequest(path,body,method) {
     const epoch=this.epoch;
     const response=await fetch(new URL('console/'+path,this.base),{

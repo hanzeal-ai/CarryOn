@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='carryon-account-desktop-') as temp:
     binary = root/'account-desktop-smoke'
     try:
         subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-swift-version', '5', '-D', 'DESKTOP_TEST',
-                        '-target', platform.machine()+'-apple-macos13.0', *map(str, sorted((ROOT/'desktop').glob('*.swift'))),
+                        '-target', platform.machine()+'-apple-macos13.0', *map(str, sorted((ROOT/'desktop').glob('*.swift'))),str(ROOT/'iOS/CarryOn/Core/AppUpdate.swift'),
                         str(ROOT/'tests/AccountDesktopSmoke.swift'), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True, timeout=60, env={**os.environ,
             'CARRYON_DESKTOP_CLI':str(cli), 'CARRYON_HOME':str(root/'local'), 'SSL_CERT_FILE':str(cert),

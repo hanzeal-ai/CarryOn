@@ -65,7 +65,7 @@ class ExtendedContractTests(unittest.TestCase):
                   'approvalsReviewer': 'user', 'permissions': 'profile-id',
                   'activePermissionProfile': {'id': 'profile-id', 'extends': None},
                   'collaborationMode': {'mode': 'plan', 'settings': {'model': 'native-model', 'reasoning_effort': 'high', 'developer_instructions': None}},
-                  'summary': 'concise', 'personality': 'friendly', 'multiAgentMode': 'explicitRequestOnly'}
+                  'summary': 'concise', 'personality': 'friendly'}
         self.assertEqual(settings(values, T), values)
         self.assertEqual(build('settings', {'settings': values}, state('active'))[2]['threadSettings'], values)
         self.assertEqual(settings({'sandboxPolicy': {'type': 'workspaceWrite', 'writableRoots': ['/tmp'], 'networkAccess': False}}, T)['sandboxPolicy']['type'], 'workspaceWrite')

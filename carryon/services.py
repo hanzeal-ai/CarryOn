@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from .paths import private_dir, save_json, state_dir
+from .paths import private_dir, save_json, state_dir, workspace_codex_home, workspace_backend
 
 
 def catalog_directory():
@@ -33,7 +33,12 @@ def register(directory, *, name=None, port=None, codex_home=None):
         data=records();previous=data.get(directory,{})
         entry={**previous,'removed':False,'directory':directory,'name':name.strip() if name is not None else previous.get('name',Path(directory).name)}
         if port is not None:entry['port']=port
-        if codex_home is not None:entry['codexHome']=str(Path(codex_home).expanduser().resolve())
+        entry['backend'] = previous.get('backend') or workspace_backend(directory)
+        entry['codexHome'] = str(workspace_codex_home(directory, codex_home or previous.get('codexHome')))
+        if entry['backend'] == 'app-server':
+            for other, saved in data.items():
+                if other != directory and not saved.get('removed') and workspace_codex_home(other, saved.get('codexHome')) == Path(entry['codexHome']):
+                    raise ValueError('此 Codex 目录已被其他工作区使用，请选择独立目录')
         data[directory]=entry
         save_json(root/'services.json',{'version':1,'services':data})
     return entry
@@ -77,8 +82,9 @@ def inspect(entry):
     info=running(directory)
     if info:
         return {**entry,'running':True,'state':'running','service':info,
-                'port':info['port'],'codexHome':info['codexHome']}
-    return {**entry,'running':False,'state':'unavailable' if (directory/'service.json').exists() else 'stopped','service':None}
+                'port':info['port'],'codexHome':info['codexHome'], 'backend':info.get('backend', 'desktop-ipc')}
+    return {**entry, 'backend':workspace_backend(directory), 'codexHome':str(workspace_codex_home(directory, entry.get('codexHome'))),
+            'running':False,'state':'unavailable' if (directory/'service.json').exists() else 'stopped','service':None}
 
 
 def list_services(current=None):

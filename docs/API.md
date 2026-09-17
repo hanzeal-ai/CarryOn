@@ -29,7 +29,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 {"id":"消息ID","role":"assistant","text":"你好","phase":"final_answer","turnId":"轮次ID","textTruncated":false}
 ```
 
-`phase`、`time`、`turnId` 可缺省；`source` 为 `desktop-snapshot` 或 `local-rollout`。`messages` 保留旧版兼容字段，仍最多 200 条、每条 24,000 字符，`messagesTruncated` 表示条数裁切；新页面使用 `timeline`。
+`phase`、`time`、`turnId` 可缺省；`source` 为 `desktop-snapshot` 或 `local-rollout`。`messages` 保留旧版兼容字段，仍最多 200 条、每条 24,000 字符，`messagesTruncated` 表示条数裁切；所有当前页面使用 `timeline`；本地历史预览和原生客户端未加载时的历史也由服务端输出相同投影。
 
 ### 原生时间线扩展
 
@@ -104,7 +104,7 @@ Job 还可能包含 fingerprint、clientMessageId、expectedTitle；调用方不
 ```python
 import json, pathlib, urllib.request, uuid
 
-token = pathlib.Path('/Users/sanmws/Documents/ConnectNow/.runtime/token').read_text().strip()
+token = (pathlib.Path.home() / 'Library/Application Support/CarryOn/token').read_text().strip()
 def call(path, body=None):
     request = urllib.request.Request(
         'http://127.0.0.1:8769/api' + path,
@@ -227,7 +227,7 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 | user-input | nativeRequestId、requestFingerprint、answers | answers 为 questionId → 字符串数组，必须覆盖当前全部问题 |
 | mcp-response | nativeRequestId、requestFingerprint、response | response: {action: accept/decline/cancel, content?: object/null}；原生安全校验继续生效 |
 
-设置支持 `approvalPolicy`、`approvalsReviewer`、`collaborationMode`、`cwd`、`effort`、`model`、`multiAgentMode`、`permissions`、`personality`、`sandboxPolicy`、`serviceTier`、`summary` 以及桌面层 `activePermissionProfile`。字段省略保持不变，null 按原生语义处理。模型、effort、serviceTier 的实际可用值由 App 决定；不在 CarryOn 中硬编码模型能力。`multiAgentMode` 在当前原生 schema 标为 deprecated/ignored，接入不代表该字段仍生效。
+设置支持 `approvalPolicy`、`approvalsReviewer`、`collaborationMode`、`cwd`、`effort`、`model`、`permissions`、`personality`、`sandboxPolicy`、`serviceTier`、`summary` 以及桌面层 `activePermissionProfile`。字段省略保持不变，null 按原生语义处理。模型、effort、serviceTier 的实际可用值由 App 决定；不在 CarryOn 中硬编码模型能力。`multiAgentMode` 已被原生协议标记为 ignored，CarryOn 明确拒绝该字段，避免报告一个实际不生效的设置。
 
 契约保存于 `carryon/native_contracts.json`，来自本机 App 所带 codex 的 `app-server generate-json-schema --experimental`；activePermissionProfile 来自桌面 j9t/N9t 处理逻辑。仅接受已知字段，嵌套结构、枚举和必填项均校验；`permissions` 或 `activePermissionProfile` 与 `sandboxPolicy` 不可同时指定。cwd 使用绝对路径。CarryOn 不自行猜测权限配置 ID。
 

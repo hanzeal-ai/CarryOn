@@ -41,7 +41,7 @@ python3 -m carryon cloud status
 carryon cloud connect --url wss://你的网关域名/device --device-id my-mac --token-file /本机/device-token.txt
 ```
 
-独立网关的已有设备凭证通过 CLI 配置；桌面端使用控制台 HTTPS 地址发起连接申请。设备会自动重连，但不会自动重发任务或恢复旧的云端订阅。
+独立网关的已有设备凭证通过 CLI 配置；桌面端使用工作区初始化扫码绑定；普通连接不需要手填地址，自托管使用 CLI 显式指定。设备会自动重连，但不会自动重发任务或恢复旧的云端订阅。
 
 参考 Nginx 配置（证书、进程管理与域名由部署方配置）：
 

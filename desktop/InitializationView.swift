@@ -19,22 +19,22 @@ import CoreImage.CIFilterBuiltins
     @State private var fineGrained = false
     @State private var permissions: Set<String> = ["view", "files"]
     @State private var codexAvailable = false
+    @State private var independentCodex = false
     private var allowsControl: Bool { !permissions.subtracting(["view", "files"]).isEmpty }
+    private var cloudURL: String { url.trimmingCharacters(in: .whitespacesAndNewlines) }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("连接工作区").font(.title2.weight(.semibold))
-            Label("本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
-            if !codexAvailable { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
+            Label(independentCodex ? "独立 Codex 工作区" : "本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
+            if !independentCodex && !codexAvailable { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
             if phase != "waiting" && phase != "bound" && phase != "confirming" {
-                TextField("云端 HTTPS 地址", text: $url).textFieldStyle(.roundedBorder)
-                    .onChange(of: url) { _ in accounts = []; selectedAccount = "" }
                 Button("从已确认账号选择") { Task {
-                    if let state = await exchange(["action":"known-accounts", "url":url]) {
+                    if let state = await exchange(["action":"known-accounts", "url":cloudURL]) {
                         accounts = state["accounts"] as? [[String:Any]] ?? []
                         let warnings = state["warnings"] as? [String] ?? []
                         message = warnings.isEmpty ? (accounts.isEmpty ? "此云端暂无已确认账号，请扫码绑定。" : "") : warnings.joined(separator: "\n")
                     }
-                } }.disabled(busy || url.isEmpty)
+                } }.disabled(busy || cloudURL.isEmpty)
                 if !accounts.isEmpty {
                     Picker("使用者", selection: $selectedAccount) {
                         Text("其他账号扫码绑定").tag("")
@@ -44,9 +44,12 @@ import CoreImage.CIFilterBuiltins
                 Toggle("绑定完成后自动启动服务", isOn: $autoStart)
                 Toggle("允许手机操作会话", isOn: Binding(get: {allowsControl}, set: {value in permissions = Set(value ? ["view","create","send","stop","edit","files","approve"] : ["view","files"]) }))
                 DisclosureGroup("细分权限", isExpanded: $fineGrained) {
-                    ForEach([("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批")], id: \.0) { key, label in
-                        Toggle(label, isOn: Binding(get: {permissions.contains(key)}, set: { value in if value {permissions.insert(key)} else {permissions.remove(key)} }))
-                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach([("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批")], id: \.0) { key, label in
+                            Toggle(label, isOn: Binding(get: {permissions.contains(key)}, set: { value in if value {permissions.insert(key)} else {permissions.remove(key)} }))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             if let qr {
@@ -57,6 +60,9 @@ import CoreImage.CIFilterBuiltins
             if !message.isEmpty { Text(message).font(.callout).foregroundStyle(DesktopDesign.secondary).textSelection(.enabled) }
             HStack {
                 if busy { ProgressView().controlSize(.small) }
+                if phase == "waiting" {
+                    Button("取消") { Task { await cancelBinding() } }.disabled(busy)
+                }
                 Spacer()
                 Button(phase == "bound" ? "完成" : "稍后继续") { dismiss() }.keyboardShortcut(.cancelAction)
                 if phase == "confirming" {
@@ -68,7 +74,7 @@ import CoreImage.CIFilterBuiltins
                 } else if phase == "unverified" {
                     Button("重试") { Task { await load() } }.disabled(busy)
                 } else if phase != "waiting" && phase != "bound" {
-                    Button(selectedAccount.isEmpty ? "生成二维码" : "确认分配") { Task { await prepare() } }.buttonStyle(AccentButton()).disabled(busy || url.isEmpty)
+                    Button(selectedAccount.isEmpty ? "生成二维码" : "确认分配") { Task { await prepare() } }.buttonStyle(AccentButton()).disabled(busy || cloudURL.isEmpty)
                 }
             }
         }.padding(28).frame(width: 470).background(DesktopDesign.background)
@@ -83,8 +89,9 @@ import CoreImage.CIFilterBuiltins
     }
     private func load() async {
         busy = true; defer { busy = false }
-        if let state = await exchange(["action":"status"]) {
-            url = state["url"] as? String ?? ""
+        if let state = await exchange(["action":"status", "useDefaultCloud":bindingID == nil]) {
+            let savedURL = (state["url"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            url = savedURL
             autoStart = state["autoStart"] as? Bool ?? true
             permissions = Set(state["permissions"] as? [String] ?? ["view","files"])
             render(state)
@@ -103,7 +110,7 @@ import CoreImage.CIFilterBuiltins
     }
     private func prepare() async {
         busy = true; defer { busy = false }
-        var fields: [String: Any] = ["action":"prepare", "url":url, "autoStart":autoStart, "control":allowsControl,
+        var fields: [String: Any] = ["action":"prepare", "url":cloudURL, "autoStart":autoStart, "control":allowsControl,
                                      "codexHome":model.codexHome, "port":Int(model.port) ?? 0]
         fields["permissions"] = permissions.sorted()
         if let account = accounts.first(where: { $0["id"] as? String == selectedAccount }) {
@@ -115,6 +122,7 @@ import CoreImage.CIFilterBuiltins
         }
     }
     private func render(_ state: [String: Any]) {
+        independentCodex = (state["environment"] as? [String: Any])?["backend"] as? String == "app-server"
         codexAvailable = (state["environment"] as? [String: Any])?["ipcAvailable"] as? Bool ?? false
         phase = state["state"] as? String ?? "new"
         message = state["error"] as? String ?? ""
@@ -128,7 +136,18 @@ import CoreImage.CIFilterBuiltins
         }
         if phase == "bound" {
             qr = nil
-            message = state["bridgeConnected"] as? Bool == true && state["cloudConnected"] as? Bool == true ? "工作区已就绪，可在手机使用。" : state["running"] as? Bool == true ? "绑定已完成，正在等待 Codex 或云端连接。" : "绑定已保存，点击工作区的启动服务即可运行。"
+            message = state["accountReady"] as? Bool == false ? "绑定已完成，此工作区尚未完成 Codex 登录。" : state["bridgeConnected"] as? Bool == true && state["cloudConnected"] as? Bool == true ? "工作区已就绪，可在手机使用。" : state["running"] as? Bool == true ? "绑定已完成，正在等待 Codex 或云端连接。" : "绑定已保存，点击工作区的启动服务即可运行。"
+        }
+    }
+    private func cancelBinding() async {
+        busy = true
+        polling?.cancel(); polling = nil
+        defer { busy = false }
+        if let state = await exchange(["action":"cancel"]) {
+            render(state)
+            if phase == "bound" { await model.refresh() }
+        } else if phase == "waiting" {
+            beginPolling()
         }
     }
     private func beginPolling() {
@@ -136,7 +155,9 @@ import CoreImage.CIFilterBuiltins
         polling = Task {
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }
-                guard let state = await exchange(["action":"poll"]) else { phase = "configured"; qr = nil; return }
+                let response = await exchange(["action":"poll"])
+                guard !Task.isCancelled else { return }
+                guard let state = response else { phase = "configured"; qr = nil; return }
                 render(state)
                 if phase == "bound" { await model.refresh(); return }
                 if phase == "confirming" { return }

@@ -69,6 +69,8 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @Environment(\.chatTheme) private var theme
     @Binding var text: String
     var disabled = false
+    var sendAllowed = true
+    var stopAllowed = true
     var hasImages = false
     var stopping = false
     var resuming = false
@@ -77,29 +79,30 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var stop: (() -> Void)?
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
-    private var action: ComposerAction { .resolve(text: text, hasImages: hasImages, running: stopping, interrupted: resuming) }
+    private var action: ComposerAction { .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
+    private var actionDisabled: Bool { disabled || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
     private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "重新执行" : stopping ? "补充指令" : "发送" }
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
             HStack(alignment: .bottom, spacing: 0) {
                 accessories.foregroundStyle(theme.colors.mainTint)
                 TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
-                    .font(.system(size: 16)).lineLimit(1...6)
+                    .font(.system(size: 16)).lineLimit(1...6).disabled(disabled || !sendAllowed)
                     .padding(.vertical, 12).padding(.horizontal, 10)
                     .foregroundStyle(theme.colors.inputText)
             }.background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 18))
             if action == .send, stopping, let queue {
                 Menu {
-                    Button("加入队列", systemImage: "text.badge.plus", action: queue)
-                    if let stop { Button("停止当前执行", systemImage: "stop", action: stop) }
+                    Button("加入队列", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
+                    if let stop { Button("停止当前执行", systemImage: "stop", action: stop).disabled(!stopAllowed) }
                 } label: { Image(systemName: "chevron.down").frame(width: 32, height: 44) }.disabled(disabled).accessibilityLabel("发送方式")
             }
             Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
                 Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 44, height: 44).background(theme.colors.sendButtonBackground, in: Circle())
-            }.disabled(disabled || action == .unavailable)
-                .opacity(disabled || action == .unavailable ? 0.4 : 1)
+            }.disabled(actionDisabled)
+                .opacity(actionDisabled ? 0.4 : 1)
                 .accessibilityLabel(buttonLabel)
         }.padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
     }

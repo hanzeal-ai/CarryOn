@@ -24,7 +24,6 @@ public enum ConversationProcess {
                 let kind = item["type"].text
                 let unanswered = item["asyncQuestions"].array.contains { $0["answer"] == .null && $0["active"].bool != false }
                 let visible = ["userMessage", "steeringUserMessage", "error", "turnDiff"].contains(kind)
-                    || item["artifacts"].array.contains { $0["kind"].text == "image" }
                     || kind == "agentMessage" || unanswered
                 if visible { flush(); result.append(item) }
                 else { pending.append(item) }

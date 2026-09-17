@@ -61,3 +61,55 @@ private final class ProbeSocket: ConsoleSocket, @unchecked Sendable {
         Issue.record("Stalled subscription must fail")
     } catch { #expect(socket.closeCount == 1) }
 }
+
+@Test func initialSubscriptionCannotWaitIndefinitelyForSocketHandshake() async throws {
+    let socket = ProbeSocket(responds: false)
+    let stream = ConsoleStream(task: socket, subscription: "test")
+    let clock = ContinuousClock(), start = clock.now
+    do {
+        try await stream.subscribe(.object(["subscription": .string("test")]))
+        Issue.record("Initial handshake must have a deadline")
+    } catch {
+        #expect(socket.closeCount == 1)
+        #expect(start.duration(to: clock.now) < .seconds(10))
+    }
+}
+
+private final class HeartbeatSocket: ConsoleSocket, @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {}
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) { pongReceiveHandler(nil) }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await Task.sleep(for: .milliseconds(10))
+        if lock.withLock({ closed }) { throw URLError(.cancelled) }
+        return .string(#"{"type":"ping"}"#)
+    }
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) { lock.withLock { closed = true } }
+}
+
+@Test func heartbeatsDoNotKeepMissingFirstSnapshotAlive() async throws {
+    let stream = ConsoleStream(task: HeartbeatSocket(), subscription: "test", subscriptionTimeout: .milliseconds(50))
+    let clock = ContinuousClock(), start = clock.now
+    do {
+        _ = try await stream.next()
+        Issue.record("Heartbeats are not a usable subscription snapshot")
+    } catch {
+        #expect(error is APIError)
+        #expect(start.duration(to: clock.now) < .seconds(2))
+    }
+}
+
+@Test func cancellingInitialSubscriptionReleasesPendingSend() async throws {
+    let socket = ProbeSocket(responds: false)
+    let stream = ConsoleStream(task: socket, subscription: "test")
+    let operation = Task { try await stream.subscribe(.object(["subscription": .string("test")])) }
+    try await Task.sleep(for: .milliseconds(100))
+    let clock = ContinuousClock(), start = clock.now
+    operation.cancel()
+    do { try await operation.value; Issue.record("Cancelled handshake must not succeed") }
+    catch {
+        #expect(socket.closeCount >= 1)
+        #expect(start.duration(to: clock.now) < .seconds(2))
+    }
+}

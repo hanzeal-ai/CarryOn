@@ -48,9 +48,10 @@ struct StatePill: View {
     }
 }
 struct AccentButton: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-            .padding(.horizontal, 17).frame(height: 36).background(DesktopDesign.blue.opacity(configuration.isPressed ? 0.7 : 1), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 17).frame(height: 36).background(isEnabled ? DesktopDesign.blue.opacity(configuration.isPressed ? 0.7 : 1) : DesktopDesign.secondary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 struct QuietButton: ButtonStyle {

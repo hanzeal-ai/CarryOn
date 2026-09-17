@@ -15,6 +15,7 @@ document.addEventListener('keydown', event => {
     setThreadListOpen(false); $('toggle-threads').focus();
   }
 });
+let independentWorkspace = false, workspaceAccountReady = true;
 let enabled = false, selected = null, controllerId = null, threads = [], offset = 0;
 let refreshBusy = false, lastHistory = '', listVersion = 0, noticeTimer;
 let subscription = null, streamReady = true;
@@ -129,7 +130,7 @@ const cloudMode = window.CARRYON_CLOUD === true;
 const client = new (cloudMode ? CloudConsoleClient : CarryOnClient)({
   onUpdate: receiveUpdate,
   onDisconnect: streamDisconnected,
-  onAuthError: () => { historyCache.clear();outgoingMessages.clear(); $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('console-code-dialog').close();$('console-pair-code').textContent='';$('link-dialog').close();$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;} },
+  onAuthError: () => { historyCache.clear();outgoingMessages.clear(); $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('console-connect-dialog').close();$('link-dialog').close();$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;} },
   onError: error => notice('实时同步失败：' + error.message)
 });
 const api = (path, body) => client.request(path, body);
@@ -143,20 +144,20 @@ function welcomeState(connected){
 }
 function conversationReadOnly(){return composeHistory?.access?.canInteract===false;}
 function canInteract(){return canWrite()&&!conversationReadOnly()&&composeHistory?.access?.nativeReady!==false;}
-function canWrite(){return streamReady&&enabled&&(!cloudMode||client.control===true);}
+function canWrite(){return streamReady&&enabled&&workspaceAccountReady&&(!cloudMode||client.control===true);}
 function applyStatus(status) {
   if(cloudMode){if(client.control!==(status.remoteControl===true))lastHistory='';client.control=status.remoteControl===true;}
-  enabled = status.enabled; controllerId = status.controllerId;
+  enabled = status.enabled; controllerId = status.controllerId; independentWorkspace = status.protocol === 'codex-app-server'; workspaceAccountReady = status.accountReady !== false;
   $('status').textContent = enabled ? (cloudMode?(client.control?'可远程操作':'只读连接'):'已连接') : '等待连接'; $('status').classList.toggle('on', enabled);
   $('bridge').textContent = '请在 CLI 或桌面端管理桥接';
-  $('create').disabled = !canWrite() || !controllerId;
-  $('create').title=!controllerId?'先在 CLI 或桌面端选择控制会话':'';
+  $('create').disabled = !canWrite() || (!independentWorkspace && !controllerId);
+  $('create').title=!independentWorkspace&&!controllerId?'先在 CLI 或桌面端选择控制会话':'';
   for (const id of ['search','refresh']) $(id).disabled = !enabled;
   $('attach-images').disabled=!canAttach(); $('prompt').disabled = !canInteract() || !selected; $('send').disabled = !canInteract() || !selected;
   $('open-side').disabled=!enabled||!selected;
   $('open-subagents').disabled=!enabled||!selected;
   updateSideComposer();
-  $('controller-note').textContent = controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
+  $('controller-note').textContent = independentWorkspace ? '在当前独立工作区创建会话。' : controllerId ? '控制会话已选定，新建任务将通过它执行。' : '首次请在 Codex App 中打开专用控制会话。';
   if(enabled&&!selected)welcomeState(true);
   $('prompt').placeholder=enabled?(selected?'发送新的任务…':'请先选择会话'): '请先开启本机桥接';
   if (!enabled) {
@@ -272,7 +273,9 @@ client.onSubmission=update=>{
   if(item)outgoingMessages.set(key,item);else outgoingMessages.delete(key);
   reconcileOutgoing([],historyCache.get(conversationKey(target)),update.state==='sending');
 };
+let activityNavigationThread=null;
 async function selectThread(id, record=null) {
+  activityNavigationThread=workspaceView==='activity'?id:null;
   subagentNavigation.reset();
   if(selected)conversationDrafts.set(activeDraftScope+':'+selected,{text:$('prompt').value,images:[...attachedImages]});
   clearImages();
@@ -305,7 +308,7 @@ async function loadHistory() {
 async function receiveUpdate(data, current) {
   const wasReady=streamReady;streamReady=true;
   const wasEnabled = enabled;
-  if(!wasReady || enabled !== data.status.enabled || controllerId !== data.status.controllerId || cloudMode&&client.control!==(data.status.remoteControl===true)) applyStatus(data.status);
+  if(!wasReady || enabled !== data.status.enabled || workspaceAccountReady !== (data.status.accountReady !== false) || controllerId !== data.status.controllerId || cloudMode&&client.control!==(data.status.remoteControl===true)) applyStatus(data.status);
   if(enabled && !wasEnabled) { await loadThreads(); if(!current())return; await loadHistory(); }
   if(!enabled)return;
   if(data.workspaceRevision!==undefined&&workspaceRevision!==data.workspaceRevision){
@@ -344,6 +347,7 @@ async function receiveUpdate(data, current) {
     const signature = data.history.historyRevision || JSON.stringify(data.history);
     if(signature !== lastHistory){lastHistory=signature;Timeline.render(data.history,$('messages'),historyImageLoader(data.history.thread.id));Operations.render(data.history,selected,client,notice,canInteract());}
     reconcileOutgoing([],data.history);
+    if(activityNavigationThread===selected){const anchor=Timeline.activityAnchor(data.history);if(anchor){Timeline.navigateTo(anchor);activityNavigationThread=null;}}
     if(document.visibilityState==='visible'&&(!mobileLayout.matches||document.body.dataset.mobilePage==='chat')&&data.readSequence)api('/notifications/read',{threadId:selected,sequence:data.readSequence}).catch(()=>{});
   }
 }
@@ -455,7 +459,7 @@ let searchTimer;$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=s
 async function tick(){
   if(refreshBusy || !client.token)return;refreshBusy=true;
   try{const status=await api('/status');const justEnabled=status.enabled&&!enabled;
-    if(status.enabled!==enabled || status.controllerId!==controllerId || cloudMode&&client.control!==(status.remoteControl===true)){applyStatus(status);if(enabled)renderThreads();}
+    if(status.enabled!==enabled || workspaceAccountReady !== (status.accountReady !== false) || status.controllerId!==controllerId || cloudMode&&client.control!==(status.remoteControl===true)){applyStatus(status);if(enabled)renderThreads();}
     if(justEnabled)await loadThreads();
     if(enabled){const {jobs}=await api('/jobs');if(enabled)renderJobs(jobs);await loadHistory();}}
   catch(e){if(enabled)notice(e.message);}finally{refreshBusy=false;}
@@ -574,7 +578,7 @@ async function init(){
     setupConsoleLogin(client,async()=>{await client.initialize();$('pairing').hidden=true;await offerLink();if(client.device)applyStatus(await api('/status'));client.connect();if(enabled)await loadThreads();});
     $('token').placeholder='输入密码';$('token').autocomplete='current-password';$('pair').textContent='登录工作空间 →';
     $('auth-help').textContent='';document.querySelector('.auth-security').hidden=true;
-    for(const id of ['console-device','console-pair-device','console-logout','console-requests','console-remove-device','console-standby'])$(id).hidden=false;
+    for(const id of ['console-device','console-connect-workspace','console-logout','console-requests','console-remove-device','console-standby'])$(id).hidden=false;
     $('console-requests').onclick=async()=>{try{await refreshConnectionRequests();$('requests-dialog').showModal();}catch(e){notice(e.message);}};
     $('requests-close').onclick=()=>$('requests-dialog').close();
     $('console-standby').onclick=async()=>{try{const s=await api('/standby');notice(s.error||(!s.supported?'此设备不支持远程待机':s.effective?'远程待机已生效（接电）':s.enabled?'远程待机已开启，当前未生效':'远程待机未开启；请在本机管理'));}catch(e){notice(e.message);}};
@@ -587,13 +591,12 @@ async function init(){
       applyStatus({enabled:false,controllerId:null});
       try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}finally{client.connect();}
     };
-    $('console-pair-device').onclick=async()=>{
-      try{const p=await client.consoleRequest('pairing',{deviceId:client.device});
-        $('console-pair-command').textContent='carryon start\ncarryon cloud pair --url '+p.publicUrl+(p.publicUrl.startsWith('http:')?' --dev-local':'');
-        $('console-pair-code').textContent=p.code;$('console-code-dialog').showModal();
-      }catch(e){notice(e.message);}
+    $('console-connect-workspace').onclick=()=>{
+      $('console-connect-command').textContent=client.initializationCommand||'本地 HTTP 服务仅供协议测试，绑定请使用 HTTPS 服务。';
+      $('console-custom-cloud').hidden=client.initializationCommand==='carryon init';
+      $('console-connect-dialog').showModal();
     };
-    $('console-close-code').onclick=()=>{$('console-code-dialog').close();$('console-pair-code').textContent='';};
+    $('console-connect-close').onclick=()=>$('console-connect-dialog').close();
     $('console-logout').onclick=async()=>{
       subagentNavigation.reset();
       $('console-logout').disabled=true;

@@ -51,7 +51,7 @@ import Foundation
         await reopened.refresh()
         precondition(!reopened.running && reopened.port == String(second.port) && reopened.codexHome == second.codexHome)
         // Desktop-created foreground workspace uses the same catalog and terminates independently.
-        let added = await model.add(name: "第三个工作区", path: ProcessInfo.processInfo.environment["CARRYON_TEST_THIRD"]!, port: "0", codex: model.codexHome)
+        let added = await model.add(name: "第三个工作区", path: ProcessInfo.processInfo.environment["CARRYON_TEST_THIRD"]!, port: "0", codex: "")
         precondition(added)
         await model.serve()
         for _ in 0..<20 {

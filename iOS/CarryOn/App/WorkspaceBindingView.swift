@@ -1,5 +1,4 @@
 import SwiftUI
-import VisionKit
 import AVFoundation
 import CarryOnCore
 
@@ -7,6 +6,7 @@ struct WorkspaceBindingView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var camera = false
+    @State private var preparingCamera = true
     @State private var code: WorkspaceBindingCode?
     @State private var details: JSONValue = .null
     @State private var failure: String?
@@ -17,6 +17,7 @@ struct WorkspaceBindingView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    if preparingCamera { ProgressView("正在准备相机…").frame(maxWidth: .infinity, minHeight: 320) }
                     if camera {
                         QRScanner(onScan: { raw in
                             camera = false
@@ -43,8 +44,8 @@ struct WorkspaceBindingView: View {
                         Text(failure).foregroundStyle(.red)
                         Button("重新扫码") { Task { await enableCamera() } }.disabled(busy)
                     }
-                }.padding(24)
-            }.background(Design.background).navigationTitle("绑定工作区").navigationBarTitleDisplayMode(.inline)
+                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Design.background).navigationTitle("绑定工作区").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
                 .task { await enableCamera() }
                 .task(id: waiting) {
@@ -60,8 +61,11 @@ struct WorkspaceBindingView: View {
         }
     }
     private func enableCamera() async {
-        failure = nil; details = .null; code = nil
-        guard DataScannerViewController.isSupported, await AVCaptureDevice.requestAccess(for: .video), DataScannerViewController.isAvailable else {
+        preparingCamera = true; camera = false; failure = nil; details = .null; code = nil; waiting = false
+        defer { preparingCamera = false }
+        let allowed = await AVCaptureDevice.requestAccess(for: .video)
+        guard !Task.isCancelled else { return }
+        guard allowed else {
             failure = "相机不可用，请在系统设置中允许 CarryOn 使用相机。"; return
         }
         camera = true

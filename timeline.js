@@ -2,6 +2,106 @@
 const Timeline = (() => {
  function create(ids={runtime:'runtime',info:'conversation-info',source:'history-source'}) {
   let visible = 120, current = null, expanded = false, imageObserver = null;
+  let navigator=null, navigationFrame=0, activeAnchor=null, pendingAnchor=null, navigationPinned=false, navigationSignature=null;
+  let preview=null, previewAnchor=null, previewScroll=null, previewFrame=0, previewRequest=null, holdTimer=null, suppressClick=false, wheelAt=0;
+  const navigationEvents=new AbortController();
+  function scheduleNavigation(){if(!navigationFrame)navigationFrame=requestAnimationFrame(()=>{navigationFrame=0;syncNavigation();});}
+  function syncNavigation(){
+    if(!navigator||!current)return;
+    const viewport=current.container.closest('.mobile-chat-scroll')||current.container, rect=viewport.getBoundingClientRect();
+    if(preview&&(!current.container.getClientRects().length))hidePreview();
+    navigator.hidden=!navigator.children.length||!viewport.getClientRects().length||rect.height<60;
+    navigator.style.left=(Math.max(0,rect.left-30)+8)+'px';
+    navigator.style.top=(rect.top+rect.height/2)+'px';
+    navigator.style.maxHeight=Math.min(220,rect.height-24)+'px';
+    const candidates=[...current.container.querySelectorAll('[data-navigation-id]')].filter(n=>n.getClientRects().length);
+    const nearest=candidates.reduce((best,n)=>{
+      const r=n.getBoundingClientRect(),distance=Math.abs(Math.max(r.top,Math.min(rect.top+rect.height/2,r.bottom))-(rect.top+rect.height/2));
+      return !best||distance<best.distance?{id:n.dataset.navigationId,distance}:best;
+    },null);
+    if(nearest&&!navigationPinned)activeAnchor=nearest.id;
+    const displayedAnchor=previewAnchor||activeAnchor;
+    const selectedIndex=[...navigator.children].findIndex(b=>b.dataset.anchor===displayedAnchor);
+    for(const [index,button] of [...navigator.children].entries()){
+      const distance=Math.abs(index-selectedIndex);button.firstChild.style.width=(selectedIndex<0?12:(innerWidth<=760?[28,22,16,10,6]:[52,40,28,20,12])[Math.min(4,distance)])+'px';
+      const selected=button.dataset.anchor===displayedAnchor;
+      button.classList.toggle('active',selected);button.setAttribute('aria-current',selected?'location':'false');
+      if(selected){const y=button.offsetTop;if(y<navigator.scrollTop)navigator.scrollTop=y;else if(y+button.offsetHeight>navigator.scrollTop+navigator.clientHeight)navigator.scrollTop=y+button.offsetHeight-navigator.clientHeight;}
+    }
+  }
+  function focusAnchor(id){
+    if(!current)return false;
+    const {data,container,loadImage}=current,index=(data.timeline||[]).findIndex(item=>item.id===id);
+    if(index<0)return false;
+    if(data.timeline.length-index>visible){visible=data.timeline.length-index;render(data,container,loadImage);}
+    const target=[...container.querySelectorAll('[data-navigation-id]')].find(n=>n.dataset.navigationId===id);
+    if(!target)return false;
+    for(let parent=target.parentElement;parent&&parent!==container;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+    if(target.tagName==='DETAILS')target.open=true;
+    const viewport=container.closest('.mobile-chat-scroll')||container,rect=viewport.getBoundingClientRect(),r=target.getBoundingClientRect();
+    viewport.scrollTop+=r.top-rect.top-(rect.height-Math.min(r.height,rect.height))/2;
+    activeAnchor=id;navigationPinned=true;scheduleNavigation();return true;
+  }
+  function navigateTo(id){pendingAnchor=id;if(focusAnchor(id))pendingAnchor=null;}
+  function activityAnchor(data){
+    const all=data.timeline||[],turn=all.findLast(i=>i.type==='turn'),items=all.filter(i=>i.type!=='turn'&&(!turn||i.turnId===turn.turnId));
+    const request=data.controls?.requests?.[0],requested=request?.params?.itemId;
+    if(request){const related=all.filter(i=>i.type!=='turn'&&i.turnId===(request.params?.turnId||turn?.turnId));return (all.find(i=>requested&&i.nativeId===requested)||related.at(-1))?.id;}
+    return (all.find(i=>i.asyncQuestions?.some(q=>q.active&&q.answer==null))||
+      (turn?.status==='failed'||data.status?.state==='error'?items.findLast(i=>i.type==='error'):null)||
+      items.findLast(i=>i.type==='agentMessage'&&i.data?.delivery!=='async'&&!['analysis','commentary'].includes(i.phase))||items.at(-1))?.id;
+  }
+  function hidePreview(){cancelAnimationFrame(previewFrame);previewFrame=0;previewRequest=null;clearTimeout(holdTimer);preview?.remove();preview=null;previewAnchor=null;if(navigator&&previewScroll!==null)navigator.scrollTop=previewScroll;previewScroll=null;scheduleNavigation();}
+  function showPreview(id){
+    previewRequest=id;
+    if(!previewFrame)previewFrame=requestAnimationFrame(()=>{previewFrame=0;const requested=previewRequest;previewRequest=null;renderPreview(requested);});
+  }
+  function renderPreview(id){
+    if(!current||previewAnchor===id)return;
+    const all=current.data.timeline||[],index=all.findIndex(i=>i.id===id),item=all[index];if(!item)return;
+    clearTimeout(holdTimer);if(previewScroll===null)previewScroll=navigator.scrollTop;previewAnchor=id;
+    if(!preview){preview=el('aside','conversation-navigation-preview');preview.setAttribute('role','tooltip');document.body.append(preview);}
+    preview.replaceChildren();scheduleNavigation();
+    const user=all.slice(0,index+1).findLast(i=>['userMessage','steeringUserMessage'].includes(i.type));
+    preview.append(el('strong','', (user?.text||item.title||'执行过程').slice(0,140)),el('p','',(item.text||item.title||item.data?.command||'执行过程').slice(0,500)));
+    const r=[...navigator.children].find(b=>b.dataset.anchor===id)?.getBoundingClientRect()||navigator.getBoundingClientRect();
+    preview.style.left=Math.max(8,Math.min(r.left+(innerWidth<=760?34:58),innerWidth-preview.offsetWidth-12))+'px';
+    preview.style.top=Math.max(12,Math.min(r.top-40,innerHeight-preview.offsetHeight-12))+'px';
+  }
+  function scrubNavigation(delta){
+    const buttons=[...navigator.children];if(!buttons.length)return;
+    const index=Math.max(0,buttons.findIndex(b=>b.dataset.anchor===(previewRequest||previewAnchor||activeAnchor)));
+    const next=buttons[Math.max(0,Math.min(buttons.length-1,index+delta))];showPreview(next.dataset.anchor);
+  }
+  function renderNavigation(all){
+    if(!navigator){navigator=el('nav','conversation-navigator');navigator.setAttribute('aria-label','对话消息导航');document.body.append(navigator);
+      navigator.addEventListener('wheel',event=>{event.preventDefault();if(Date.now()-wheelAt>65){wheelAt=Date.now();scrubNavigation(Math.sign(event.deltaY));}},{passive:false});
+      navigator.addEventListener('pointerleave',hidePreview);
+      navigator.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();scrubNavigation(event.key==='ArrowUp'?-1:1);}if(event.key==='Escape')hidePreview();});
+      let startY=null,startIndex=0;
+      navigator.addEventListener('touchstart',event=>{startY=event.touches[0].clientY;startIndex=Math.max(0,[...navigator.children].findIndex(b=>b.dataset.anchor===activeAnchor));},{passive:true});
+      navigator.addEventListener('touchmove',event=>{if(startY===null)return;event.preventDefault();clearTimeout(holdTimer);suppressClick=true;const buttons=[...navigator.children],index=Math.max(0,Math.min(buttons.length-1,startIndex+Math.round((event.touches[0].clientY-startY)/10)));showPreview(buttons[index].dataset.anchor);},{passive:false});
+      navigator.addEventListener('touchend',()=>{startY=null;hidePreview();});
+      navigator.addEventListener('touchcancel',()=>{startY=null;hidePreview();});
+    }
+    const signature=JSON.stringify(all.filter(i=>i.type!=='turn').map(i=>[i.id,(i.text||i.title||'').slice(0,100)]));
+    if(signature===navigationSignature){scheduleNavigation();return;}
+    navigationSignature=signature;
+    navigator.replaceChildren(...all.filter(i=>i.type!=='turn').map((item,index)=>{
+      const button=el('button');button.type='button';button.dataset.anchor=item.id;
+      const label=(item.text||item.title||labels[item.type]||'执行活动').slice(0,100);
+      button.onpointerenter=event=>{if(event.pointerType!=='touch'){showPreview(item.id);}};button.onfocus=()=>{showPreview(item.id);};button.onblur=hidePreview;
+      button.onpointerdown=event=>{suppressClick=false;if(event.pointerType==='touch')holdTimer=setTimeout(()=>{suppressClick=true;showPreview(item.id);},350);};button.onpointerup=()=>clearTimeout(holdTimer);button.onpointercancel=hidePreview;
+     button.setAttribute('aria-label','跳转到第 '+(index+1)+' 条：'+label);
+      button.append(el('span'));button.onclick=()=>{if(!suppressClick){hidePreview();navigateTo(item.id);}suppressClick=false;};return button;
+    }));scheduleNavigation();
+  }
+  document.addEventListener('pointerdown',event=>{if(preview&&!navigator?.contains(event.target))hidePreview();},{signal:navigationEvents.signal});
+  for(const event of ['wheel','touchstart','pointerdown','keydown'])document.addEventListener(event,e=>{if(current&&(current.container.closest('.mobile-chat-scroll')||current.container).contains(e.target)){navigationPinned=false;scheduleNavigation();}},{passive:true,signal:navigationEvents.signal});
+  document.addEventListener('scroll',event=>{if(!navigator?.contains(event.target))scheduleNavigation();},{capture:true,passive:true,signal:navigationEvents.signal});
+  document.addEventListener('toggle',scheduleNavigation,{capture:true,signal:navigationEvents.signal});
+  window.addEventListener('resize',scheduleNavigation,{signal:navigationEvents.signal});
+  new MutationObserver(scheduleNavigation).observe(document.body,{attributes:true,attributeFilter:['class','data-mobile-page']});
   const imageCache = new Map();
   let entryCache = new Map();
   let loadEarlier=null,expandingHistory=false;
@@ -12,7 +112,7 @@ const Timeline = (() => {
     frame.type='button';frame.setAttribute('aria-label','打开原图');
     img.alt=part.name||'会话图片';img.loading='eager';img.hidden=true;
     frame.onclick=()=>{if(safeImage(img.src))openImage(img.src,img.alt);};
-    img.onload=()=>{status.remove();img.hidden=false;};
+    img.onload=()=>{status.remove();img.hidden=false;scheduleNavigation();};
     img.onerror=()=>{img.remove();status.textContent='图片无法显示';};
     frame.append(img,status);article.append(frame);
     if(safeImage(part.url)){img.src=part.url;return;}
@@ -211,7 +311,7 @@ const Timeline = (() => {
       }
       return article;
     }
-    if(item.artifacts?.length){const output=el('article','message assistant'),pictures=el('div','message-images');artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind==='image')},pictures);if(pictures.childNodes.length)output.append(pictures);artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind!=='image')},output);return output;}
+    if(item.artifacts?.length){const output=el('details','activity');output.dataset.key=item.id;output.open=expanded;output.append(el('summary','',item.title||'执行结果'));const pictures=el('div','message-images');artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind==='image')},pictures);if(pictures.childNodes.length)output.append(pictures);artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind!=='image')},output);return output;}
     const card=el('details','activity'+(item.status==='inProgress'?' running':'')+(item.status==='failed'?' failed':''));
     card.dataset.key=item.id;card.open=expanded;
     const summary=el('summary','activity-summary');
@@ -228,7 +328,7 @@ const Timeline = (() => {
     const open=new Map([...container.querySelectorAll('details[data-key]')].map(n=>[n.dataset.key,n.open]));
     const viewport=container.closest('.mobile-chat-scroll')||container;
     const atBottom=viewport.scrollHeight-viewport.scrollTop-viewport.clientHeight<100, scroll=viewport.scrollTop;
-    const all=data.timeline||data.messages.map(m=>({id:m.id,type:m.role==='user'?'userMessage':'agentMessage',text:m.text,phase:m.phase,data:{}}));
+    const all=data.timeline||[];
     const fragment=document.createDocumentFragment();
     const nextEntries=new Map();
     if(data.historyWindow?.hasMore&&loadEarlier){
@@ -242,14 +342,14 @@ const Timeline = (() => {
       // Question controls depend on current authorization as well as item content.
       const reusable=!(item.asyncQuestions?.length);
       const node=reusable&&cached?.signature===signature?cached.node:entry(item);
-      nextEntries.set(item.id,{signature,node,item});return node;
+      if(item.type!=='turn')node.dataset.navigationId=item.id;nextEntries.set(item.id,{signature,node,item});return node;
     }
     if(all.length>visible){const more=el('button','history-more','显示更早记录（还有 '+(all.length-visible)+' 条）');more.onclick=()=>{
       const oldHeight=viewport.scrollHeight;visible+=120;render(data,container,loadImage);viewport.scrollTop=scroll+viewport.scrollHeight-oldHeight;
     };fragment.append(more);}
     let group=null;
     for(const item of all.slice(-visible)){
-      const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type)&&!item.artifacts?.length&&!item.subagents?.length;
+      const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type);
       if(activity){
         if(!group){group=el('details','activity-group');group.dataset.key=item.id+':group';group.open=expanded;const summary=el('summary');summary.append(el('span','activity-icon','›_'),el('span','activity-group-label'));group.append(summary);fragment.append(group);}
         group.append(renderEntry(item));
@@ -259,11 +359,14 @@ const Timeline = (() => {
     if(!all.length)fragment.append(typeof viewState==='function'?viewState(data.syncing?'正在同步会话…':'暂无会话记录',{loading:data.syncing===true,symbol:'chat'}):el('div','empty-small',data.syncing?'正在同步会话…':'暂无会话记录。'));
     container.replaceChildren(fragment);
     entryCache=nextEntries;
+    renderNavigation(all);
     if(editing){const input=[...container.querySelectorAll('[data-question-key]')].find(n=>n.dataset.questionKey===editing.key);if(input&&!input.disabled){input.focus({preventScroll:true});input.setSelectionRange(editing.start,editing.end);}}
     imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:viewport,rootMargin:'300px'});
     for(const frame of container.querySelectorAll('.message-picture'))if(frame.loadImage)imageObserver.observe(frame);
     for(const n of container.querySelectorAll('details[data-key]'))if(open.has(n.dataset.key))n.open=open.get(n.dataset.key);
     viewport.scrollTop=atBottom||!container.dataset.loaded?viewport.scrollHeight:scroll;container.dataset.loaded='true';
+    if(pendingAnchor&&focusAnchor(pendingAnchor))pendingAnchor=null;
+    scheduleNavigation();
     const runtime=data.runtime||{type:'unknown'}, meta=data.metadata||{};
     const activeItems=all.filter(i=>i.status==='inProgress'&&i.type!=='turn');
     const latest=activeItems.at(-1);
@@ -281,8 +384,8 @@ const Timeline = (() => {
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }
   function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity, details.activity-group'))d.open=value;}}
-  function reset(){for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
-  return {render,reset,setExpanded,configureQuestions,configureHistory,configureSubagents};
+  function reset(){hidePreview();navigator?.remove();navigator=null;navigationSignature=null;activeAnchor=null;pendingAnchor=null;navigationPinned=false;for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
+  return {render,reset,setExpanded,configureQuestions,configureHistory,configureSubagents,navigateTo,activityAnchor};
  }
  return {...create(),create};
 })();

@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/subagents.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/mobile.css", "/mobile-ui.js"):
+            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/subagents.js", "/notification-client.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/shadcn.css", "/shadcn-ui.js", "/mobile.css", "/mobile-ui.js"):
                 filename = "example.html" if path == "/" else path[1:]
                 mime = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "png": "image/png"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
@@ -163,7 +163,8 @@ def run(port, codex_home, directory):
     from .cloud_manager import CloudManager
     import fcntl
     import uuid
-    from .paths import private_dir
+    from .paths import private_dir, workspace_codex_home, workspace_backend
+    codex_home = workspace_codex_home(directory, codex_home)
     os.umask(0o077)
     private_dir(directory)
     lock = (directory / 'server.lock').open('a+')
@@ -181,7 +182,12 @@ def run(port, codex_home, directory):
         token_file.write_text(token)
     token_file.chmod(0o600)
     journal = Journal(directory / 'jobs.sqlite')
-    bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
+    if workspace_backend(directory) == 'app-server':
+        from .app_server import AppServer
+        bridge = Bridge(codex_home, Catalog(codex_home, independent=True), journal, ipc_factory=AppServer)
+    else:
+        bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
+    bridge.workspace_directory = directory
     from .lifecycle import BridgeLifecycle
     bridge.lifecycle = BridgeLifecycle(bridge)
     server = Server(('127.0.0.1', port), Handler)
@@ -189,7 +195,7 @@ def run(port, codex_home, directory):
     server.bridge, server.token = bridge, token
     server.allowed_hosts = {f'127.0.0.1:{server.server_port}', f'localhost:{server.server_port}'}
     server.service_info = {'instanceId':str(uuid.uuid4()), 'pid':os.getpid(), 'port':server.server_port,
-                           'version':__version__, 'codexHome':str(codex_home)}
+                           'version':__version__, 'codexHome':str(codex_home), 'backend':workspace_backend(directory)}
     from .standby import RemoteStandby
     server.standby = RemoteStandby(directory)
     bridge.standby=server.standby

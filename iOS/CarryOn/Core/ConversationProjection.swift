@@ -1,40 +1,5 @@
 import Foundation
 
-/// Display-only, bounded by encoded bytes and least recently used access.
-public struct DisplayHistoryCache {
-    private var entries: [String: (value: JSONValue, bytes: Int)] = [:]
-    private var order: [String] = []
-    public private(set) var bytes = 0
-    private let maxEntries: Int
-    private let maxBytes: Int
-    public init(maxEntries: Int = 8, maxBytes: Int = 8 * 1024 * 1024) {
-        self.maxEntries = maxEntries; self.maxBytes = maxBytes
-    }
-    public mutating func get(_ key: String) -> JSONValue? {
-        guard let value = entries[key]?.value else { return nil }
-        order.removeAll { $0 == key }; order.append(key)
-        return value
-    }
-    /// Byte measurement is supplied by the background projection, never encoded on the UI thread.
-    public mutating func set(_ key: String, _ value: JSONValue, encodedBytes size: Int) {
-        if let revision = value["historyRevision"].string, entries[key]?.value["historyRevision"].string == revision {
-            _ = get(key); return
-        }
-        remove(key)
-        guard size >= 0, size <= maxBytes else { return }
-        entries[key] = (value, size); order.append(key); bytes += size
-        while entries.count > maxEntries || bytes > maxBytes {
-            guard let first = order.first else { break }
-            remove(first)
-        }
-    }
-    private mutating func remove(_ key: String) {
-        if let old = entries.removeValue(forKey: key) { bytes -= old.bytes }
-        order.removeAll { $0 == key }
-    }
-    public mutating func clear() { entries = [:]; order = []; bytes = 0 }
-}
-
 public enum OutgoingMessageProjection {
     private static func answers(_ prompt: String) -> [JSONValue] {
         let open = "<send_user_message_question_reply>", close = "</send_user_message_question_reply>"

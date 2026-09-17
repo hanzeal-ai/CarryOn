@@ -120,30 +120,3 @@ struct ThreadRow: View {
             .saturation(dimmed ? 0 : 1).opacity(dimmed ? 0.5 : 1)
     }
 }
-
-// A non-cancelling window tap preserves buttons, selection and native scrolling.
-struct KeyboardDismissal: UIViewRepresentable {
-    func makeUIView(context: Context) -> KeyboardDismissView { KeyboardDismissView() }
-    func updateUIView(_ uiView: KeyboardDismissView, context: Context) {}
-}
-final class KeyboardDismissView: UIView, UIGestureRecognizerDelegate {
-    private var tap: UITapGestureRecognizer?
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if let tap { tap.view?.removeGestureRecognizer(tap) }
-        guard let window else { return }
-        let recognizer = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
-        recognizer.cancelsTouchesInView = false; recognizer.delegate = self
-        window.addGestureRecognizer(recognizer); tap = recognizer
-    }
-    @objc private func dismissKeyboard() { window?.endEditing(true) }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        var view = touch.view
-        while let current = view {
-            if current is UIControl || current is UITextView { return false }
-            view = current.superview
-        }
-        return true
-    }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
-}

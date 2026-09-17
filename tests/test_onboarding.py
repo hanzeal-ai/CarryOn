@@ -12,8 +12,47 @@ from carryon.workspace_access import capability, require
 
 
 class BindingTests(AccountTests):
+    def test_cancel_persistence_failures_are_retryable(self):
+        cookie = self.register_user('alice')
+        invite = self.server.binding_invites.start({'name':'Mac','permissions':['view']})
+        ident, secret = invite['url'].split('#carryon-bind=')[1].split('.')
+        poll = {'id':ident,'secret':invite['secret']}
+        invites = self.server.binding_invites
+        with patch.object(invites, 'save', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):invites.cancel(poll)
+        self.assertEqual(invites.entries[ident]['state'], 'waiting')
+        # The file sync succeeds; the directory sync fails after rename.
+        with patch('carryon.binding_invites.os.fsync', side_effect=[None, OSError('directory sync failed')]):
+            with self.assertRaises(OSError):invites.cancel(poll)
+        self.assertEqual(invites.entries[ident]['state'], 'cancelled')
+        self.assertEqual(self.request('binding/accept', {'id':ident,'secret':secret}, cookie)[0], 400)
+        self.assertEqual(invites.cancel(poll)['state'], 'cancelled')
+
+    def test_cancel_binding_invalidates_scan_and_is_retryable(self):
+        cookie = self.register_user('alice')
+        invite = self.server.binding_invites.start({'name':'Mac','permissions':['view']})
+        ident, secret = invite['url'].split('#carryon-bind=')[1].split('.')
+        poll = {'id':ident,'secret':invite['secret']}
+        scan = {'id':ident,'secret':secret}
+        self.assertEqual(self.request('binding/cancel', scan, origin=False)[0], 403)
+        self.assertEqual(self.request('binding/cancel', poll)[0], 403)
+        for _ in range(2):
+            self.assertEqual(self.request('binding/cancel', poll, origin=False)[1]['state'], 'cancelled')
+        self.stop(); self.start()
+        self.assertEqual(self.request('binding/accept', scan, cookie)[0], 400)
+        self.assertEqual(self.server.config['devices'], {})
+
+    def test_cancel_cannot_undo_confirmed_binding(self):
+        cookie = self.register_user('alice')
+        invite = self.server.binding_invites.start({'name':'Mac','permissions':['view']})
+        ident, secret = invite['url'].split('#carryon-bind=')[1].split('.')
+        self.assertEqual(self.request('binding/accept', {'id':ident,'secret':secret}, cookie)[0], 200)
+        poll = {'id':ident,'secret':invite['secret']}
+        self.assertEqual(self.request('binding/cancel', poll, origin=False)[0], 400)
+        self.assertEqual(self.request('binding/poll', poll, origin=False)[1]['state'], 'bound')
+
     def register_user(self, username):
-        status, _, cookie = self.request('register', {'username':username, 'password':'a long password 123'})
+        status, _, cookie = self.request('register', {'username':username, 'password':'a long password 123', **self.server.auth.create_registration_invite()})
         self.assertEqual(status, 200)
         return cookie
 

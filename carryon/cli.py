@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
-from .paths import default_codex_home, state_dir, private_dir, command
+from .paths import default_codex_home, state_dir, private_dir, command, workspace_codex_home, workspace_backend
 
 
 def call(directory, path, body=None, timeout=5):
@@ -46,6 +46,7 @@ def open_console(directory, info):
 
 def start(args):
     directory = private_dir(args.state_dir)
+    args.codex_home = workspace_codex_home(directory, args.codex_home)
     import fcntl
     with (directory/'launcher.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -69,7 +70,8 @@ def start(args):
                 raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
         bridge = call(directory, '/bridge', {'enabled': True}, timeout=20)
     print(f"CarryOn {info['version']} 本地服务已启动：http://127.0.0.1:{info['port']}/")
-    print('Codex 已连接' if bridge.get('enabled') else '正在等待 Codex App；打开并登录后将自动连接。')
+    print('工作区 app-server 已启动，尚未完成 Codex 登录。' if bridge.get('accountReady') is False else
+          'Codex 已连接' if bridge.get('enabled') else bridge.get('connectionError') or '正在等待 Codex 连接。')
     if not args.no_open: open_console(directory, info)
     return 0
 
@@ -81,12 +83,21 @@ def doctor(args):
         ipc = stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid()
     except OSError: ipc = False
     result = {'version':__version__, 'platform':sys.platform, 'supportedPlatform':sys.platform=='darwin',
-        'codexHome':str(args.codex_home), 'ipcSocketAvailable':ipc,
+        'codexHome':str(args.codex_home), 'backend':workspace_backend(args.state_dir), 'ipcSocketAvailable':ipc,
         'databaseAvailable':any(args.codex_home.glob('state_*.sqlite')),
         'stateDirectory':str(args.state_dir), 'service':running(args.state_dir),
         'testedDesktopVersion':'26.901.51231'}
+    if result['backend'] == 'app-server':
+        from .usage import executable
+        try: result['codexExecutable'] = executable()
+        except Exception as exc: result['error'] = str(exc)
+        bridge = call(args.state_dir, '/status') if result['service'] else {}
+        result['appServerConnected'] = bridge.get('enabled', False)
+        result['accountReady'] = bridge.get('accountReady', False)
+        ready = bool(result.get('codexExecutable') and result['appServerConnected'] and result['accountReady'])
+    else: ready = ipc
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if ipc and result['supportedPlatform'] else 1
+    return 0 if result['supportedPlatform'] and ready else 1
 
 
 def main(argv=None):
@@ -98,6 +109,11 @@ def main(argv=None):
     init.add_argument('--url')
     init.add_argument('--permissions', help='逗号分隔的工作区成员权限；省略时交互选择')
     init.add_argument('--input-json', action='store_true')
+    invate = sub.add_parser('invate', help='在获授权的电脑生成一次性注册邀请码')
+    invate.add_argument('--state-dir', type=Path, default=state_dir())
+    invate.add_argument('--binding-id')
+    invate.add_argument('--url', help='云端 HTTPS 地址；省略时使用工作区绑定')
+    invate.add_argument('--setup', action='store_true', help='显示本机授权指纹，供云端管理员配置')
     members = sub.add_parser('members', help='管理当前工作区的使用者与权限')
     members.add_argument('action', nargs='?', choices=('list','grant','revoke','invite'), default='list')
     members.add_argument('--state-dir', type=Path, default=state_dir())
@@ -119,7 +135,7 @@ def main(argv=None):
             p.add_argument('action',choices=['list','add','remove'])
             p.add_argument('--name')
             p.add_argument('--port',type=int,default=0)
-            p.add_argument('--codex-home',type=Path,default=default_codex_home())
+            p.add_argument('--codex-home',type=Path)
         if name in ('bridge','standby'):p.add_argument('action',choices=['on','off','status'])
         if name == 'controller':
             p.add_argument('action',choices=['set','status'])
@@ -151,17 +167,20 @@ def main(argv=None):
         if args.command == 'init':
             from .onboarding import command as initialize
             return initialize(args)
+        if args.command == 'invate':
+            from .invite_cli import command as invite_command
+            return invite_command(args)
         if args.command == 'members':
             from .members_cli import command as manage_members
             return manage_members(args)
         if args.command in ('start', 'serve', 'doctor'):
             from .services import records
             saved = records().get(str(args.state_dir), {})
-            args.codex_home = (args.codex_home or Path(saved.get('codexHome', default_codex_home()))).expanduser().resolve()
+            args.codex_home = workspace_codex_home(args.state_dir, args.codex_home or saved.get('codexHome'))
             if hasattr(args, 'port') and args.port is None:
                 args.port = saved.get('port', 8769)
         elif hasattr(args, 'codex_home'):
-            args.codex_home = args.codex_home.expanduser().resolve()
+            args.codex_home = workspace_codex_home(args.state_dir, args.codex_home)
         if args.command=='services':
             from .services import list_services, register, remove
             if args.action=='add':

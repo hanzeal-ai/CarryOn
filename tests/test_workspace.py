@@ -29,6 +29,30 @@ class WorkspaceTests(unittest.TestCase):
         state={'id':tid,'threadRuntimeStatus':{'type':'active' if status=='inProgress' else 'idle'},'turns':[{'turnId':'turn-1','status':status,'items':[{'id':'message-1','type':'agentMessage','text':text}]}],'requests':[]}
         if request:state['requests']=[{'id':1,'method':'item/tool/requestUserInput','params':{'questions':[]}}]
         self.bridge.ipc.states[tid]=state;self.workspace.observe(state);return state
+    def test_active_async_question_is_actionable_without_exposing_running_process(self):
+        import json
+        from carryon.questions import OPEN, CLOSE
+        state=self.observe()
+        self.assertEqual(self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'],[])
+        state=copy.deepcopy(state)
+        state['turns'][0]['items'].append({'id':'question','type':'agentMessage','phase':'commentary',
+                                         'delivery':'async','text':'选择方向','questions':[{'title':'方向','options':['A','B']}]})
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        activity=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads']
+        self.assertEqual(len(activity),1)
+        self.assertEqual(activity[0]['activityKind'],'question')
+        self.assertTrue(activity[0]['needsConfirmation'])
+        events=self.workspace.events('local')['events']
+        self.assertEqual(len(events),1)
+        self.assertEqual(events[0]['kind'],'approval')
+        self.workspace.observe(state)
+        self.assertEqual(len(self.workspace.events('local')['events']),1)
+        reply={'questionItemId':events[0]['questionId'],'question':'方向','answer':'A'}
+        state=copy.deepcopy(state)
+        state['turns'][0]['items'].append({'type':'userMessage','content':[{'type':'text','text':OPEN+json.dumps([reply])+CLOSE}]})
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        self.assertEqual(self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'],[])
+
     def test_native_events_deduplicate_streaming_reconnect_and_restart(self):
         self.observe(text='h');self.observe(text='he');self.observe(text='hello')
         self.assertEqual(self.workspace.events('local')['events'],[])

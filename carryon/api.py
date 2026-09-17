@@ -93,7 +93,10 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "GET" and path.startswith('/api/threads/') and path.endswith('/queue'):
         respond(200, bridge.queue(path.split('/')[3]))
     elif method == "POST" and path == "/api/threads":
-        if 'projectId' in data:
+        if getattr(bridge.catalog, 'independent', False):
+            from .app_creation import submit
+            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize))
+        elif 'projectId' in data:
             from .creation import submit
             respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data['projectId'], source, authorize))
         else:

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="26000" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="launch-controller">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies><plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="26000"/><capability name="Safe area layout guides" minToolsVersion="9.0"/><capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/></dependencies>
+    <scenes><scene sceneID="launch-scene"><objects>
+        <viewController id="launch-controller" sceneMemberID="viewController"><view key="view" contentMode="scaleToFill" id="launch-view">
+            <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+            <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+            <subviews><imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="CarryOnLogo" translatesAutoresizingMaskIntoConstraints="NO" id="launch-logo">
+                <rect key="frame" x="160.5" y="390" width="72" height="72"/>
+                <constraints><constraint firstAttribute="width" constant="72" id="logo-width"/><constraint firstAttribute="height" constant="72" id="logo-height"/></constraints>
+            </imageView></subviews>
+            <viewLayoutGuide key="safeArea" id="launch-safe"/>
+            <color key="backgroundColor" red="0.949" green="0.949" blue="0.969" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <constraints><constraint firstItem="launch-logo" firstAttribute="centerX" secondItem="launch-view" secondAttribute="centerX" id="logo-x"/><constraint firstItem="launch-logo" firstAttribute="centerY" secondItem="launch-view" secondAttribute="centerY" id="logo-y"/></constraints>
+        </view></viewController><placeholder placeholderIdentifier="IBFirstResponder" id="launch-responder" sceneMemberID="firstResponder"/>
+    </objects></scene></scenes>
+    <resources><image name="CarryOnLogo" width="72" height="72"/></resources>
+</document>

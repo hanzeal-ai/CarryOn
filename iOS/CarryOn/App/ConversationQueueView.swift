@@ -35,23 +35,23 @@ struct ConversationQueueView: View {
                             ConversationStatusLabel(state: .init(message["pausedReason"] == .null ? "等待发送" : "队列已暂停", "text.badge.clock", .waiting))
                             Spacer()
                             if message["pausedReason"] != .null {
-                                Button("恢复") { submit("queue-resume", fields: ["messageId": message["id"]]) }.buttonStyle(.borderless)
+                                Button("恢复") { submit("queue-resume", fields: ["messageId": message["id"]]) }.buttonStyle(.borderless).disabled(!model.canPerform(target, action: "queue-resume"))
                             }
                             Menu {
                                 Button("编辑", systemImage: "pencil") {
                                     editing = message; editText = message["text"].text; editFingerprint = queue["fingerprint"]; showingEditor = true
                                 }
                                 Button("删除", systemImage: "trash", role: .destructive) { submit("queue-delete", fields: ["messageId": message["id"]]) }
-                            } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36) }.accessibilityLabel("排队消息操作")
+                            } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36) }.accessibilityLabel("排队消息操作").disabled(!model.canPerform(target, action: "queue-edit"))
                         }
                     }.disabled(!model.canPerform(target)).padding(.vertical, 4)
                 }.onMove { source, destination in
                     var ids = messages.map { $0["id"] }; ids.move(fromOffsets: source, toOffset: destination)
                     submit("queue-reorder", fields: ["messageIds": .array(ids)])
-                }.moveDisabled(!model.canPerform(target))
+                }.moveDisabled(!model.canPerform(target, action: "queue-reorder"))
             }.navigationTitle("消息队列").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { EditButton().disabled(!model.canPerform(target) || messages.count < 2) }
+                    ToolbarItem(placement: .topBarLeading) { EditButton().disabled(!model.canPerform(target, action: "queue-reorder") || messages.count < 2) }
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
                 }
                 .sheet(isPresented: $showingEditor) {
@@ -71,7 +71,7 @@ struct ConversationQueueView: View {
                                 ToolbarItem(placement: .confirmationAction) {
                                     Button("保存") {
                                         submit("queue-edit", fields: ["messageId": editing["id"], "prompt": .string(editText)], fingerprint: editFingerprint)
-                                    }.disabled(!model.canPerform(target) || editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !messages.contains(where: { $0["id"] == editing["id"] }))
+                                    }.disabled(!model.canPerform(target, action: "queue-edit") || editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !messages.contains(where: { $0["id"] == editing["id"] }))
                                 }
                             }
                     }
@@ -111,6 +111,11 @@ struct ConversationActionBar: View {
                 }
                 Spacer(minLength: 0)
             }.font(.caption).padding(.horizontal, 16).frame(minHeight: 40)
+                .onChange(of: model.activityRequestKey, initial: true) { _, key in
+                    if let key, requests.contains(where: { $0.requestKey == key }) {
+                        showingRequests = true; model.activityRequestKey = nil
+                    }
+                }
                 .sheet(isPresented: $showingQueue) { ConversationQueueView(target: target) }
                 .sheet(isPresented: $showingRequests) {
                     NavigationStack {

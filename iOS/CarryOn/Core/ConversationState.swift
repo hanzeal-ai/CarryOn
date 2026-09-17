@@ -58,8 +58,9 @@ public struct ConversationActionTarget: Equatable, Sendable {
     public let scope: String
     public let threadID: String
     public let parentID: String?
-    public init(scope: String, threadID: String, parentID: String? = nil) {
-        self.scope = scope; self.threadID = threadID; self.parentID = parentID
+    public let isActivity: Bool
+    public init(scope: String, threadID: String, parentID: String? = nil, isActivity: Bool = false) {
+        self.scope = scope; self.threadID = threadID; self.parentID = parentID; self.isActivity = isActivity
     }
     public func matches(scope: String, selectedThreadID: String?, sideThreadID: String?, snapshot: JSONValue) -> Bool {
         guard self.scope == scope, snapshot["thread"]["id"].text == threadID else { return false }

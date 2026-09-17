@@ -128,3 +128,29 @@ private func loginClient(_ prefix: String, vault: LoginVault) throws -> ConsoleA
     #expect(try vault.load(server: address.base.absoluteString) == nil)
     try await api.cancelLogin()
 }
+
+private final class StalledSessionProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {}
+    override func stopLoading() {}
+}
+
+@Test func restoreSessionDeadlineCancelsStalledHTTPWithoutDeletingCredential() async throws {
+    let vault = LoginVault(), address = try ConsoleAddress("https://startup-deadline.test")
+    try vault.save("existing-session", server: address.base.absoluteString)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [StalledSessionProtocol.self]
+    let api = ConsoleAPI(address: address, configuration: configuration, credentials: vault)
+    #expect(try await api.restoreSession())
+    let clock = ContinuousClock(), start = clock.now
+    do {
+        _ = try await api.request("session", timeout: 0.05)
+        Issue.record("A stalled session check must not hold startup indefinitely")
+    } catch {
+        #expect((error as? URLError)?.code == .timedOut)
+        #expect(start.duration(to: clock.now) < .seconds(2))
+    }
+    #expect(try vault.load(server: address.base.absoluteString) == "existing-session")
+    await api.invalidate()
+}

@@ -36,6 +36,7 @@ struct ServiceRecord: Identifiable, Equatable {
     let state: String
     let port: Int
     let codexHome: String
+    let backend: String
     var running: Bool { state == "running" }
     var label: String { state == "running" ? "运行中" : state == "unavailable" ? "暂不可用" : "已停止" }
     init(_ value: [String: Any]) {
@@ -44,6 +45,7 @@ struct ServiceRecord: Identifiable, Equatable {
         state = value["state"] as? String ?? "unavailable"
         port = value["port"] as? Int ?? 0
         codexHome = value["codexHome"] as? String ?? defaultCodexHome()
+        backend = value["backend"] as? String ?? "desktop-ipc"
     }
 }
 
@@ -233,7 +235,9 @@ struct ServiceRecord: Identifiable, Equatable {
     func add(name: String, path: String, port: String, codex: String) async -> Bool {
         guard !busy else { return false }
         busy = true; defer { busy = false }; await refreshTask?.value
-        let result = await call(["services", "add", "--name", name, "--port", port, "--codex-home", codex], at: path)
+        var arguments = ["services", "add", "--name", name, "--port", port]
+        if !codex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { arguments += ["--codex-home", codex] }
+        let result = await call(arguments, at: path)
         guard result.code == 0, let entry = object(result.text) else { message = result.text; messageIsError = true; return false }
         let record = ServiceRecord(entry)
         diagnostics = [:]; diagnosticText = ""

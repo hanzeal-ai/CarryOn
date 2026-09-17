@@ -40,7 +40,7 @@ def main():
     executable=app/'Contents/MacOS/CarryOn'
     executable.rename(executable.with_name('carryon-service'))
     run('xcrun','swiftc','-parse-as-library','-swift-version','5','-target',platform.machine()+'-apple-macos13.0',
-        *map(str,sorted((ROOT/'desktop').glob('*.swift'))),'-o',str(executable))
+        *map(str,sorted((ROOT/'desktop').glob('*.swift'))),str(ROOT/'iOS/CarryOn/Core/AppUpdate.swift'),'-o',str(executable))
     import plistlib
     info_path=app/'Contents/Info.plist'
     info=plistlib.loads(info_path.read_bytes());info['LSMinimumSystemVersion']='13.0'
@@ -69,8 +69,9 @@ def main():
     dmg=out/(prefix+'.dmg')
     if dmg.exists():dmg.unlink()
     run('hdiutil','create','-volname','CarryOn','-srcfolder',str(stage),'-format','UDZO',str(dmg))
+    run(sys.executable,str(ROOT/'scripts/build_app_updates.py'),'--mac-dmg',str(dmg),'--output',str(out/'app-updates.json'))
     run(sys.executable,'-m','build','--outdir',str(out))
-    artifacts=sorted(p for p in out.iterdir() if p.name == f'carryon_local-{__version__}-py3-none-any.whl' or p.name in (prefix+'.dmg',prefix+'-cli.tar.gz'))
+    artifacts=sorted(p for p in out.iterdir() if p.name == f'carryon_local-{__version__}-py3-none-any.whl' or p.name in (prefix+'.dmg',prefix+'-cli.tar.gz','app-updates.json'))
     (out/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in artifacts))
     print(json.dumps({'version':__version__,'architecture':arch,'developerSigned':bool(identity),
         'notarized':False,'artifacts':[str(p) for p in artifacts]},indent=2))

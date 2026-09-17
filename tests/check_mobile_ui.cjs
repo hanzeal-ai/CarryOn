@@ -33,6 +33,10 @@ const assert=require('node:assert/strict');
   else if(u.pathname.includes('/streams/')&&req.method()==='GET'){await new Promise(r=>setTimeout(r,1000));data={revision:1};}
   await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
  });
+ await page.routeWebSocket('**/console/devices/*/ws', socket=>{
+  let revision=0;
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
+ });
  await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html'));
  await page.locator('#mobile-session-list .project-row').first().waitFor();
  await page.evaluate(async()=>receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected},()=>true));

@@ -1,5 +1,7 @@
 """Account-confirmed workstation binding. Scan and polling secrets are distinct."""
 import hashlib
+import json
+import os
 import secrets
 import threading
 import time
@@ -64,7 +66,7 @@ class BindingInvites:
         if 'view' not in allowed: raise ValueError('请选择查看工作区权限')
         with self.lock:
             self.entries = {k:v for k,v in self.entries.items() if v['expires'] > time.time() or v.get('knownRequest')}
-            if sum(v['expires'] > time.time() and v['state'] != 'bound' for v in self.entries.values()) >= 64:
+            if sum(v['expires'] > time.time() and v['state'] not in ('bound', 'cancelled') for v in self.entries.values()) >= 64:
                 raise ValueError('连接请求过多，请稍后重试')
             ident, poll, scan = secrets.token_urlsafe(24), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             self.entries[ident] = {'name': name.strip(), 'permissions': allowed,
@@ -87,7 +89,31 @@ class BindingInvites:
         if record is None or record['expires'] <= time.time(): raise ValueError('二维码已过期，请在电脑端重新生成')
         if not secrets.compare_digest(self.digest(data.get('secret')), record[kind]):
             raise PermissionError('邀请凭证无效')
+        if kind == 'scan' and record['state'] == 'cancelled':
+            raise ValueError('二维码已取消，请在电脑端重新生成')
         return record
+
+    def cancel(self, data):
+        with self.lock:
+            entry = self.entry(data, 'poll')
+            if entry.get('account') or entry.get('deviceId') or entry['state'] in ('accepted', 'bound'):
+                raise ValueError('手机已确认绑定，请先完成当前绑定')
+            previous = entry['state']
+            entry['state'] = 'cancelled'
+            try:
+                self.save()
+                if self.path:
+                    fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                    try:os.fsync(fd)
+                    finally:os.close(fd)
+            except OSError:
+                # A failed directory sync can follow a visible atomic rename.
+                if self.path and self.path.exists():
+                    self.entries = json.loads(self.path.read_text())
+                else:
+                    entry['state'] = previous
+                raise
+            return {'state':'cancelled'}
 
     def inspect(self, data, identity):
         with self.lock:

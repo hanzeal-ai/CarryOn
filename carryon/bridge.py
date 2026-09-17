@@ -22,7 +22,7 @@ def idle_snapshot(state):
 
 
 def snapshot_history(state, turn_cache=None, limit=None):
-    """Render both legacy turns and the desktop's canonical paginated history."""
+    """Render app-server/rollout turns and the desktop's canonical paginated history."""
     canonical = state.get("turnHistory", {})
     complete = True
     if canonical.get("kind") == "canonical":
@@ -160,8 +160,9 @@ class Bridge:
         import socket
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
-                    "controllerId": self.controller, "protocol": "codex-desktop-ipc",
+                    "controllerId": self.controller, "protocol": getattr(self.ipc_factory, 'protocol', 'codex-desktop-ipc'),
                     "testedDesktopVersion": "26.901.51231",
+                    **({'accountReady': self.ipc.account_ready} if self.ipc is not None and hasattr(self.ipc, 'account_ready') else {}),
                     "deviceInfo": {"hostname": socket.gethostname(), **getattr(self, "listener_info", {})}}
 
     def enable(self):
@@ -171,8 +172,9 @@ class Bridge:
             ipc = self.ipc_factory(self.socket_path)
             try:
                 ipc.connect()
-            except (OSError, IPCError) as exc:
-                raise BridgeError("无法连接 Codex App，请确认应用已启动：" + str(exc), 503) from exc
+            except (OSError, IPCError, ValueError) as exc:
+                label = '无法启动工作区 app-server：' if getattr(self.ipc_factory, 'protocol', None) else '无法连接 Codex App，请确认应用已启动：'
+                raise BridgeError(label + str(exc), 503) from exc
             ipc.on_change = self.notify
             ipc.on_read = lambda tid: self.native_read(ipc, tid)
             self.ipc = ipc
@@ -318,10 +320,7 @@ class Bridge:
         try:
             result = dict(self.catalog.history(thread_id))
         except (ValueError, OSError):
-            result = {'thread': {k: row.get(k, '') for k in ('id', 'title', 'cwd')}, 'messages': []}
-        result['timeline'] = [{'id': message['id'], 'turnId': message.get('turnId'),
-                               'type': 'userMessage' if message.get('role') == 'user' else 'agentMessage',
-                               'text': message.get('text', ''), 'data': {}} for message in result.get('messages', [])]
+            result = {'thread': {k: row.get(k, '') for k in ('id', 'title', 'cwd')}, 'messages': [], 'timeline': []}
         result.update(syncing=True, controls={}, runtime={'type': 'unknown'}, status={'state': 'unknown', 'label': '同步中'})
         result['historyRevision'] = 'preview:' + hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         with self.lock:
@@ -336,7 +335,7 @@ class Bridge:
         ipc, generation = self.require()
         try:
             state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
-            if state is None:
+            if state is None or state.get('_metadataOnly'):
                 _, state = ipc.snapshot(thread_id)
             result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
             try:

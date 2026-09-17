@@ -35,3 +35,19 @@ class UserMessageTests(unittest.TestCase):
             ref = item['artifacts'][0]
             self.assertEqual(read_artifact({'timeline': [item]}, ref['id'])['base64'], 'aGVsbG8=')
             self.assertEqual(project_item({'type': 'userMessage', 'content': [{'type': 'text', 'text': str(path)}]}, {'turnId': 't'}, 0)['artifacts'], [])
+
+
+    def test_browser_context_is_display_only(self):
+        wrapper = '<in-app-browser-context source="ambient-ui-state">\nCurrent URL: http://127.0.0.1:18769/#\n</in-app-browser-context>\n\n## My request:\n'
+        request = '不够简约，换成 CarryOn。\n## My request:\n保留正文中的标题'
+        raw = wrapper + request
+        for kind, key in [('userMessage', 'content'), ('steeringUserMessage', 'input')]:
+            item = {'id': 'u', 'type': kind, key: [{'type': 'text', 'text': raw}]}
+            result = project_item(item, {'turnId': 't'}, 0)
+            self.assertEqual(result['displayText'], request)
+            self.assertEqual(result['text'], raw)
+            self.assertEqual(result['data'][key][0]['text'], raw)
+        for quoted in ['请解释：\n' + raw, '```xml\n' + raw + '\n```', raw.replace('</in-app-browser-context>', ''), raw.replace('## My request:', '正文：'), raw.replace('ambient-ui-state', 'user-example')]:
+            self.assertEqual(unwrap_user_message(quoted), (quoted, []))
+        self.assertEqual(unwrap_user_message(envelope('/tmp/test.png', raw)), (request, ['/tmp/test.png']))
+        self.assertEqual(unwrap_user_message(wrapper + envelope('/tmp/test.png', request)), (request, ['/tmp/test.png']))

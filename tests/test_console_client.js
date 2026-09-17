@@ -160,3 +160,13 @@ test('expanding the history window creates a new subscription on the same socket
  assert.notEqual(side,next);assert.equal(client.selection.historyLimit,80);assert.equal(client.selection.sideHistoryLimit,120);
  client.close();
 });
+
+ test('initialization guidance preserves custom cloud and defaults to the short command',()=>{
+  const {client}=fixture(async()=>ok({}));
+  client.base=new URL('https://carryon.hanzeal.com/');
+  assert.equal(client.initializationCommand,'carryon init');
+  client.base=new URL("https://console.test/team's/");
+  assert.equal(client.initializationCommand,"carryon init --url 'https://console.test/team'\\''s/'");
+  client.base=new URL('http://127.0.0.1:8780/');
+  assert.equal(client.initializationCommand,'');
+ });

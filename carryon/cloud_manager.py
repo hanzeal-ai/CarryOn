@@ -13,19 +13,28 @@ class CloudManager:
     validate=staticmethod(CloudConnector.validate)
 
     @staticmethod
-    def saved_status(directory):
+    def saved_bindings(directory):
+        """One read-only boundary for current bindings and persisted v1 configurations."""
         path = Path(directory)/'cloud.json'
         data = json.loads(path.read_text()) if path.exists() else {'version':2, 'bindings':{}}
-        if data.get('version') == 2:
+        if not isinstance(data, dict):raise ValueError('云端配置版本无效')
+        if data.get('version') == 2 and isinstance(data.get('bindings'), dict):
             configs = data['bindings']
+            for key in configs:
+                if not isinstance(key, str) or len(key) != 32 or any(c not in '0123456789abcdef' for c in key):
+                    raise ValueError('绑定 ID 无效')
         elif 'version' not in data:
+            CloudConnector.validate(data)
             configs = {'legacy':data} if data.get('enabled') else {}
         else:
             raise ValueError('云端配置版本无效')
-        bindings = []
-        for key, config in configs.items():
-            CloudConnector.validate(config)
-            bindings.append({'id':key, **CloudConnector(None, directory, config=config, binding_id=key).status()})
+        for config in configs.values():CloudConnector.validate(config)
+        return configs
+
+    @staticmethod
+    def saved_status(directory):
+        bindings = [{'id':key, **CloudConnector(None, directory, config=config, binding_id=key).status()}
+                    for key, config in CloudManager.saved_bindings(directory).items()]
         return {'enabled':any(c['enabled'] for c in bindings), 'connected':False, 'bindings':bindings}
 
     def __init__(self,bridge,directory):

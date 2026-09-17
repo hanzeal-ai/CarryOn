@@ -63,11 +63,12 @@ private func entry(_ id: String, _ type: String, phase: String? = nil, turn: Str
     #expect(rows[1]["id"].text == "final")
 }
 
-@Test func generatedImagesRemainInlineOutsideCollapsedProcess() {
+@Test func generatedImagesRemainInsideCollapsedProcess() {
     let image = entry("image", "mcpToolCall").setting("artifacts", .array([.object(["kind": .string("image"), "id": .string("artifact")])]))
     let rows = ConversationProcess.timeline([entry("turn", "turn"), entry("cmd", "commandExecution"), image])
-    #expect(rows.count == 2)
-    #expect(rows[1] == image)
+    #expect(rows.count == 1)
+    #expect(rows[0]["type"].text == "processGroup")
+    #expect(rows[0]["items"].array.last == image)
 }
 
 @Test func processSummaryRendersMarkdownButKeepsCommandSyntaxLiteral() {

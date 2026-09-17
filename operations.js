@@ -32,7 +32,7 @@ const Operations = (() => {
     const key=JSON.stringify([threadId,c?.lastTurnId,last?.id]);
     if(key!==messageEditorKey){messageEditor?.remove();messageEditor=null;messageEditorKey=key;}
     const row=last&&[...box('messages').querySelectorAll('.message.user')].find(el=>el.dataset.messageId===last.id);
-    if(!writable||history.syncing===true||history.status?.state!=='idle'||!c?.lastUserText||!c.lastTurnId||last?.turnId!==c.lastTurnId||!row){messageEditor?.remove();return;}
+    if(c?.supportedOperations&&!c.supportedOperations.includes('edit')||!writable||history.syncing===true||history.status?.state!=='idle'||!c?.lastUserText||!c.lastTurnId||last?.turnId!==c.lastTurnId||!row){messageEditor?.remove();return;}
     if(!messageEditor){
       const editor=el('details');editor.className='message-editor';editor.append(el('summary','编辑'));
       const input=field(editor,'修改最后一条消息',c.lastUserText,true);
@@ -76,7 +76,7 @@ const Operations = (() => {
       const input=field(detail,'给正在执行的任务补充说明','',true);
       button(detail,'发送补充指令',b=>send(threadId,'steer',{expectedTurnId:c.activeTurnId,prompt:input.value},b));
     }
-    if(['active','idle'].includes(history.runtime?.type)){
+    if(['active','idle'].includes(history.runtime?.type)&&(!c.supportedOperations||c.supportedOperations.includes('settings'))){
       const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
       const model=field(settings,'模型',c.settings.model||history.metadata?.latestModel||'');
       const effortLabel=el('label','思考强度'), effort=el('select');
@@ -87,7 +87,7 @@ const Operations = (() => {
       button(settings,'保存设置',b=>send(threadId,'settings',{settings:{model:model.value||null,effort:effort.value||null}},b));
       const advanced=el('details');advanced.append(el('summary','全部设置'));settings.append(advanced);
       advanced.append(el('p','填写需要修改的字段；未填写的设置保持不变。权限、沙箱和工作目录的更改会影响后续任务。'));
-      advanced.append(el('small','支持：model、effort、serviceTier、cwd、approvalPolicy、approvalsReviewer、sandboxPolicy、permissions、activePermissionProfile、collaborationMode、personality、summary、multiAgentMode'));
+      advanced.append(el('small','支持：model、effort、serviceTier、cwd、approvalPolicy、approvalsReviewer、sandboxPolicy、permissions、activePermissionProfile、collaborationMode、personality、summary'));
       const editable={...c.settings};
       // Snapshots contain the resolved sandbox alongside its named profile.
       // Updates accept the profile or an explicit sandbox, not both.

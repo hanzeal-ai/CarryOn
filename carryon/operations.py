@@ -61,10 +61,11 @@ def controls(state):
             requests.append({'id': r.get('id'), 'action': action, 'method': r['method'],
                              'fingerprint': digest(r), 'params': r.get('params', {}),
                              'decisions': approval_choices(action, r.get('params', {}))})
-    return {'activeTurnId': active.get('turnId') if active else None,
+    return {**({'supportedOperations': state['supportedOperations']} if 'supportedOperations' in state else {}),
+            'activeTurnId': active.get('turnId') if active else None,
             'lastTurnId': last.get('turnId'), 'lastTurnStatus': last.get('status'), 'lastUserText': text,
             'settings': {k: v for k, v in (state.get('latestThreadSettings') or {}).items()
-                         if k in SCHEMAS['settings']['properties'] and k != 'threadId'}, 'requests': requests}
+                         if k in SCHEMAS['settings']['properties'] and k not in ('threadId', 'multiAgentMode')}, 'requests': requests}
 
 
 def build(action, data, state):
@@ -169,6 +170,8 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
     bridge.assert_target(thread_id, parent_id)
     ipc, generation = bridge.require()
     action, request_id = data.get('action'), data.get('requestId')
+    if hasattr(ipc, 'supported_operations') and action not in ipc.supported_operations:
+        raise ValueError('此工作区不支持该操作')
     if action not in METHODS:
         raise ValueError('不支持的会话操作')
     if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', request_id):

@@ -58,6 +58,8 @@ def validate(value, schema, root=None, path='value'):
 def settings(value, thread_id):
     if not isinstance(value, dict) or not value or 'threadId' in value:
         raise ValueError('settings 必须为非空对象，不包含 threadId')
+    if 'multiAgentMode' in value:
+        raise ValueError('multiAgentMode 已被原生协议停用，请使用 effort 设置推理强度')
     validate({'threadId': thread_id, **value}, SCHEMAS['settings'])
     if value.get('permissions') is not None and value.get('sandboxPolicy') is not None:
         raise ValueError('permissions 不能与 sandboxPolicy 同时设置')

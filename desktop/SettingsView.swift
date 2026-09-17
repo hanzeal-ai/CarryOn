@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 @MainActor struct SettingsView: View {
+    @Environment(\.openWindow) private var openWindow
     @StateObject var model: SettingsModel
     @ObservedObject private var foreground = ForegroundServices.shared
     @State private var page = "overview"
@@ -16,6 +17,7 @@ import AppKit
     @State private var nextBindingVerification = Date.distantPast
     @State private var setupRequired = false
     @State private var membersBinding: CloudBinding?
+    @State private var inviteBinding: CloudBinding?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -46,11 +48,14 @@ import AppKit
         .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
         .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
         .sheet(isPresented: $initializing, onDismiss: { recoveryBindingID = nil; nextBindingVerification = .distantPast; Task { await refreshSetup() } }) { InitializationView(model: model, bindingID: recoveryBindingID).id(model.directory) }
+        .sheet(item: $inviteBinding) { binding in
+            RegistrationInviteView(model: model, bindingID: binding.id).id(model.directory)
+        }
         .sheet(item: $membersBinding, onDismiss: { if recoveryBindingID != nil { initializing = true } }) { binding in
             WorkspaceMembersView(model: model, bindingID: binding.id, rebind: { recoveryBindingID = binding.id }).id(model.directory)
         }
         .sheet(isPresented: $adding, onDismiss: { Task { await refreshSetup() } }) { WorkspaceSetupView(model: model) }
-        .sheet(isPresented: $connecting) { ConnectCloudView(model: model, initialURL: model.linkURL).id(model.directory) }
+        .sheet(isPresented: $connecting) { InitializationView(model: model).id(model.directory) }
         .alert("停止「\(model.selectedName)」的服务？", isPresented: $stopping) {
             Button("取消", role: .cancel) {}
             Button("停止服务", role: .destructive) { Task { await model.perform(["stop"]) } }
@@ -111,6 +116,7 @@ import AppKit
             }
             Button { adding = true } label: { Label("添加工作区", systemImage: "plus").frame(maxWidth: .infinity).frame(height: 38) }
                 .buttonStyle(QuietButton()).padding(18).disabled(model.busy)
+            Button("检查更新…") { openWindow(id: "app-updates") }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 12)
             Text("CLI 启动的服务会自动出现在这里").font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary).padding(.horizontal, 23).padding(.bottom, 22)
         }.background(DesktopDesign.background)
     }
@@ -169,8 +175,8 @@ import AppKit
             HStack {
                 SectionCaption(title: "云端连接"); Spacer()
                 if !model.bindings.isEmpty {
-                    Menu { Button("连接其他云端") { connecting = true } } label: { Image(systemName: "ellipsis") }
-                        .menuStyle(.borderlessButton).frame(width: 24).padding(.top, 14).disabled(!model.running || model.busy)
+                    Menu { Button("连接工作区") { connecting = true } } label: { Image(systemName: "ellipsis") }
+                        .menuStyle(.borderlessButton).frame(width: 24).padding(.top, 14).disabled(model.busy)
                 }
             }
             Paper {
@@ -188,6 +194,7 @@ import AppKit
                                 Button("解除绑定", role: .destructive) { removing = binding }
                             } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
                         }
+                        Button("生成注册邀请码") { inviteBinding = binding }.buttonStyle(QuietButton()).disabled(model.busy)
                         Button("使用者与权限") { membersBinding = binding }.buttonStyle(QuietButton()).disabled(model.busy)
                         HStack {
                             Text("允许远程控制").font(.system(size: 12)); Spacer()
@@ -203,7 +210,7 @@ import AppKit
                     Image(systemName: model.linkIsError ? "exclamationmark.circle.fill" : "info.circle")
                     Text(model.linkDescription).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     if model.linkCanRetry {
-                        Button("重新申请") { connecting = true }.buttonStyle(QuietButton()).disabled(!model.running || model.busy)
+                        Button("重新连接") { connecting = true }.buttonStyle(QuietButton()).disabled(model.busy)
                     }
                 }.foregroundStyle(model.linkIsError ? Color.red : DesktopDesign.secondary)
                     .padding(14).background((model.linkIsError ? Color.red : DesktopDesign.blue).opacity(0.06), in: RoundedRectangle(cornerRadius: 12)).padding(.top, 10)
@@ -246,9 +253,9 @@ import AppKit
         VStack(spacing: 0) {
             Paper {
                 SettingRow(icon: "waveform.path.ecg", title: "工作区诊断", detail: "检查本机环境、Codex 与当前服务") { Button("运行诊断") { Task { await model.diagnose() } }.buttonStyle(AccentButton()).disabled(model.busy).help("carryon doctor") }
-                ForEach(["supportedPlatform", "ipcSocketAvailable", "databaseAvailable"], id: \.self) { key in
+                ForEach((model.services.first { $0.directory == model.directory }?.backend == "app-server" ? ["supportedPlatform", "appServerConnected", "accountReady", "databaseAvailable"] : ["supportedPlatform", "ipcSocketAvailable", "databaseAvailable"]), id: \.self) { key in
                     RowDivider()
-                    SettingRow(icon: key == "ipcSocketAvailable" ? "cable.connector" : key == "databaseAvailable" ? "externaldrive" : "laptopcomputer", title: ["supportedPlatform":"系统支持", "ipcSocketAvailable":"Codex 连接", "databaseAvailable":"会话数据库"][key]!) {
+                    SettingRow(icon: key == "ipcSocketAvailable" ? "cable.connector" : key == "databaseAvailable" ? "externaldrive" : "laptopcomputer", title: ["supportedPlatform":"系统支持", "ipcSocketAvailable":"Codex 连接", "databaseAvailable":"会话数据库", "appServerConnected":"app-server 连接", "accountReady":"Codex 登录"][key]!) {
                         Text((model.diagnostics[key] as? Bool).map {$0 ? "正常" : "需处理"} ?? "未检测").font(.system(size: 12)).foregroundStyle((model.diagnostics[key] as? Bool) == true ? DesktopDesign.green : DesktopDesign.secondary)
                     }
                 }
@@ -270,8 +277,8 @@ import AppKit
             Paper {
                 SettingRow(icon: "folder", title: "CarryOn 配置目录") { Text(shortPath(model.directory)).font(.caption).textSelection(.enabled) }
                 RowDivider()
-                SettingRow(icon: "externaldrive", title: "Codex 目录") {
-                    if model.running { Text(shortPath(model.codexHome)).font(.caption).textSelection(.enabled) }
+                SettingRow(icon: "externaldrive", title: "Codex 目录", detail: model.services.first { $0.directory == model.directory }?.backend == "app-server" ? "独立 app-server" : "Codex 桌面端 IPC") {
+                    if model.running || model.services.first(where: { $0.directory == model.directory })?.backend != "app-server" { Text(shortPath(model.codexHome)).font(.caption).textSelection(.enabled) }
                     else { TextField("~/.codex", text: $model.codexHome).frame(maxWidth: 330) }
                 }
                 RowDivider()
@@ -306,7 +313,8 @@ import AppKit
     @State private var name = "新工作区"
     @State private var path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn/Workspaces/" + String(UUID().uuidString.prefix(8))).path
     @State private var port = "0"
-    @State private var codex = defaultCodexHome()
+    @State private var codex: String?
+    private var defaultCodexPath: String { URL(fileURLWithPath: path).appendingPathComponent("codex-home").path }
     var body: some View {
         if configured { InitializationView(model: model).id(model.directory) } else {
         VStack(alignment: .leading, spacing: 20) {
@@ -314,47 +322,27 @@ import AppKit
             VStack(alignment: .leading, spacing: 10) {
                 Text("名称").font(.caption); TextField("工作区名称", text: $name)
                 Text("Codex 目录（CODEX_HOME）").font(.caption)
-                HStack { TextField("~/.codex", text: $codex); Button("选择…") {
+                HStack { TextField("Codex 工作目录", text: Binding(get: { codex ?? defaultCodexPath }, set: { codex = $0 })); Button("选择…") {
                     let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
                     if panel.runModal() == .OK, let url = panel.url { codex = url.path }
                 } }
                 DisclosureGroup("高级设置") {
-                Text("CarryOn 配置目录").font(.caption)
-                HStack { TextField("服务配置保存位置", text: $path); Button("选择…") {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let url = panel.url { path = url.path; if name == "新工作区" {name = url.lastPathComponent} }
-                } }
-                VStack(alignment: .leading) { Text("端口（0 为自动分配）").font(.caption); TextField("0", text: $port) }.frame(width: 165)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("CarryOn 配置目录").font(.caption)
+                        HStack { TextField("服务配置保存位置", text: $path); Button("选择…") {
+                            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+                            if panel.runModal() == .OK, let url = panel.url { path = url.path; if name == "新工作区" {name = url.lastPathComponent} }
+                        } }
+                        VStack(alignment: .leading) { Text("端口（0 为自动分配）").font(.caption); TextField("0", text: $port) }.frame(width: 165, alignment: .leading)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }.textFieldStyle(.roundedBorder)
             if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("下一步") { Task { if await model.add(name: name.trimmingCharacters(in: .whitespacesAndNewlines), path: path, port: port, codex: codex) { configured = true } } }.buttonStyle(AccentButton())
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.isEmpty || codex.isEmpty || !(0...65535).contains(Int(port) ?? -1))
+                Button("下一步") { Task { if await model.add(name: name.trimmingCharacters(in: .whitespacesAndNewlines), path: path, port: port, codex: codex ?? defaultCodexPath) { configured = true } } }.buttonStyle(AccentButton())
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.isEmpty || !(0...65535).contains(Int(port) ?? -1))
             }
         }.padding(28).frame(width: 560).background(DesktopDesign.background).disabled(model.busy)
         }
-    }
-}
-@MainActor struct ConnectCloudView: View {
-    @ObservedObject var model: SettingsModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var url: String
-    init(model: SettingsModel, initialURL: String = "") {
-        self.model = model; _url = State(initialValue: initialURL)
-    }
-    @State private var control = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack { SymbolTile(name: "icloud", color: DesktopDesign.blue); Text("连接云端").font(.title2.weight(.semibold)) }
-            Text("\(model.selectedName) · 发起连接申请").font(.system(size: 13)).foregroundStyle(DesktopDesign.secondary)
-            TextField("https://你的云端地址/carryon", text: $url).textFieldStyle(.roundedBorder)
-            Toggle("允许远程控制", isOn: $control).toggleStyle(.switch)
-            Text("默认只读。申请后，在云端核对确认码并确认连接。").font(.caption).foregroundStyle(DesktopDesign.secondary)
-            if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("申请连接") { Task { var args = ["cloud", "connect", "--url", url.trimmingCharacters(in: .whitespacesAndNewlines)]; if control { args.append("--allow-control") }; await model.perform(args); if !model.messageIsError { dismiss() } } }.buttonStyle(AccentButton()).disabled(url.isEmpty)
-            }
-        }.padding(28).frame(width: 470).background(DesktopDesign.background).disabled(model.busy)
     }
 }

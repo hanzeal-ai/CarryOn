@@ -65,7 +65,7 @@ class CLITests(unittest.TestCase):
     def test_start_reuse_assets_and_authenticated_stop(self):
         with tempfile.TemporaryDirectory() as temp:
             state=Path(temp)/'state';codex=Path(temp)/'empty-codex';codex.mkdir()
-            env=dict(os.environ,CARRYON_REGISTRY_DIR=str(Path(temp)/'registry'))
+            env=dict(os.environ,CARRYON_HOME=str(state),CARRYON_REGISTRY_DIR=str(Path(temp)/'registry'))
             binary=os.environ.get('CARRYON_TEST_EXECUTABLE')
             if binary:env.pop('PYTHONPATH',None)
             else:env['PYTHONPATH']=str(ROOT)

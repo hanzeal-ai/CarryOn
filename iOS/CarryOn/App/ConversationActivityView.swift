@@ -8,7 +8,7 @@ struct ConversationActivityView: View {
 
     var body: some View {
         NavigationStack {
-            RecordListView(path: "/api/activity", key: "threads", excludedThreadID: currentThreadID) { record in
+            RecordListView(path: "/api/activity", key: "threads", excludedThreadID: currentThreadID, beforeActivityOpen: { dismiss() }) { record in
                 dismiss()
                 model.open(record)
             }

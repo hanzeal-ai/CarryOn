@@ -79,6 +79,8 @@ class Workspace:
         terminal=last.get('status');status=project_status(state)
         failed=status['state']=='error' or terminal=='failed' and status['state']=='idle'
         requests=controls(state)['requests']
+        from .questions import pending_questions
+        questions=pending_questions(native_turns)
         # Only complete turns produce message/terminal events: streaming patches never spam notifications.
         candidates={}
         for turn in native_turns:
@@ -93,6 +95,9 @@ class Workspace:
         for request in requests:
             key=digest([tid,request['id'],request['fingerprint'],'approval'])
             candidates[key]={'kind':'approval','requestId':request['id'],'fingerprint':request['fingerprint']}
+        for question in questions:
+            key=digest([tid,question['id'],'question'])
+            candidates[key]={'kind':'approval','turnId':question['turnId'],'itemId':question['itemId'],'questionId':question['id']}
         fingerprint=digest([candidates,status,failed])
         with self.lock:
             if self.fingerprints.get(tid)==fingerprint:return
@@ -110,8 +115,11 @@ class Workspace:
             self.db.commit()
             self.revision+=1
             self.fingerprints[tid]=fingerprint
-            self.states[tid]={'status':status,'actionable':bool(requests) or status['state']=='waiting' or failed,'failed':failed,
-                              'needsConfirmation':bool(requests) or status['state']=='waiting'}
+            self.states[tid]={'status':status,'actionable':bool(requests or questions) or status['state']=='waiting' or failed,'failed':failed,
+                              'needsConfirmation':bool(requests or questions) or status['state']=='waiting',
+                              'activityKind':('approval' if any(r['action'] in ('command-approval','file-approval','permissions-approval') for r in requests)
+                                              else 'question' if requests or questions else 'failed' if failed
+                                              else 'completed' if terminal=='completed' else 'other')}
         if changed:self.bridge.notify()
 
     def preferences(self,reader,data=None):
@@ -193,6 +201,7 @@ class Workspace:
             thread={**row,'projectId':pid,'projectName':name,'status':status,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0),
                     'activityRetained':tid in retained,'activityRead':tid not in unread,
+                    'activityKind':known.get('activityKind','other'),'needsConfirmation':known.get('needsConfirmation',False),
                     'activity':tid in notified or (known.get('failed',False) and preferences['failed'])
                                or (known.get('needsConfirmation',False) and preferences['approval'])}
             from .timeline import completion_time
@@ -203,6 +212,10 @@ class Workspace:
             project_activity[pid]=max(project_activity.get(pid,0),row.get('updated_at') or 0)
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
+        if getattr(self.bridge.catalog, 'independent', False):
+            pid, name = project_identity(None)
+            groups.setdefault(pid, {'id':pid, 'name':name, 'cwd':'', 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})['canCreate'] = getattr(ipc, 'account_ready', False)
+            project_activity.setdefault(pid, 0)
         return sorted(groups.values(),key=lambda g:(-project_activity[g['id']],g['name'],g['id'])),threads
 
     def push_snapshot(self,reader,after=None):
@@ -258,7 +271,7 @@ class Workspace:
             else:threads=[t for t in threads if t['activity']]
             # An earlier notification must not turn the activity page into a live task list.
             # Keep the notification stored; it becomes visible again once execution settles.
-            threads=[t for t in threads if t['status']['state']!='running']
+            threads=[t for t in threads if t['status']['state']!='running' or t.get('needsConfirmation',False)]
             threads=[t for t in threads if t['id']!=query.get('excludeThreadId',[''])[0]]
         elif path.startswith('/api/projects/') and path.endswith('/threads'):
             pid=path.split('/')[3];threads=[t for t in threads if t['projectId']==pid]

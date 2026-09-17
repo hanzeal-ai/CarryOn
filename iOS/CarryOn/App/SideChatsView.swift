@@ -86,12 +86,12 @@ private struct SideChatConversation: View {
             }
         }, inputViewBuilder: { _ in
             CarryOnChatComposer(text: Binding(get: { model.drafts[draftKey] ?? "" }, set: { model.drafts[draftKey] = $0 }),
-                disabled: !writable, hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
+                disabled: !writable, sendAllowed: model.allows(.send), stopAllowed: model.allows(.stop), hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
                 resuming: history["status"]["state"].text == "idle" && history["controls"]["lastTurnStatus"].text == "interrupted",
                 send: { Task { await send() } }, queue: { Task { await send(queued: true) } },
                 stop: { Task { await send(stopping: true) } },
                 resume: { Task { _ = await model.perform("resume", target: target, fields: ["turnId": history["controls"]["lastTurnId"]]) } }) {
-                    ConversationPhotoPicker(images: images, disabled: !writable)
+                    ConversationPhotoPicker(images: images, disabled: !writable || !model.allows(.send))
                     Button { showingModel = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }.accessibilityLabel("模型与思考强度")
                 }
         }, messageMenuAction: { (_: CarryOnMessageAction, _, message) in
@@ -143,7 +143,7 @@ private struct SideChatConversation: View {
         .onDisappear { if model.sideThreadID == chat.id { model.watchSide(nil) } }
     }
     private func send(stopping: Bool = false, queued: Bool = false) async {
-        guard writable else { return }
+        guard writable, model.allows(stopping ? .stop : .send) else { return }
         let scope = model.scope, key = draftKey, text = model.drafts[draftKey] ?? ""
         let sentImages = images.wrappedValue
         guard stopping || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !sentImages.isEmpty else { return }

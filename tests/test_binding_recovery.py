@@ -151,7 +151,7 @@ class RecoveryFlowTests(unittest.TestCase):
             self.assertEqual(exchange(root,{'action':'status'})['qrURL'],prepared['qrURL'])
             self.assertEqual(exchange(root,{'action':'poll'})['state'],'waiting')
             ident,scan=prepared['qrURL'].split('#carryon-bind=')[1].split('.')
-            status,_,cookie=self.request('register',{'username':'alice','password':'a long password 123'})
+            status,_,cookie=self.request('register',{'username':'alice','password':'a long password 123',**self.server.auth.create_registration_invite()})
             self.assertEqual(status,200)
             self.assertEqual(self.request('binding/accept',{'id':ident,'secret':scan},cookie)[0],200)
             changed={**old,'token':'c'*43}

@@ -74,7 +74,7 @@ struct NativeRequestView: View {
                 }.frame(minHeight: 44)
             } else { Text("请在 Codex App 处理此类型请求。").font(.caption) }
         }.padding(17).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 18))
-            .disabled(!model.canPerform(target) || submitted)
+            .disabled(!model.canPerform(target, action: action) || submitted)
             .sheet(isPresented: Binding(get: { pendingDecision != nil }, set: { if !$0 { pendingDecision = nil } })) {
                 NavigationStack {
                     ScrollView { VStack(alignment: .leading, spacing: 16) {
@@ -83,7 +83,7 @@ struct NativeRequestView: View {
                         Button("确认应用此规则") { Task {
                             if let value = pendingDecision { await respond(["decision": value]) }
                             if submitted { pendingDecision = nil }
-                        } }.buttonStyle(.borderedProminent).disabled(!model.canPerform(target) || submitted)
+                        } }.buttonStyle(.borderedProminent).disabled(!model.canPerform(target, action: action) || submitted)
                         if let failure { Text(failure).foregroundStyle(.red) }
                     }.padding(16) }
                     .navigationTitle("审批规则").navigationBarTitleDisplayMode(.inline)
@@ -111,7 +111,7 @@ struct NativeRequestView: View {
     }
     private func answer(_ id: String) -> Binding<String> { Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0 }) }
     private func respond(_ fields: [String: JSONValue]) async {
-        guard model.canPerform(target), model.snapshot(for: target)["controls"]["requests"].array.contains(where: { $0.requestKey == request.requestKey }) else {
+        guard model.canPerform(target, action: action), model.snapshot(for: target)["controls"]["requests"].array.contains(where: { $0.requestKey == request.requestKey }) else {
             failure = "请求已改变或会话已切换，请重新核对"; return
         }
         var body = fields; body["nativeRequestId"] = request["id"]; body["requestFingerprint"] = request["fingerprint"]

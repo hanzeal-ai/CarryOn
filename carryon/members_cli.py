@@ -2,15 +2,13 @@
 import json
 import sys
 import time
-from pathlib import Path
 
 from .onboarding import request
 
 
 def binding(directory, ident=None):
-    path = Path(directory)/'cloud.json'
-    data = json.loads(path.read_text()) if path.exists() else {}
-    bindings = data.get('bindings', {})
+    from .cloud_manager import CloudManager
+    bindings = CloudManager.saved_bindings(directory)
     if ident is None and len(bindings) == 1: ident = next(iter(bindings))
     if ident not in bindings: raise ValueError('请选择已绑定的云端工作区')
     config = bindings[ident]

@@ -51,8 +51,8 @@ class Journal:
                 return job
             original = json.dumps(job, ensure_ascii=False)
             job.update(fields, updated=time.time())
-            cursor = self.conn.execute("UPDATE jobs SET state=?,body=?,updated=? WHERE id=? AND body=?", (
-                job["state"], json.dumps(job, ensure_ascii=False), job["updated"], job_id, original))
+            cursor = self.conn.execute("UPDATE jobs SET state=?,thread_id=?,body=?,updated=? WHERE id=? AND body=?", (
+                job["state"], job["threadId"], json.dumps(job, ensure_ascii=False), job["updated"], job_id, original))
             self.conn.commit()
             if not cursor.rowcount:
                 return self.get(job_id)

@@ -4,7 +4,7 @@ import CarryOnCore
 struct CodexUsageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var usage: JSONValue = .null
+    private var usage: JSONValue { model.cachedValue("/api/usage") }
     @State private var loading = false
     @State private var failure: String?
     @State private var requestVersion = UUID()
@@ -17,7 +17,7 @@ struct CodexUsageView: View {
     var body: some View {
         Button { details = true } label: {
             HStack(alignment: .top, spacing: 8) {
-                if model.connected && failure == nil && !windows.isEmpty {
+                if !windows.isEmpty {
                     ForEach(windows, id: \.stableID) { window in
                         CodexUsageWindow(window: window, compact: true)
                     }
@@ -44,13 +44,13 @@ struct CodexUsageView: View {
             HStack {
                 Label("Codex 额度", systemImage: "chart.bar")
                 Spacer()
-                Button { Task { await load() } } label: {
+                Button { Task { await load(force: true) } } label: {
                     if loading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
                 }.disabled(loading || !model.connected).accessibilityLabel("刷新 Codex 额度")
             }.font(.subheadline)
             if !model.connected { Text("工作区未连接").foregroundStyle(Design.secondary) }
             else if let failure { Text(failure).font(.caption).foregroundStyle(Design.secondary) }
-            else if loading { Text("正在读取…").foregroundStyle(Design.secondary) }
+            else if loading && usage == .null { Text("正在读取…").foregroundStyle(Design.secondary) }
             else if usage["limits"].array.isEmpty { Text("暂无可用额度数据").foregroundStyle(Design.secondary) }
             else {
                 ForEach(usage["limits"].array, id: \.stableID) { limit in
@@ -71,17 +71,16 @@ struct CodexUsageView: View {
             Text("当前工作区 Codex 登录账号的共享额度").font(.caption2).foregroundStyle(Design.secondary)
         }.padding(16).frame(idealWidth: 280)
     }
-    private func load() async {
+    private func load(force: Bool = false) async {
         let version = UUID(), scope = model.scope
-        requestVersion = version; usage = .null; failure = nil
+        requestVersion = version; failure = nil
         guard model.connected, model.device != nil else { loading = false; return }
         loading = true
         defer { if version == requestVersion { loading = false } }
         do {
-            let result = try await model.deviceRequest("/api/usage")
+            let result = try await model.cachedDeviceRequest("/api/usage", maxAge: force ? 0 : 30)
             guard !Task.isCancelled, scope == model.scope, version == requestVersion else { return }
             guard case .array = result["limits"] else { throw APIError("额度数据格式不正确") }
-            usage = result
         } catch {
             if !Task.isCancelled, scope == model.scope, version == requestVersion {
                 failure = (error as? APIError)?.status == 404 ? "本机服务尚不支持额度查询，请更新本机服务" : error.localizedDescription

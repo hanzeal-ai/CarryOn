@@ -1,6 +1,11 @@
 import Foundation
 
 public struct ConsoleAddress: Sendable, Equatable {
+    public static let defaultURL = "https://carryon.hanzeal.com/"
+    public var initializationCommand: String {
+        if base.absoluteString == Self.defaultURL { return "carryon init" }
+        return "carryon init --url '" + base.absoluteString.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
     public let base: URL
     public let origin: String
     public init(_ raw: String) throws {
@@ -61,15 +66,16 @@ public actor ConsoleAPI {
         configuration.timeoutIntervalForResource = 45
         session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
     }
-    public func request(_ route: String, body: JSONValue? = nil, method: String? = nil) async throws -> JSONValue {
+    public func request(_ route: String, body: JSONValue? = nil, method: String? = nil, timeout: TimeInterval? = nil) async throws -> JSONValue {
         var request = URLRequest(url: try address.url(route))
+        if let timeout { request.timeoutInterval = timeout }
         request.httpMethod = method ?? (body == nil ? "GET" : "POST")
         request.setValue(address.origin, forHTTPHeaderField: "Origin")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let requestCookie = cookie
         if let requestCookie { request.setValue("carryon-console=" + requestCookie, forHTTPHeaderField: "Cookie") }
         if let body { request.httpBody = try body.encoded(); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await response(for: request, timeout: timeout)
         guard let response = response as? HTTPURLResponse else { throw APIError("服务器响应无效") }
         if response.statusCode == 401 {
             if cookie == requestCookie { cookie = nil }
@@ -95,6 +101,20 @@ public actor ConsoleAPI {
             if let requestCookie { try credentials?.remove(server: address.base.absoluteString, matching: requestCookie) }
         }
         return result
+    }
+    private func response(for request: URLRequest, timeout: TimeInterval?) async throws -> (Data, URLResponse) {
+        guard let timeout else { return try await session.data(for: request) }
+        let session = session
+        return try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
+            group.addTask { try await session.data(for: request) }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw URLError(.timedOut)
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw CancellationError() }
+            return result
+        }
     }
     /// A new session stays in memory until its directory is valid and initialization is not cancelled.
     public func completeLogin() async throws -> [Record] {
@@ -149,15 +169,11 @@ public actor ConsoleAPI {
         let stream = ConsoleStream(task: task, subscription: selection["subscription"].text)
         task.resume()
         do {
-            let payload = try selection.setting("type", .string("subscribe")).encoded()
-            guard let text = String(data: payload, encoding: .utf8) else { throw APIError("订阅参数无效") }
-            try await withTaskCancellationHandler {
-                try await task.send(.string(text))
-                try Task.checkCancellation()
-            } onCancel: { stream.close() }
+            try await stream.subscribe(selection)
             return stream
         } catch { stream.close(); throw error }
     }
+
     public func restoreSession() throws -> Bool {
         cookie = try credentials?.load(server: address.base.absoluteString)
         return cookie != nil
@@ -180,54 +196,75 @@ public final class ConsoleStream: @unchecked Sendable {
     private let selectionLock = NSLock()
     private var subscription: String
     private var supportsResubscribe = false
+    private let subscriptionTimeout: Duration
+    private var subscriptionDeadline: ContinuousClock.Instant?
     private var historyWire = HistoryWireProjection()
     private var receiveDeadline: ContinuousClock.Instant? = .now.advanced(by: .seconds(45))
     public func setForeground(_ active: Bool) {
-        selectionLock.withLock { receiveDeadline = active ? .now.advanced(by: .seconds(45)) : nil }
+        selectionLock.withLock {
+            receiveDeadline = active ? .now.advanced(by: .seconds(45)) : nil
+            if active, subscriptionDeadline != nil { subscriptionDeadline = .now.advanced(by: subscriptionTimeout) }
+        }
     }
     public func checkHealth() async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    self.task.sendPing { error in
-                        if let error { continuation.resume(throwing: error) }
-                        else { continuation.resume() }
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        self.task.sendPing { error in
+                            if let error { continuation.resume(throwing: error) }
+                            else { continuation.resume() }
+                        }
                     }
                 }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(8))
+                    self.close()
+                    throw APIError("实时连接检查超时")
+                }
+                defer { group.cancelAll() }
+                _ = try await group.next()
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(8))
-                self.close()
-                throw APIError("实时连接检查超时")
-            }
-            defer { group.cancelAll() }
-            _ = try await group.next()
-        }
+        } onCancel: { self.close() }
     }
     public var canResubscribe: Bool { selectionLock.withLock { supportsResubscribe } }
-    init(task: any ConsoleSocket, subscription: String) {
+    init(task: any ConsoleSocket, subscription: String, subscriptionTimeout: Duration = .seconds(10)) {
         self.task = task; self.subscription = subscription
+        self.subscriptionTimeout = subscriptionTimeout
+        self.subscriptionDeadline = .now.advanced(by: subscriptionTimeout)
     }
     public func resubscribe(_ selection: JSONValue) async throws {
+        guard canResubscribe else { throw APIError("此服务端需要重新建立订阅") }
+        try await subscribe(selection)
+    }
+    func subscribe(_ selection: JSONValue) async throws {
         let payload = try selection.setting("type", .string("subscribe")).encoded()
         let text = String(decoding: payload, as: UTF8.self)
-        guard canResubscribe else { throw APIError("此服务端需要重新建立订阅") }
-        selectionLock.withLock { subscription = selection["subscription"].text }
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await self.task.send(.string(text)) }
-            group.addTask {
-                try await Task.sleep(for: .seconds(8))
-                self.close()
-                throw APIError("实时订阅更新超时")
-            }
-            defer { group.cancelAll() }
-            _ = try await group.next()
+        selectionLock.withLock {
+            subscription = selection["subscription"].text
+            subscriptionDeadline = .now.advanced(by: subscriptionTimeout)
         }
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await self.task.send(.string(text)) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(8))
+                    self.close()
+                    throw APIError("实时订阅更新超时")
+                }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+        } onCancel: { self.close() }
     }
     public func next() async throws -> JSONValue {
         try await withTaskCancellationHandler {
             while true {
                 try Task.checkCancellation()
+                let expired = selectionLock.withLock {
+                    receiveDeadline != nil && subscriptionDeadline.map { ContinuousClock.now >= $0 } == true
+                }
+                if expired { close(); throw APIError("实时订阅更新超时") }
                 let message = try await receiveWithTimeout()
                 let data: Data
                 switch message {
@@ -241,8 +278,10 @@ public final class ConsoleStream: @unchecked Sendable {
                 guard packet["type"].text == "update", packet["body"]["type"].text == "update" else { throw APIError("实时更新格式无效") }
                 let body: JSONValue? = try selectionLock.withLock {
                     guard packet["subscription"].text == subscription else { return nil }
+                    let decoded = try historyWire.decode(packet["body"])
                     supportsResubscribe = packet["resubscribe"].bool == true
-                    return try historyWire.decode(packet["body"])
+                    subscriptionDeadline = nil
+                    return decoded
                 }
                 if let body { return body }
             }
@@ -258,7 +297,10 @@ public final class ConsoleStream: @unchecked Sendable {
                 while true {
                     try await Task.sleep(for: .seconds(1))
                     let expired = self.selectionLock.withLock {
-                        self.receiveDeadline.map { ContinuousClock.now >= $0 } ?? false
+                        guard self.receiveDeadline != nil else { return false }
+                        let now = ContinuousClock.now
+                        return self.subscriptionDeadline.map { now >= $0 } == true
+                            || self.receiveDeadline.map { now >= $0 } == true
                     }
                     if expired {
                         self.close()

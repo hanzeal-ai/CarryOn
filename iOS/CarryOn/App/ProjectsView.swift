@@ -19,7 +19,7 @@ struct ProjectsView: View {
                 RecordListView(path: "/api/projects/\(ConsoleAddress.component(project.id))/threads", key: "threads") { model.open($0) }
                     .navigationTitle(project.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                        Button { creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite).accessibilityLabel("新建会话")
+                        Button { creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                     } }
                     .navigationDestination(isPresented: Binding(get: { model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                         if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
@@ -35,6 +35,7 @@ struct RecordListView: View {
     var isProjectList = false
     var retainReadActivity = false
     var excludedThreadID: String?
+    var beforeActivityOpen: (() -> Void)?
     var create: (() -> Void)?
     let select: (Record) -> Void
     @State private var search = ""
@@ -75,7 +76,12 @@ struct RecordListView: View {
                     } else if !records.isEmpty {
                         LazyVStack(spacing: 0) {
                             ForEach(records) { record in
-                                Button { select(record) } label: { ThreadRow(record: record, dimmed: retainReadActivity && record.value["activityRead"].bool == true) }.buttonStyle(.plain)
+                                if path == "/api/activity" {
+                                    ActivityRow(record: record, scope: model.scope, dimmed: retainReadActivity && record.value["activityRead"].bool == true, beforeOpen: beforeActivityOpen)
+                                        .id(model.scope + "\n" + record.id)
+                                } else {
+                                    Button { select(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain)
+                                }
                                 if record.id != records.last?.id { Divider().padding(.leading, 16) }
                             }
                         }
@@ -97,7 +103,7 @@ struct RecordListView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         if let create {
                             Button(action: create) { Image(systemName: "plus") }
-                                .disabled(!model.canWrite).accessibilityLabel("新建会话")
+                                .disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                         } else if retainReadActivity {
                             Button("清空已读") { Task { await clearRead() } }
                                 .disabled(clearing || loading || model.selectedDevice.isEmpty)
@@ -105,8 +111,20 @@ struct RecordListView: View {
                     }
                 }
             }
-            .task(id: queryIdentity) { records = []; total = 0; offset = 0; await load(reset: true, debounce: !search.isEmpty) }
+            .task(id: queryIdentity) {
+                records = []; total = 0; offset = 0
+                if let cached = try? RecordPage(model.cachedValue(requestPath(offset: 0)), key: key) {
+                    records = cached.records; total = cached.total; offset = cached.nextOffset
+                }
+                await load(reset: true, debounce: !search.isEmpty)
+            }
+            .onChange(of: model.connected) { _, connected in
+                if connected { Task { await load(reset: true, kind: .background) } }
+            }
             .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true, kind: .background) } }
+            .onChange(of: model.activitySnapshots.isEmpty) { _, empty in
+                if path == "/api/activity", empty { Task { await load(reset: true, kind: .background) } }
+            }
     }
     private func clearRead() async {
         clearing = true; defer { clearing = false }
@@ -139,8 +157,14 @@ struct RecordListView: View {
         if running > 0 { CountPill(text: "\(running) 进行中", color: Design.green) }
         if unread > 0 { CountPill(text: "\(unread) 未读", color: Design.blue) }
     }
+    private func requestPath(offset: Int) -> String {
+        let excluded = excludedThreadID.map { "&excludeThreadId=" + ConsoleAddress.component($0) } ?? ""
+        return path + "?limit=50&offset=\(offset)&search=\(ConsoleAddress.component(search))&filter=all" + excluded + (retainReadActivity ? "&includeRead=true" : "")
+    }
     private func load(reset: Bool, kind: LoadKind = .initial, debounce: Bool = false) async {
         if (kind == .more || kind == .background) && loading { return }
+        // Reading a detail may remove its row from the unread query. Keep its sheet alive until dismissed.
+        if path == "/api/activity", !model.activitySnapshots.isEmpty { return }
         guard !model.selectedDevice.isEmpty else { loadKind = nil; return }
         let version = UUID(); requestVersion = version
         loadKind = kind; failure = nil
@@ -148,9 +172,10 @@ struct RecordListView: View {
         do {
             if debounce { try await Task.sleep(for: .milliseconds(300)) }
             try Task.checkCancellation()
-            let excluded = excludedThreadID.map { "&excludeThreadId=" + ConsoleAddress.component($0) } ?? ""
-            let next = try await model.page(path + "?limit=50&offset=\(reset ? 0 : offset)&search=\(ConsoleAddress.component(search))&filter=all" + excluded + (retainReadActivity ? "&includeRead=true" : ""), key: key)
+            let value = try await model.cachedDeviceRequest(requestPath(offset: reset ? 0 : offset), maxAge: kind == .initial ? 30 : 0)
+            let next = try RecordPage(value, key: key)
             guard version == requestVersion, !Task.isCancelled else { return }
+            if path == "/api/activity", !model.activitySnapshots.isEmpty { return }
             let old = reset ? [] : records
             let ids = Set(old.map(\.id))
             records = old + next.records.filter { !ids.contains($0.id) }
