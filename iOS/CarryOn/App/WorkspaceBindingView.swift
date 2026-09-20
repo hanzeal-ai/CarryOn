@@ -34,10 +34,10 @@ struct WorkspaceBindingView: View {
                             ForEach(details["permissions"].array.compactMap(\.string), id: \.self) { permission in
                                 Label(labels[permission] ?? permission, systemImage: "checkmark")
                             }
-                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Design.surface, in: RoundedRectangle(cornerRadius: 16))
                         Button { Task { await accept() } } label: {
                             Text(waiting ? "等待电脑确认" : "确认绑定").fontWeight(.semibold).frame(maxWidth: .infinity, minHeight: 50)
-                        }.foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).disabled(busy || waiting)
+                        }.foregroundStyle(Design.onAccent).background(Design.ink, in: RoundedRectangle(cornerRadius: Design.controlCorner)).disabled(busy || waiting)
                     }
                     if busy { ProgressView() }
                     if let failure {

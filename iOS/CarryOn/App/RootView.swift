@@ -33,7 +33,7 @@ struct RootView: View {
                         tabButton(2, "我的", "person.crop.circle")
                     }
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: tab)
-                    .padding(5).background(.white.opacity(0.95), in: Capsule()).padding(.horizontal, 14).padding(.bottom, 4)
+                    .padding(5).background(Design.surface, in: Capsule()).padding(.horizontal, 14).padding(.bottom, 4)
                 }.background(Design.background)
                 .navigationDestination(isPresented: Binding(get: { (model.selectedProject == nil || tab != 0) && model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                     if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
@@ -126,16 +126,16 @@ struct LoginView: View {
                     .accessibilityLabel("CarryOn")
                 VStack(alignment: .leading, spacing: 12) {
                     Text("账号").font(.caption).foregroundStyle(Design.secondary)
-                    TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(Design.surface, in: RoundedRectangle(cornerRadius: Design.controlCorner))
                     Text("密码").font(.caption).foregroundStyle(Design.secondary)
-                    SecureField(registering ? "至少 12 位密码" : "输入密码", text: $model.credential).textContentType(registering ? .newPassword : .password).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    SecureField(registering ? "至少 12 位密码" : "输入密码", text: $model.credential).textContentType(registering ? .newPassword : .password).padding(15).background(Design.surface, in: RoundedRectangle(cornerRadius: Design.controlCorner))
                     if registering {
-                        TextField("邀请码", text: $inviteCode).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
-                        SecureField("再次输入密码", text: $confirmation).textContentType(.newPassword).padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                        TextField("邀请码", text: $inviteCode).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(Design.surface, in: RoundedRectangle(cornerRadius: Design.controlCorner))
+                        SecureField("再次输入密码", text: $confirmation).textContentType(.newPassword).padding(15).background(Design.surface, in: RoundedRectangle(cornerRadius: Design.controlCorner))
                     }
                     Button { Task { await model.login(register: registering, inviteCode: inviteCode) } } label: {
-                        HStack { Spacer(); if model.busy { ProgressView().tint(.white) } else { Text(registering ? "注册并登录" : "登录").fontWeight(.semibold) }; Spacer() }.frame(minHeight: 50)
-                    }.background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).foregroundStyle(.white)
+                        HStack { Spacer(); if model.busy { ProgressView().tint(Design.onAccent) } else { Text(registering ? "注册并登录" : "登录").fontWeight(.semibold) }; Spacer() }.frame(minHeight: 50)
+                    }.background(Design.ink, in: RoundedRectangle(cornerRadius: Design.controlCorner)).foregroundStyle(Design.onAccent)
                         .disabled(!canSubmit).opacity(canSubmit || model.busy ? 1 : 0.4)
                     Button(registering ? "已有账号？登录" : "创建账号") { registering.toggle(); confirmation = ""; inviteCode = "" }.frame(maxWidth: .infinity, minHeight: 36).disabled(model.busy)
                 }

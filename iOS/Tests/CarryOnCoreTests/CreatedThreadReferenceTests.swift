@@ -23,3 +23,19 @@ private let createdID = "01a09ffc-f7ec-7eb1-b97f-81f8ca0456ef"
     #expect(rendered.contains("\\[标题\\]\\(https://example.com\\) 下一行"))
     #expect(CreatedThreadReference.threadIDs(in: text + "\n" + text) == [createdID])
 }
+
+@Test func queuedWorktreeReferencesRenderWithoutExposingClientIDs() {
+    let pending = "::created-thread{clientThreadId=\"client-new-thread:438ce5fa-14b0-495d-a349-a9b5dc84f50f\"}"
+    let completed = "::created-thread{threadId=\"\(createdID)\"}"
+    let text = "已发起创建。\n\n" + pending + "\n" + completed + "\n" + pending
+    #expect(CreatedThreadReference.threadIDs(in: text) == [createdID])
+    #expect(CreatedThreadReference.render(text, titles: [:]) == "已发起创建。\n\n会话创建中\n[新会话](carryon-thread:\(createdID))\n会话创建中")
+    for invalid in [
+        "::created-thread{threadId=\"client-new-thread:\(createdID)\"}",
+        "::created-thread{clientThreadId=\"client-new-thread:invalid\"}",
+        "::created-thread{clientThreadId=\"client-new-thread:\(createdID)"
+    ] {
+        #expect(CreatedThreadReference.threadIDs(in: invalid).isEmpty)
+        #expect(CreatedThreadReference.render(invalid, titles: [:]) == invalid)
+    }
+}

@@ -5,6 +5,8 @@ This is NOT the public app-server JSON-RPC transport. No socket replacement.
 import json
 import socket
 import stat
+import subprocess
+import sys
 import os
 import struct
 import threading
@@ -135,6 +137,33 @@ class DesktopIPC:
             if state is not None:
                 return owner, state
             return self._snapshot(thread_id, owner)
+
+    def wake_snapshot(self, thread_id, *, before_open):
+        """Ask the desktop to load an existing task, then read its native state."""
+        from .catalog import valid_id
+        valid_id(thread_id)
+        if sys.platform != 'darwin':
+            raise IPCError('当前平台不支持唤起 Codex 会话')
+        before_open()
+        try:
+            subprocess.run(['open', '-g', 'codex://threads/' + thread_id],
+                           check=True, capture_output=True, timeout=3)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise IPCError('无法唤起 Codex 会话') from exc
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            before_open()
+            try:
+                owner = self.owner(thread_id, timeout_ms=500)
+                with self._snapshot_lock(thread_id):
+                    owner, state = self._snapshot(thread_id, owner)
+                if (state.get('threadRuntimeStatus') or {}).get('type') != 'notLoaded':
+                    return owner, state
+            except IPCError:
+                if not self.connected: raise
+            with self.changed:
+                self.changed.wait(timeout=min(.25, max(0, deadline - time.monotonic())))
+        raise IPCError('唤起后仍未取得会话实时状态，请稍后重试')
 
     def _snapshot(self, thread_id, owner=None):
         owner = owner or self.owner(thread_id)

@@ -91,8 +91,8 @@ struct RecordListView: View {
                     }
                 }.padding(.bottom, 8)
             }.frame(minHeight: 0, maxHeight: .infinity)
-                .background(isProjectList ? Color.clear : Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 19))
+                .background(isProjectList ? Color.clear : Design.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Design.corner))
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await load(reset: true, kind: .refresh) }
                 .padding(.horizontal, 20).padding(.bottom, 12)
@@ -137,8 +137,8 @@ struct RecordListView: View {
     private func projectRow(_ record: Record) -> some View {
         HStack(spacing: 14) {
             SymbolTile(name: "folder")
-            VStack(alignment: .leading, spacing: 9) {
-                Text(record.title).font(.system(size: 16, weight: .semibold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(record.title).font(.body.weight(.medium))
                 Text("\(record.value["total"].int ?? 0) 个会话").font(.caption).foregroundStyle(Design.secondary)
                 if ["waiting", "running", "unread"].contains(where: { (record.value[$0].int ?? 0) > 0 }) {
                     ViewThatFits(in: .horizontal) {
@@ -149,7 +149,7 @@ struct RecordListView: View {
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-        }.padding(.horizontal, 16).padding(.vertical, 21).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.padding(.horizontal, 16).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
     }
     @ViewBuilder private func counts(_ record: Record) -> some View {
         let waiting = record.value["waiting"].int ?? 0, running = record.value["running"].int ?? 0, unread = record.value["unread"].int ?? 0
@@ -192,7 +192,7 @@ struct ActivityView: View {
         VStack(spacing: 0) {
             if !model.requests.isEmpty {
                 Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", value: "\(model.requests.count) 项待确认", chevron: true) }
-                    .background(.white, in: RoundedRectangle(cornerRadius: 19)).padding(.horizontal, 20).padding(.top, 12)
+                    .background(Design.surface, in: RoundedRectangle(cornerRadius: Design.corner)).padding(.horizontal, 20).padding(.top, 12)
             }
             RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true) { model.open($0) }
         }.sheet(isPresented: $links) { ConnectionRequestsView() }

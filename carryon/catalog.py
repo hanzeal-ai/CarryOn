@@ -161,7 +161,9 @@ class Catalog:
         """Resolve a queued native worktree creation from the desktop's binding."""
         if result.get('threadId'):
             return valid_id(result['threadId'])
-        client_id = valid_id(result.get('clientThreadId'))
+        client_id = result.get('clientThreadId')
+        # Queued desktop worktrees use a client ID, not a navigable thread ID.
+        valid_id(client_id.removeprefix('client-new-thread:') if isinstance(client_id, str) else client_id)
         state = json.loads((self.home / '.codex-global-state.json').read_text())
         bindings = state.get('electron-persisted-atom-state', {}).get('client-thread-bindings-v1', {})
         return valid_id(bindings.get(client_id))

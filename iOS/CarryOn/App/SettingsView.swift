@@ -51,7 +51,7 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, minHeight: 50)
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(.red)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
+                    .background(Design.surface, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
             }.padding(20)
         }
         .task(id: model.scope) { do { _ = try await model.cachedDeviceRequest("/api/standby") } catch { model.report(error, operation: "读取待机状态", blocking: false) } }

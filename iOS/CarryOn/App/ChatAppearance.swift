@@ -46,7 +46,7 @@ extension ChatView {
     func carryOnChatAppearance() -> some View {
         localization(.init(inputPlaceholder: "继续对话…", signatureText: "添加说明", cancelButtonText: "取消",
                            recentToggleText: "最近", waitingForNetwork: "等待连接", recordingText: "录音", replyToText: "回复"))
-            .chatTheme(colors: .init(mainBG: .white, mainTint: Design.ink, inputBG: Design.background,
+            .chatTheme(colors: .init(mainBG: Design.canvas, mainTint: Design.ink, inputBG: Design.input,
                                     inputText: Design.ink, sendButtonBackground: Design.ink))
     }
 }
@@ -68,6 +68,7 @@ struct OutgoingMessageStatusView: View {
 struct CarryOnChatComposer<Accessories: View>: View {
     @Environment(\.chatTheme) private var theme
     @Binding var text: String
+    @ScaledMetric(relativeTo: .body) private var lineHeight = 22
     var disabled = false
     var sendAllowed = true
     var stopAllowed = true
@@ -83,28 +84,62 @@ struct CarryOnChatComposer<Accessories: View>: View {
     private var actionDisabled: Bool { disabled || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
     private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "重新执行" : stopping ? "补充指令" : "发送" }
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            HStack(alignment: .bottom, spacing: 0) {
-                accessories.foregroundStyle(theme.colors.mainTint)
-                TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
-                    .font(.system(size: 16)).lineLimit(1...6).disabled(disabled || !sendAllowed)
-                    .padding(.vertical, 12).padding(.horizontal, 10)
-                    .foregroundStyle(theme.colors.inputText)
-            }.background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 18))
-            if action == .send, stopping, let queue {
-                Menu {
-                    Button("加入队列", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
-                    if let stop { Button("停止当前执行", systemImage: "stop", action: stop).disabled(!stopAllowed) }
-                } label: { Image(systemName: "chevron.down").frame(width: 32, height: 44) }.disabled(disabled).accessibilityLabel("发送方式")
+        ComposerLayout(lineHeight: lineHeight) {
+            HStack(spacing: -12) { accessories }
+                .foregroundStyle(theme.colors.mainTint)
+            TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
+                .font(.body).lineLimit(1...6).disabled(disabled || !sendAllowed)
+                .foregroundStyle(theme.colors.inputText)
+            HStack(alignment: .center, spacing: 0) {
+                if action == .send, stopping, let queue {
+                    Menu {
+                        Button("加入队列", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
+                        if let stop { Button("停止当前执行", systemImage: "stop", action: stop).disabled(!stopAllowed) }
+                    } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.disabled(disabled).accessibilityLabel("发送方式")
+                }
+                Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
+                    Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(Design.onAccent)
+                        .frame(width: 36, height: 36).background(theme.colors.sendButtonBackground, in: Circle())
+                        .frame(width: 44, height: 44)
+                }.disabled(actionDisabled)
+                    .opacity(actionDisabled ? 0.35 : 1)
+                    .accessibilityLabel(buttonLabel)
             }
-            Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
-                Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
-                    .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44).background(theme.colors.sendButtonBackground, in: Circle())
-            }.disabled(actionDisabled)
-                .opacity(actionDisabled ? 0.4 : 1)
-                .accessibilityLabel(buttonLabel)
-        }.padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
+        }.padding(.horizontal, 6).padding(.vertical, 4)
+            .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 24))
+            .padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
+    }
+}
+
+/// Measures the editor at its compact width, while keeping the same TextField
+/// mounted during reflow so keyboard focus and selection remain intact.
+private struct ComposerLayout: Layout {
+    let lineHeight: CGFloat
+    private func metrics(_ proposal: ProposedViewSize, _ views: Subviews) -> (CGFloat, CGSize, CGSize, CGSize, Bool) {
+        let width = proposal.width ?? 320
+        let accessories = views[0].sizeThatFits(.unspecified)
+        let actions = views[2].sizeThatFits(.unspecified)
+        let compactWidth = max(1, width - accessories.width - actions.width - 8)
+        let compact = views[1].sizeThatFits(.init(width: compactWidth, height: nil))
+        let expanded = compact.height > lineHeight * 1.5
+        let editor = expanded ? views[1].sizeThatFits(.init(width: max(1, width - 20), height: nil)) : compact
+        return (width, accessories, actions, editor, expanded)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (width, accessories, actions, editor, expanded) = metrics(proposal, subviews)
+        let controls = max(accessories.height, actions.height)
+        return CGSize(width: width, height: expanded ? editor.height + controls + 14 : max(controls, editor.height))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (_, accessories, actions, editor, expanded) = metrics(.init(width: bounds.width, height: nil), subviews)
+        let controls = max(accessories.height, actions.height)
+        let centerY = expanded ? bounds.maxY - controls / 2 : bounds.midY
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: centerY), anchor: .leading, proposal: .init(accessories))
+        subviews[2].place(at: CGPoint(x: bounds.maxX, y: centerY), anchor: .trailing, proposal: .init(actions))
+        subviews[1].place(at: CGPoint(x: bounds.minX + (expanded ? 10 : accessories.width + 4),
+                                     y: expanded ? bounds.minY + 10 : bounds.midY - editor.height / 2),
+                          anchor: .topLeading, proposal: .init(width: expanded ? max(1, bounds.width - 20) : max(1, bounds.width - accessories.width - actions.width - 8), height: editor.height))
     }
 }
 

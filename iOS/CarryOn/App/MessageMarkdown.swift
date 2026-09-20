@@ -18,7 +18,7 @@ struct MessageMarkdown: View {
         Markdown(resolveCreatedThreads ? CreatedThreadReference.render(text, titles: threadTitles) : text)
             .markdownImageProvider(AttachmentImageProvider())
             .markdownInlineImageProvider(AttachmentInlineImageProvider())
-            .markdownTextStyle { FontSize(15); ForegroundColor(Design.ink) }
+            .markdownTextStyle { FontSize(17); ForegroundColor(Design.ink) }
             .markdownTextStyle(\.link) { ForegroundColor(Design.link) }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 CodeBlockView(code: configuration.content, language: configuration.language)
@@ -56,6 +56,7 @@ struct MessageMarkdown: View {
 }
 
 struct CodeBlockView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let code: String
     let language: String?
     @State private var highlighted: AttributedString?
@@ -74,11 +75,11 @@ struct CodeBlockView: View {
                     .font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true).padding(12)
             }
-        }.background(Design.background, in: RoundedRectangle(cornerRadius: 10))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .task(id: label + "\n" + code) {
+        }.background(Design.background, in: RoundedRectangle(cornerRadius: Design.controlCorner))
+            .clipShape(RoundedRectangle(cornerRadius: Design.controlCorner))
+            .task(id: label + "\n" + code + String(colorScheme == .dark)) {
                 highlighted = nil
-                let result = await CodeHighlight.shared.render(code, language: label)
+                let result = await CodeHighlight.shared.render(code, language: label, dark: colorScheme == .dark)
                 if !Task.isCancelled { highlighted = result }
             }
     }
@@ -91,7 +92,8 @@ private actor CodeHighlight {
         engine?.setTheme(to: "github")
         return engine
     }()
-    func render(_ code: String, language: String) -> AttributedString? {
+    func render(_ code: String, language: String, dark: Bool) -> AttributedString? {
+        engine?.setTheme(to: dark ? "atom-one-dark" : "github")
         guard code.utf8.count <= CodeDocument.highlightLimit, language != "plaintext",
               let result = engine?.highlight(code, as: language, fastRender: true) else { return nil }
         return try? AttributedString(result, including: \.uiKit)
@@ -99,6 +101,7 @@ private actor CodeHighlight {
 }
 
 struct CodeFilePreview: View {
+    @Environment(\.colorScheme) private var colorScheme
     let document: CodeDocument
     @Environment(\.dismiss) private var dismiss
     @State private var source = false
@@ -124,10 +127,30 @@ struct CodeFilePreview: View {
                 }.foregroundStyle(Design.secondary).padding(.horizontal, 16).padding(.vertical, 6)
             }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-            .task(id: document.id) {
-                let result = await CodeHighlight.shared.render(document.text, language: document.language)
+            .task(id: document.id + String(colorScheme == .dark)) {
+                let result = await CodeHighlight.shared.render(document.text, language: document.language, dark: colorScheme == .dark)
                 if !Task.isCancelled { highlighted = result }
             }
+        }
+    }
+}
+
+struct MessageTextSelectionView: View {
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+
+    static func plainText(_ text: String, resolveCreatedThreads: Bool) -> String {
+        let rendered = resolveCreatedThreads ? CreatedThreadReference.render(text, titles: [:]) : text
+        return MarkdownContent(rendered).renderPlainText()
+    }
+
+    var body: some View {
+        NavigationStack {
+            SourceTextView(text: AttributedString(text), font: .preferredFont(forTextStyle: .body))
+                .navigationTitle("选择文字").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                }
         }
     }
 }
@@ -135,8 +158,10 @@ struct CodeFilePreview: View {
 /// TextKit handles long files without creating a SwiftUI view for every line.
 private struct SourceTextView: UIViewRepresentable {
     let text: AttributedString
+    var font: UIFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
+        view.textColor = .label
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = .systemBackground
@@ -146,7 +171,11 @@ private struct SourceTextView: UIViewRepresentable {
     }
     func updateUIView(_ view: UITextView, context: Context) {
         let result = NSMutableAttributedString(text)
-        result.addAttribute(.font, value: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: NSRange(location: 0, length: result.length))
+        let fullRange = NSRange(location: 0, length: result.length)
+        result.addAttribute(.font, value: font, range: fullRange)
+        result.enumerateAttribute(.foregroundColor, in: fullRange) { color, range, _ in
+            if color == nil { result.addAttribute(.foregroundColor, value: UIColor.label, range: range) }
+        }
         if !view.attributedText.isEqual(to: result) { view.attributedText = result }
     }
 }

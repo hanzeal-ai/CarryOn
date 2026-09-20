@@ -1,4 +1,4 @@
-"""Select a project's idle native conversation without changing the shared controller."""
+"""Select a recent idle native conversation without changing the shared controller."""
 import json
 import os
 import re
@@ -47,6 +47,14 @@ def belongs(row, project):
     return project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))), row.get('projectless', False))[0] == project['groupId']
 
 
+def validate_controller(catalog, thread_id, project):
+    # The target project is independent of the conversation borrowing its turn.
+    if resolve_project(catalog, project['groupId']) != project:
+        raise BridgeError('目标项目已改变，请重新选择项目')
+    if not any(row['id'] == thread_id for row in catalog.list(2147483647)):
+        raise BridgeError('控制会话已不可用，请重试')
+
+
 def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
         raise ValueError('请输入 1–16000 字符的消息')
@@ -61,12 +69,16 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
             raise BridgeError('requestId 已用于不同内容')
         return previous
     project = resolve_project(bridge.catalog, project_id)
-    candidates = [row for row in bridge.catalog.list(2147483647) if belongs(row, project)]
-    candidates.sort(key=lambda row: ipc.current(row['id']) is None)
-    deadline = time.monotonic() + 15
+    candidates = bridge.catalog.list(2147483647)
+    # Catalog order is newest first; prefer the projectless Recent group.
+    candidates.sort(key=lambda row: (not row.get('projectless', False), -row.get('updated_at', 0)))
+    group, deadline = None, 0
     from .bridge import idle_snapshot
     for row in candidates:
-        if time.monotonic() >= deadline: break
+        recent = bool(row.get('projectless', False))
+        if recent != group:
+            group, deadline = recent, time.monotonic() + 15
+        if time.monotonic() >= deadline: continue
         with bridge.lock:
             bridge.check_generation(ipc, generation)
             if authorize: authorize()
@@ -75,10 +87,20 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
         try:
             bridge.assert_target(row['id'])
             state = ipc.current(row['id'])
-            if state is None: _, state = ipc.sidebar_snapshot(row['id'])
+            if state is None:
+                try: _, state = ipc.sidebar_snapshot(row['id'])
+                except IPCError: state = None
+            if state is None or (state.get('threadRuntimeStatus') or {}).get('type') == 'notLoaded':
+                def before_open():
+                    with bridge.lock:
+                        bridge.check_generation(ipc, generation)
+                        if authorize: authorize()
+                        validate_controller(bridge.catalog, row['id'], project)
+                        bridge.assert_target(row['id'])
+                _, state = ipc.wake_snapshot(row['id'], before_open=before_open)
             idle_snapshot(state)
         except (ValueError, IPCError, BridgeError):
             continue
         return bridge.submit('create', request_id, prompt, row['id'], source={**(source or {}), 'projectRequestFingerprint': fingerprint},
                              authorize=authorize, creation_project=project)
-    raise BridgeError('项目中未找到可用的空闲会话，请在 Codex 打开该项目的一个会话后重试', 409)
+    raise BridgeError('最近及其他会话中未找到可用的空闲会话，请在 Codex 打开一个空闲会话后重试', 409)
