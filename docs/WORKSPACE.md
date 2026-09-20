@@ -20,7 +20,7 @@
 |---|---|
 | GET /api/projects | limit/offset/search；projects、total、nextOffset；项目含 id/name/cwd/total/waiting/running/unread/unknown |
 | GET /api/workspace/threads | 全部会话分页；按原生目录 updated_at 倒序、id 倒序打破同时间排序，支持 limit/offset/search/filter，含实时 status、未读与总数 |
-| GET /api/projects/{id}/threads | 项目会话分页；filter=all/waiting/running，支持 search |
+| GET /api/projects/{id}/threads | 项目会话分页；filter=all/waiting/running/unread，支持 search |
 | GET /api/activity | 按通知偏好筛选的未读通知及待处理会话分页，不是通知事件流水 |
 | GET /api/notifications | after/limit；events、nextSequence，事件含 eventId/threadId/projectId/kind/sequence |
 | GET/POST /api/notifications/preferences | preferences；POST 必须提交 message/done/failed/approval 四个布尔值 |
@@ -90,3 +90,7 @@
 验证：`python3 -m unittest discover -s tests -p test_workspace_backends.py`；
 `python3 tests/run_appserver_regression.py` 使用已安装 Codex、临时 Home 和本地假模型服务，
 验证真实进程隔离、首建、流式历史、重复请求、停止、重启与崩溃恢复，不调用真实模型。
+
+会话列表的未读筛选按当前 reader 在分页前计算；动态中待处理项优先，显式清空已读的语义保持不变。iOS 保留再次点击会话标签切换项目/全部会话的入口。
+
+iOS 全局“显示不活跃会话”默认关闭，持久保存于当前手机并跨工作区生效。列表显式传 availableOnly=true：仅显示原生完整快照状态为 idle/running/waiting 的会话，项目聚合与分页前过滤。开启后传 false，显示全部；未加载会话进入后提示先在桌面 Codex 打开，写权限不变。API 省略参数保持旧行为，通知/直达查询不受列表偏好拦截。

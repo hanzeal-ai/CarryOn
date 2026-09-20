@@ -433,3 +433,62 @@ class WorkspaceTests(unittest.TestCase):
         self.workspace.read('binding:a',T,self.workspace.latest_sequence(T))
         self.assertFalse(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
         self.assertTrue(next(t for t in self.workspace.projection('binding:b')[1] if t['id']==T)['unread'])
+
+class ContinuityWorkspaceTests(unittest.TestCase):
+    setUp = WorkspaceTests.setUp
+    tearDown = WorkspaceTests.tearDown
+    observe = WorkspaceTests.observe
+    def test_unread_filter_is_reader_scoped_before_pagination(self):
+        self.observe(T, request=True); self.observe(U, request=True)
+        self.workspace.read('binding:a', T, self.workspace.latest_sequence(T))
+        query={'filter':['unread'],'limit':['1']}
+        page=self.workspace.dispatch('binding:a','GET','/api/workspace/threads',None,query)[1]
+        self.assertEqual(page['total'],1)
+        self.assertEqual(page['threads'][0]['id'],U)
+        other=self.workspace.dispatch('binding:b','GET','/api/workspace/threads',None,query)[1]
+        self.assertEqual(other['total'],2)
+
+    def test_read_pending_approval_remains_actionable_and_sorts_first(self):
+        self.observe(T,request=True)
+        self.observe(U);self.observe(U,status='completed')
+        self.workspace.rows[T]['updated_at']=1;self.workspace.rows[U]['updated_at']=100
+        self.workspace.read('local',T,self.workspace.latest_sequence(T))
+        page=self.workspace.dispatch('local','GET','/api/activity',None,{'includeRead':['true'],'limit':['1']})[1]
+        self.assertEqual(page['threads'][0]['id'],T)
+        self.assertTrue(page['threads'][0]['needsConfirmation'])
+
+class AvailableConversationTests(unittest.TestCase):
+    setUp=WorkspaceTests.setUp
+    tearDown=WorkspaceTests.tearDown
+    observe=WorkspaceTests.observe
+
+    def test_available_filter_counts_projects_and_paginates_after_filtering(self):
+        self.observe(T,status='completed')
+        query={'availableOnly':['true'],'limit':['1']}
+        page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,query)[1]
+        self.assertEqual([t['id'] for t in page['threads']],[T])
+        self.assertEqual(page['total'],1)
+        self.assertTrue(page['threads'][0]['available'])
+        projects=self.workspace.dispatch('local','GET','/api/projects',None,query)[1]
+        self.assertEqual(projects['total'],1)
+        self.assertEqual(projects['projects'][0]['total'],1)
+        all_threads=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'availableOnly':['false']})[1]
+        self.assertEqual(all_threads['total'],2)
+        self.assertFalse(next(t for t in all_threads['threads'] if t['id']==U)['available'])
+
+    def test_unloaded_metadata_and_lost_snapshot_are_hidden(self):
+        for state in ({'threadRuntimeStatus':{'type':'notLoaded'}},
+                      {'threadRuntimeStatus':{'type':'idle'},'_metadataOnly':True},
+                      None):
+            if state is None:self.bridge.ipc.states.pop(T,None)
+            else:self.bridge.ipc.states[T]=state
+            page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'availableOnly':['true']})[1]
+            self.assertEqual(page['total'],0)
+
+    def test_available_activity_keeps_loaded_pending_requests(self):
+        self.observe(T,request=True)
+        self.observe(U,request=True)
+        self.bridge.ipc.states.pop(U)
+        page=self.workspace.dispatch('local','GET','/api/activity',None,{'availableOnly':['true']})[1]
+        self.assertEqual([t['id'] for t in page['threads']],[T])
+        self.assertTrue(page['threads'][0]['actionable'])

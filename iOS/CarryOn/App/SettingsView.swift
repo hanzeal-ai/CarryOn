@@ -2,6 +2,7 @@ import SwiftUI
 import CarryOnCore
 
 struct SettingsView: View {
+    @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
     @Environment(AppModel.self) private var model
     @State private var switcher = false
     @State private var scanning = false
@@ -37,6 +38,14 @@ struct SettingsView: View {
                 Paper {
                     Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", chevron: true, badgeCount: model.requests.count) }
 
+                }
+                SectionCaption(title: "会话")
+                Paper {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("显示不活跃会话", isOn: $showInactiveConversations)
+                        Text("开启后显示全部会话；未在桌面 Codex 加载的会话只能查看历史。")
+                            .font(.caption).foregroundStyle(Design.secondary)
+                    }.padding(16)
                 }
                 SectionCaption(title: "通知")
                 Paper { Button { notifications = true } label: { SettingRow(icon: "bell", title: "消息通知", chevron: true) } }

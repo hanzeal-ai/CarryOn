@@ -92,7 +92,8 @@ import CarryOnCore
                                              withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
         let target = PushTarget(server: info["server"] as? String, deviceID: info["deviceId"] as? String,
-                                threadID: info["threadId"] as? String, eventID: info["eventId"] as? String)
+                                threadID: info["threadId"] as? String, eventID: info["eventId"] as? String,
+                                turnID: info["turnId"] as? String, itemID: info["itemId"] as? String, requestID: info["requestId"] as? String)
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             Task { @MainActor in self.target = target }
         }

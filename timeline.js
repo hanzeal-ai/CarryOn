@@ -379,7 +379,7 @@ const Timeline = (() => {
     if(data.truncated)warnings.push('原生历史未完整加载');
     if(!data.timeline)warnings.push('旧历史回退：仅文字记录');
     if(data.coverage?.unsupportedTypes?.length)warnings.push('未适配事件：'+data.coverage.unsupportedTypes.join('、'));
-    document.getElementById(ids.source).textContent=warnings.length?warnings.join('；'):'已同步原生记录';
+    document.getElementById(ids.source).textContent=warnings.length?warnings.join('；'):data.source==='local-rollout'?'已同步本地记录':'已同步原生记录';
     const info=document.getElementById(ids.info);
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }

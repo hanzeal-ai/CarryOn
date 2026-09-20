@@ -22,6 +22,9 @@ import CarryOnCore
     var status: JSONValue = .null
     var connected = false
     var reconnecting = false
+    let connectivity = ConnectivityMonitor()
+    var historyUpdatedAt: [String: Date] = [:]
+    private var notificationOpenToken: UUID?
     var selectedThread: Record?
     private(set) var threadParents: [Record] = []
     var selectedProject: Record?
@@ -67,10 +70,12 @@ import CarryOnCore
     var notice: String?
     private(set) var removingDevice = false
     private let readReceipts = ReadReceiptSync()
-    private(set) var epoch = UUID() { didSet { displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
+    private(set) var epoch = UUID() { didSet { endBackgroundSync(); historyUpdatedAt = [:]; displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
     private var liveStream: ConsoleStream?
+    private var backgroundSyncTask: UIBackgroundTaskIdentifier = .invalid
+    private var backgroundSyncGeneration: UUID?
     private var selectionUpdate: Task<Void, Never>?
     private var directoryVersion = 0
     private var directoryUpdates: Task<Void, Never>?
@@ -311,6 +316,7 @@ import CarryOnCore
         activateThread(parent)
     }
     private func activateThread(_ thread: Record) {
+        notificationOpenToken = nil
         activityScrollTarget = nil; activityRequestKey = nil
         sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil
         historyLimit = readingState(for: thread.id).historyLimit; historyFailure = nil
@@ -342,15 +348,42 @@ import CarryOnCore
     }
     func openNotification(_ target: PushTarget) async {
         guard authenticated, (try? ConsoleAddress(addressText).base.absoluteString) == target.server else { return }
+        let token = UUID()
+        notificationOpenToken = token
+        let initialEpoch = epoch
+        defer { if notificationOpenToken == token { notificationOpenToken = nil } }
         do {
             try await refreshDirectory()
+            guard notificationOpenToken == token, !Task.isCancelled, epoch == initialEpoch, authenticated else { return }
             guard devices.contains(where: { $0.id == target.deviceID }) else { throw APIError("通知对应的工作区已不可用") }
             if selectedDevice != target.deviceID { switchDevice(target.deviceID) }
+            let capturedEpoch = epoch
             let result = try await page("/api/workspace/threads?threadId=" + ConsoleAddress.component(target.threadID), key: "threads")
+            guard notificationOpenToken == token, !Task.isCancelled, epoch == capturedEpoch, selectedDevice == target.deviceID else { return }
             guard let record = result.records.first(where: { $0.id == target.threadID }) else { throw APIError("通知对应的会话已不可用") }
             selectedProject = nil
             open(record)
-        } catch { report(error, operation: "打开通知会话") }
+            notificationOpenToken = token
+            // Keep the ordinary conversation open even if the extra anchor lookup fails.
+            var limit = 40
+            while true {
+                let snapshot = try await deviceRequest("/api/threads/" + ConsoleAddress.component(target.threadID) + "/history?limit=\(limit)")
+                guard notificationOpenToken == token, !Task.isCancelled, epoch == capturedEpoch, selectedThread?.id == target.threadID else { return }
+                let anchor = target.anchor(in: snapshot)
+                if anchor != nil || !target.hasAnchor || snapshot["historyWindow"]["hasMore"].bool != true || limit >= 4000 {
+                    // Do not replace a newer live snapshot with this HTTP response.
+                    let state = readingState(for: record.id)
+                    state.historyLimit = max(state.historyLimit, limit)
+                    state.anchorID = anchor; state.offset = anchor == nil ? 0 : 21
+                    historyLimit = max(historyLimit, limit)
+                    activityScrollTarget = anchor
+                    if history == .null { history = snapshot; historyRevision += 1 }
+                    updateSelection()
+                    return
+                }
+                limit = min(4000, limit * 2)
+            }
+        } catch { if notificationOpenToken == token, !Task.isCancelled, authenticated { report(error, operation: "打开通知会话", blocking: false) } }
     }
     func retryHistory() { historyFailure = nil; updateSelection() }
     func loadEarlierHistory() {
@@ -358,26 +391,58 @@ import CarryOnCore
         updateSelection()
     }
     func closeThread() {
+        notificationOpenToken = nil
         threadParents = []
         selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; history = .null; historyFailure = nil; readSequence = 0
         updateSelection()
     }
+    private func beginBackgroundSync() {
+        guard backgroundSyncTask == .invalid, authenticated, updates != nil else { return }
+        let generation = UUID()
+        backgroundSyncGeneration = generation
+        // Use the system's full allowance, never a guessed duration or renewed lease.
+        backgroundSyncTask = UIApplication.shared.beginBackgroundTask(withName: "Conversation sync") { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.backgroundSyncGeneration == generation else { return }
+                self.expireBackgroundSync()
+            }
+        }
+        if backgroundSyncTask == .invalid { expireBackgroundSync() }
+    }
+    private func endBackgroundSync() {
+        backgroundSyncGeneration = nil
+        let task = backgroundSyncTask
+        backgroundSyncTask = .invalid
+        if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+    }
+    func expireBackgroundSync() {
+        guard !foreground else { endBackgroundSync(); return }
+        selectionUpdate?.cancel(); selectionUpdate = nil
+        updates?.cancel(); updates = nil
+        liveStream?.close(); liveStream = nil
+        connected = false; reconnecting = false
+        endBackgroundSync()
+    }
     func setForeground(_ active: Bool) {
         guard foreground != active else { return }
         foreground = active
-        liveStream?.setForeground(active)
         if !active {
+            beginBackgroundSync()
+            liveStream?.setForeground(backgroundSyncTask != .invalid)
             saveDrafts(); readReceipts.reset(); conversationPrefetcher.stop()
             Task { await displayCache.flush() }
             directoryUpdates?.cancel(); directoryUpdates = nil
             return
         }
+        endBackgroundSync()
+        liveStream?.setForeground(true)
         guard authenticated else { Task { await restoreLogin() }; return }
+        if liveStream == nil { connected = false; reconnecting = true }
         startUpdates()
         guard let connection = liveStream else { return }
-        connected = false; reconnecting = true
         let generation = epoch
-        // Serialise the resume probe with selection changes on this socket.
+        // A short background visit keeps its subscription; probe without showing
+        // a reconnect or resetting history. Only a failed probe replaces the socket.
         let previous = selectionUpdate
         selectionUpdate = Task { [weak self] in
             await previous?.value
@@ -385,13 +450,9 @@ import CarryOnCore
                   self.epoch == generation, self.liveStream === connection else { return }
             do {
                 try await connection.checkHealth()
-                guard !Task.isCancelled, self.foreground, self.epoch == generation,
-                      self.liveStream === connection else { return }
-                // A fresh subscription reconciles updates missed during suspension.
-                if connection.canResubscribe { try await connection.resubscribe(self.selection(self.selectedThread?.id)) }
-                else { connection.close() }
             } catch {
                 guard !Task.isCancelled, self.epoch == generation, self.liveStream === connection else { return }
+                self.connected = false; self.reconnecting = true
                 connection.close()
             }
         }
@@ -543,7 +604,7 @@ import CarryOnCore
         updates = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.epoch == generation else { return }
-                if !self.foreground {
+                if !self.foreground && self.backgroundSyncTask == .invalid {
                     do { try await Task.sleep(for: .seconds(1)) } catch { return }
                     continue
                 }
@@ -553,7 +614,7 @@ import CarryOnCore
                     stream = connection
                     try Task.checkCancellation()
                     self.liveStream = connection
-                    connection.setForeground(self.foreground)
+                    connection.setForeground(self.foreground || self.backgroundSyncTask != .invalid)
                     while !Task.isCancelled {
                         let packet = try await connection.next()
                         try Task.checkCancellation()
@@ -605,6 +666,7 @@ import CarryOnCore
         historyFailure = nil
         if let threadID, packet["threadId"].string == threadID, packet["history"].object != nil {
             let sequence = packet["readSequence"].int ?? 0
+            historyUpdatedAt[threadID] = Date()
             if changed { history = incoming; displayCache.store(history, key: historyCacheKey(threadID), bytes: encodedBytes) }
             reconcileOutgoing()
             if changed || sequence != readSequence { historyRevision += 1 }
@@ -672,6 +734,15 @@ import CarryOnCore
             if ["accepted", "completed", "inProgress"].contains(state) { try pending.accepted(scope: capturedScope, target: target) }
             return true
         } catch { if version == epoch { report(error, operation: path.hasSuffix("/compose") ? "发送消息" : "提交操作") }; return false }
+    }
+    func checkOutgoing(_ item: JSONValue) async {
+        let capturedScope = scope, identifier = item["id"].text
+        guard item["scope"].text == capturedScope, !identifier.isEmpty else { return }
+        do {
+            let job = try await deviceRequest("/api/jobs/" + ConsoleAddress.component(identifier))
+            guard scope == capturedScope, job["id"].text == identifier else { return }
+            reconcile([job]); reconcileOutgoing()
+        } catch { if scope == capturedScope { report(error, operation: "核对发送结果") } }
     }
     func reconcile(_ jobs: [JSONValue]) {
         for job in jobs { mergeOutgoing(job, live: true) }

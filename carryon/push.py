@@ -145,6 +145,7 @@ class PushService:
             payload={'aps':{'alert':{'title':LABELS[event['kind']],'body':event['title'][:120]},
                             'badge':badge,'sound':'default','thread-id':row['device']+':'+event['threadId']},
                      'server':self.server.public_url,'deviceId':row['device'],'threadId':event['threadId'],'eventId':event['eventId']}
+            payload.update({key:event[key] for key in ('turnId','itemId','requestId') if isinstance(event.get(key),str) and len(event[key])<=200})
             self.sender.send(row['token'],row['environment'],payload,row['id']+event['eventId'])
             self.update(row,cursor=event['sequence'],badge=badge)
         if not packet['events'] and row['badge']!=badge and not self.stop.is_set() and self.current(row):

@@ -37,6 +37,16 @@ class PushTests(unittest.TestCase):
     def register(self):self.push.register(self.registration,'session')
     def event(self):
         self.device.packet={'badge':1,'nextSequence':2,'events':[{'sequence':1,'eventId':'event1','kind':'done','threadId':THREAD,'title':'Task'}]}
+    def test_notification_carries_bounded_native_anchor_without_message_content(self):
+        self.register();self.event()
+        self.device.packet['events'][0].update(turnId='turn-old',itemId='answer',requestId='x'*201,text='private body')
+        self.push.tick()
+        payload=self.sender.sent[-1][2]
+        self.assertEqual(payload['turnId'],'turn-old')
+        self.assertEqual(payload['itemId'],'answer')
+        self.assertNotIn('requestId',payload)
+        self.assertNotIn('text',payload)
+
     def test_password_rotation_blocks_old_grant_across_restart(self):
         from carryon.console_auth import ConsoleAuth, password_record
         self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)

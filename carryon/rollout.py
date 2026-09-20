@@ -42,6 +42,8 @@ def native_item(item):
 def response_message(payload, identifier):
     parts = [{'type': 'text', 'text': p['text']} for p in payload.get('content', [])
              if p.get('type') in ('input_text', 'output_text', 'text') and isinstance(p.get('text'), str)]
+    if payload.get('role') == 'user':
+        return {'type': 'userMessage', 'id': identifier, 'content': parts}
     return {'type': 'agentMessage', 'id': identifier,
             'text': '\n'.join(p['text'] for p in parts), 'phase': payload.get('phase')}
 
@@ -119,6 +121,15 @@ class RolloutIndex:
                 if isinstance(payload.get('duration_ms'), (int, float)): t['durationMs'] = payload['duration_ms']
         elif category == 'turn_context' and payload.get('turn_id'):
             self.turn(payload['turn_id'])['params'].update({k: payload[k] for k in ('model', 'effort') if k in payload})
+        elif (self.row.get('history_mode', 'legacy') == 'legacy' and category == 'response_item'
+              and kind == 'message' and payload.get('role') in ('user', 'assistant') and payload.get('phase') != 'analysis'):
+            # Legacy history stores visible messages as response items. Paginated
+            # history must use canonical UserMessage events instead of model inputs.
+            if self.active is None:
+                self.active = 'legacy:' + str(offset)
+            self.turn(self.active)
+            identifier = payload.get('id') or str(offset)
+            self.records.setdefault((self.active, identifier), (offset, False))
         # Raw user-role model inputs also contain injected runtime/inherited context.
         # Only canonical UserMessage display events establish visible user input.
         # Do not guess visibility from text markers: users may legitimately quote them.

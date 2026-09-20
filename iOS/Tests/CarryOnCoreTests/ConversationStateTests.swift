@@ -86,3 +86,14 @@ private func history(_ state: String, last: String = "completed", requests: [JSO
     #expect(!ElicitationForm.supports(schema.setting("properties", .object(["x": field.setting("minimum", .string("1"))]))))
     #expect(!ElicitationForm.supports(schema.setting("properties", .object(["x": field.setting("minimum", .number(2)).setting("enum", .array([.number(1)]))]))))
 }
+
+@Test func persistedHistoryReportsSyncSeparatelyFromRuntime() {
+    let local: JSONValue = .object([
+        "source": .string("local-rollout"), "syncing": .bool(false),
+        "status": .object(["state": .string("notLoaded"), "label": .string("历史已同步 · 未加载")])
+    ])
+    #expect(ConversationState.session(local, connected: true).label == "尚未加载")
+    #expect(ConversationState.session(local, connected: true).tone == .neutral)
+    #expect(ConversationState.session(local, connected: true, readFailed: true).tone == .failure)
+    #expect(ConversationState.session(local, connected: false).label == "状态待确认")
+}

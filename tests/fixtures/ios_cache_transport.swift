@@ -30,7 +30,16 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.withLock { Self.counts[path, default: 0] += 1 }
         let devices: [JSONValue] = ["fixture", "other"].map { .object(["id": .string($0), "title": .string($0), "online": .bool(true), "permissions": .array([.string("view")])]) }
         var result: JSONValue = .object(["devices": .array(devices), "requests": .array([]), "history": .array([])])
-        if path == "/api/standby" { result = .object(["supported": .bool(true), "enabled": .bool(true), "effective": .bool(true)]) }
+        if path.hasPrefix("/api/workspace/threads?threadId=") {
+            Thread.sleep(forTimeInterval: 0.3)
+            let id = String(path.split(separator: "=").last!)
+            result = .object(["threads": .array([.object(["id": .string(id), "title": .string(id)])]), "total": .number(1), "nextOffset": .number(1)])
+        }
+        else if path.contains("/history?") {
+            let id = String(path.split(separator: "/")[2])
+            result = .object(["thread": .object(["id": .string(id)]), "timeline": .array([])])
+        }
+        else if path == "/api/standby" { result = .object(["supported": .bool(true), "enabled": .bool(true), "effective": .bool(true)]) }
         else if path == "/api/status" { result = .object(["deviceInfo": .object(["hostname": .string("Fixture Mac"), "listenHost": .string("127.0.0.1"), "port": .number(9000)])]) }
         else if path == "/api/usage" {
             let window: JSONValue = .object(["id": .string("primary"), "usedPercent": .number(20), "windowDurationMins": .number(300)])
@@ -54,6 +63,13 @@ public final class CacheSocket: ConsoleSocket, @unchecked Sendable {
     nonisolated(unsafe) private static var watched: [UUID: String] = [:]
     public static var watchedThreads: [String] { registryLock.withLock { Array(watched.values) } }
     public static var activeCount: Int { registryLock.withLock { active.count } }
+    public static func connectionIDs(for thread: String) -> Set<UUID> {
+        registryLock.withLock { Set(watched.filter { $0.value == thread }.keys) }
+    }
+    nonisolated(unsafe) private static var subscriptions: [String: Int] = [:]
+    public static func subscriptionCount(for thread: String) -> Int {
+        registryLock.withLock { subscriptions[thread, default: 0] }
+    }
     private let id = UUID(), lock = NSLock()
     private var selection: JSONValue = .null
     private var closed = false
@@ -67,7 +83,10 @@ public final class CacheSocket: ConsoleSocket, @unchecked Sendable {
     func send(_ message: URLSessionWebSocketTask.Message) async throws {
         if case .string(let text) = message, let value = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)), value["type"].text == "subscribe" {
             lock.withLock { selection = value }
-            Self.registryLock.withLock { Self.watched[id] = value["threadId"].string }
+            Self.registryLock.withLock {
+                Self.watched[id] = value["threadId"].string
+                if let thread = value["threadId"].string { Self.subscriptions[thread, default: 0] += 1 }
+            }
         }
     }
     func receive() async throws -> URLSessionWebSocketTask.Message {

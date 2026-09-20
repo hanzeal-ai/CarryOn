@@ -11,9 +11,12 @@ public struct ConversationState: Equatable, Sendable {
     }
     public static func session(_ history: JSONValue, connected: Bool, readFailed: Bool = false) -> Self {
         if readFailed { return .init("读取失败 · 状态未知", "exclamationmark.circle", .failure) }
-        guard connected else { return .init("连接中 · 状态未知", "wifi.slash") }
+        guard connected else { return .init("状态待确认", "questionmark.circle") }
         if history["syncing"].bool == true { return .init("正在同步", "arrow.triangle.2.circlepath", .active) }
         let runtime = history["status"]["state"].text
+        if history["source"].text == "local-rollout" && history["syncing"].bool == false {
+            return .init(runtime == "notLoaded" ? "尚未加载" : "状态未知", "clock")
+        }
         if runtime == "error" { return .init("运行异常", "exclamationmark.circle", .failure) }
         if runtime == "notLoaded" { return .init("尚未加载", "clock") }
         guard ["idle", "running", "waiting"].contains(runtime) else { return .init("状态未知", "questionmark.circle") }

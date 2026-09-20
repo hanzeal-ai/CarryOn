@@ -53,6 +53,8 @@ extension ChatView {
 
 /// Exyte's input slot uses the app-owned draft; only a confirmed server response clears it.
 struct OutgoingMessageStatusView: View {
+    @Environment(AppModel.self) private var model
+    @State private var checking = false
     let item: JSONValue
     let dismiss: () -> Void
     var body: some View {
@@ -60,7 +62,14 @@ struct OutgoingMessageStatusView: View {
             Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
             let labels = ["sending": "发送中…", "preparing": "发送中…", "dispatching": "发送中…", "failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
             Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
-            if item["state"].text == "failed" { Button("清除提示", action: dismiss).font(.caption) }
+            if ["uncertain", "failed"].contains(item["state"].text) {
+                HStack {
+                    Button(checking ? "核对中…" : "核对结果") {
+                        Task { checking = true; defer { checking = false }; await model.checkOutgoing(item) }
+                    }.disabled(checking || !model.connected)
+                    if item["state"].text == "failed" { Button("清除提示", action: dismiss) }
+                }.font(.caption)
+            }
         }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
     }
 }

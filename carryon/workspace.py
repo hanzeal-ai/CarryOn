@@ -174,7 +174,7 @@ class Workspace:
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
-    def projection(self,reader,activity_owner=None):
+    def projection(self,reader,activity_owner=None,available_only=False):
         self.bridge.require()
         with self.lock:
             if self.error:raise ValueError(self.error)
@@ -194,11 +194,13 @@ class Workspace:
         for row in rows:
             tid=row['id'];native=ipc.current(tid)
             status=project_status(native)
+            available=bool(native and not native.get('_metadataOnly') and status['state'] in ('idle','running','waiting'))
+            if available_only and not available:continue
             # Never preserve cached running/idle after a connection reset or unload.
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
             pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),row.get('projectless',False))
-            thread={**row,'projectId':pid,'projectName':name,'status':status,'actionable':actionable,'failed':known.get('failed',False),
+            thread={**row,'projectId':pid,'projectName':name,'status':status,'available':available,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0),
                     'activityRetained':tid in retained,'activityRead':tid not in unread,
                     'activityKind':known.get('activityKind','other'),'needsConfirmation':known.get('needsConfirmation',False),
@@ -259,7 +261,8 @@ class Workspace:
         limit=min(100,max(1,int(query.get('limit',['100'])[0])));offset=max(0,int(query.get('offset',['0'])[0]))
         if path=='/api/notifications' and method=='GET':return 200,self.events(reader,max(0,int(query.get('after',['0'])[0])),limit)
         if method!='GET':return 404,{'error':'接口不存在'}
-        groups,threads=self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader)
+        available_only=query.get('availableOnly',['false'])[0]=='true'
+        groups,threads=self.projection(reader,activity_owner,available_only=True) if available_only else (self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader))
         search=query.get('search',[''])[0].casefold()
         if path=='/api/projects':
             groups=[g for g in groups if search in (g['name']+' '+g['cwd']).casefold()]
@@ -280,10 +283,12 @@ class Workspace:
         if path=='/api/workspace/threads' and query.get('threadId'):
             threads=[t for t in threads if t['id']==query['threadId'][0]]
         mode=query.get('filter',['all'])[0]
-        if mode not in ('all','waiting','running'):raise ValueError('无效筛选')
+        if mode not in ('all','waiting','running','unread'):raise ValueError('无效筛选')
         if mode=='waiting':threads=[t for t in threads if t['actionable']]
         if mode=='running':threads=[t for t in threads if t['status']['state']=='running']
+        if mode=='unread':threads=[t for t in threads if t['unread']]
         threads.sort(key=lambda t: (t.get('updated_at') or 0, t['id']), reverse=True)
+        if path=='/api/activity':threads.sort(key=lambda t: not t['actionable'])
         result={'threads':threads[offset:offset+limit],'total':len(threads),'nextOffset':offset+limit}
         if path=='/api/activity':
             current=query.get('currentThreadId',[''])[0]

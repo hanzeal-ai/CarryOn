@@ -109,6 +109,10 @@ struct ThreadRow: View {
                 Text(projectName).font(.caption2).foregroundStyle(Design.secondary).lineLimit(1)
                 Text(record.value["failed"].bool == true ? "执行失败" : record.value["status"]["label"].string ?? "状态未知")
                     .font(.caption2).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
+                if case .number(let updated) = record.value["updated_at"] {
+                    Text("更新于 " + Date(timeIntervalSince1970: updated).formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2).foregroundStyle(Design.secondary)
+                }
                 if case .number(let completed) = record.value["completedAt"] {
                     Text("完成于 " + Date(timeIntervalSince1970: completed).formatted(date: .abbreviated, time: .shortened))
                         .font(.caption2).foregroundStyle(Design.secondary)

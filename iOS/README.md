@@ -30,7 +30,7 @@ xcodebuild -project iOS/CarryOn.xcodeproj -target CarryOn \
 
 - 默认账号密码登录，支持扫码后由已登录电脑确认；密码自动填充使用系统密码管理器。HTTPS 云端登录、设备目录、工作区切换与退出；独立 Cookie 会话，带正确 Origin，拒绝重定向。可撤销的会话凭证按云端完整地址保存在本机 Keychain；启动后经服务端验证再恢复登录。登录口令不保存，退出或收到 401 清除保存的会话凭证。
 - 首页可切换项目卡片与全部会话视图，选择通过 UserDefaults 持久保存；项目沿用现有排序，会话按原生 updated_at 倒序分页，运行中气泡图标标绿。保留项目汇总、搜索、按通知偏好展示的动态和独立连接申请分组。
-- 云端 WebSocket 实时会话、消息和执行详情、原生队列展示、进入后台取消订阅与前台恢复。网络恢复仅重建读取订阅，不重放写入。
+- 云端 WebSocket 实时会话、消息和执行详情、原生队列展示、进入后台在系统允许的执行时间内继续同步，到期关闭并在前台重连。网络恢复仅重建读取订阅，不重放写入。
 - 原生多行输入、现有会话在空闲、执行和等待状态附图（最多三张，每张压缩至 200 KB）、缩略图与大图预览、逐张删除、发送/停止、文本与附件按云端/设备/会话隔离，原子保存到受保护的本地草稿文件。
 - 模型与思考强度菜单读取本机 Codex 缓存目录中的可见模型及支持强度，通过原生 settings 操作从下一轮生效；缺少目录时不提供虚构选项。
 - 活动摘要支持 Markdown、长内容省略和按需展开；助手引用附件以绿色文件名打开，避免重复平铺。
@@ -43,7 +43,7 @@ xcodebuild -project iOS/CarryOn.xcodeproj -target CarryOn \
 
 ## 权威边界
 
-[WORKSPACE.md](../docs/WORKSPACE.md) 和 [MULTI_CLOUD.md](../docs/MULTI_CLOUD.md) 是业务契约。云端通过 HTTPS request 代理提交操作，通过 `/console/devices/{deviceId}/ws` 推送会话更新；客户端不直接访问 Mac IPC。WebSocket 使用同一登录 Cookie 与 Origin，进入后台关闭，前台及断线恢复时重建订阅；45 秒无消息时重连，不重放写入。
+[WORKSPACE.md](../docs/WORKSPACE.md) 和 [MULTI_CLOUD.md](../docs/MULTI_CLOUD.md) 是业务契约。云端通过 HTTPS request 代理提交操作，通过 `/console/devices/{deviceId}/ws` 推送会话更新；客户端不直接访问 Mac IPC。WebSocket 使用同一登录 Cookie 与 Origin，进入后台申请系统允许的最长执行时间，期间保持主会话订阅；短暂切回复用健康连接，后台时间到期则关闭并在前台重建订阅；45 秒无消息时重连，不重放写入。
 
 SwiftUI View 负责展示，Observation 页面状态管理前台生命周期；`CarryOnCore` 负责 Codable 数据边界、URLSession、请求幂等编号及草稿提交规则。Swift Package 让这些纯逻辑在 macOS 上验证，iPhone App target 复用同一份代码。
 

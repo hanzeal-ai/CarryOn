@@ -101,11 +101,19 @@ struct WorkspaceDetails: View {
     @Environment(\.dismiss) private var dismiss
     let device: Record
     private var info: JSONValue { model.cachedValue("/api/status", deviceID: device.id)["deviceInfo"] }
+    private var status: JSONValue { model.cachedValue("/api/status", deviceID: device.id) }
+    private var standby: JSONValue { model.cachedValue("/api/standby", deviceID: device.id) }
+    private var online: Bool? { model.devices.first(where: { $0.id == device.id })?.value["online"].bool ?? device.value["online"].bool }
     @State private var failure: String?
     @State private var loading = true
     var body: some View {
         NavigationStack {
             Form {
+                Section("远程访问检查") {
+                    Text(WorkspaceReadiness.label(online: online, status: status, standby: standby)).font(.subheadline)
+                    LabeledContent("允许远程操作", value: status["remoteControl"].bool.map { $0 ? "已授权" : "未授权" } ?? "待确认")
+                    LabeledContent("远程待机", value: standby["effective"].bool.map { $0 ? "已生效" : "未生效" } ?? "待确认")
+                }
                 LabeledContent("工作区", value: device.title)
                 LabeledContent("设备 ID", value: device.id)
                 LabeledContent("状态", value: device.value["online"].bool == true ? "在线" : "离线")
@@ -121,6 +129,7 @@ struct WorkspaceDetails: View {
             guard device.value["online"].bool == true else { failure = "设备离线，无法读取实时主机信息。"; return }
             do {
                 _ = try await model.cachedDeviceRequest("/api/status", maxAge: 60, deviceID: device.id)
+                _ = try await model.cachedDeviceRequest("/api/standby", maxAge: 60, deviceID: device.id)
                 if info.object == nil { failure = "此设备版本尚未提供主机信息。" }
             } catch { failure = error.localizedDescription }
         }

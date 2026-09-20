@@ -10,6 +10,9 @@ struct ConversationView: View {
     @State private var menu = false
     @State private var activity = false
     @State private var modelInfo = false
+    @State private var changes = false
+    @State private var newMessages = false
+    @State private var lastTimelineItem: JSONValue?
     @State private var visibleCount = 120
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
@@ -56,6 +59,9 @@ struct ConversationView: View {
                     }.value
                     guard model.scope == scope, model.selectedThread?.id == thread.id else { return }
                     guard model.historyRevision == revision else { messagesNeedRefresh = true; continue }
+                    if !bottomVisible, let lastTimelineItem, grouped.last != lastTimelineItem,
+                       grouped.contains(where: { $0.stableID == lastTimelineItem.stableID }) { newMessages = true }
+                    lastTimelineItem = grouped.last
                     timeline = grouped; projectedHistoryRevision = revision
                 }
                 let next = projectedMessages()
@@ -112,7 +118,7 @@ struct ConversationView: View {
             let reachedBottom = !bottomVisible && offset <= 20
             bottomVisible = offset <= 20
             readingState?.offset = max(0, offset)
-            if bottomVisible { readingState?.anchorID = nil }
+            if bottomVisible { readingState?.anchorID = nil; newMessages = false }
             if reachedBottom { markRead() }
             if navigationTracker.isDragging { navigationPinned = false; restoreScroll = nil; navigationPreview = nil }
             updateNavigationPosition()
@@ -132,7 +138,7 @@ struct ConversationView: View {
         .showDateHeaders(false)
         .showAvatar(false)
         .showMessageMenuOnLongPress(false)
-        .showScrollToBottomButton(true)
+        .showScrollToBottomButton(false)
         .keyboardDismissMode(.interactive)
         .mainHeaderBuilder { historyHeader }
         .enableLoadMoreOlderMessages(hasMoreToLoad: canLoadEarlier, handleClosure: loadEarlierMessages)
@@ -185,14 +191,27 @@ struct ConversationView: View {
             catch { model.report(error, operation: "刷新其他会话角标", blocking: false) }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            Group {
+            VStack(spacing: 4) {
                 HStack(spacing: 8) {
-                    ConversationStatusLabel(state: .session(model.history, connected: model.connected, readFailed: model.historyFailure != nil))
+                    ConversationStatusLabel(state: .session(model.history, connected: model.connected && model.status["enabled"].bool == true, readFailed: model.historyFailure != nil))
                     if model.conversationReadOnly { Text("只读").font(.caption) }
+                    if ConversationChanges.hasChanges(model.history) {
+                        Button("查看改动") { changes = true }.font(.caption)
+                    }
                 }
-                    .font(.caption2).foregroundStyle(Design.secondary).padding(5)
-            }
+                if let message = ConversationConnection.message(networkAvailable: model.connectivity.available,
+                    deviceOnline: model.device?.value["online"].bool, connected: model.connected,
+                    bridgeEnabled: model.status["enabled"].bool, hasHistory: model.history != .null,
+                    localHistory: model.history["source"].text == "local-rollout", readFailure: model.historyFailure) {
+                    Text(message).font(.caption2).multilineTextAlignment(.center)
+                    if !model.connected, let time = model.historyUpdatedAt[thread.id] {
+                        Text("上次状态：" + ConversationState.session(model.history, connected: true).label + " · " + time.formatted(date: .omitted, time: .standard))
+                            .font(.caption2)
+                    }
+                }
+            }.foregroundStyle(Design.secondary).padding(6)
         }
+        .sheet(isPresented: $changes) { ConversationChangesView(threadID: thread.id) }
         .sheet(isPresented: $menu) { ConversationMenu() }
         .sheet(isPresented: $modelInfo) { ModelInformationView(target: actionTarget) }
         .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
@@ -423,6 +442,13 @@ struct ConversationView: View {
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !bottomVisible {
+                Button(newMessages ? "有新消息 · 回到最新" : "回到最新") {
+                    newMessages = false; navigationPinned = false; pendingNavigation = nil
+                    model.activityScrollTarget = nil
+                    restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
+                }.font(.caption).frame(maxWidth: .infinity, minHeight: 36).accessibilityIdentifier("conversation-latest")
+            }
             if !model.conversationReadOnly { ConversationActionBar(target: actionTarget) }
             if loadingImages || submitting { ProgressView().controlSize(.small) }
             if !model.conversationReadOnly && !images.isEmpty {
@@ -924,7 +950,7 @@ private struct ConversationNavigationMarker: UIViewRepresentable {
     let id: String
     let tracker: ConversationNavigationTracker
     func makeUIView(context: Context) -> UIView { let view = UIView(); view.isUserInteractionEnabled = false; tracker.entries[id] = .init(view); return view }
-    func updateUIView(_ view: UIView, context: Context) { tracker.entries[id] = .init(view) }
+    func updateUIView(_ view: UIView, context: Context) { view.accessibilityIdentifier = "conversation-message-" + id; tracker.entries[id] = .init(view) }
 }
 private struct ConversationNavigationBounds: PreferenceKey {
     static let defaultValue: CGRect = .zero

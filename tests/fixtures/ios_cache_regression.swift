@@ -29,6 +29,7 @@ import CarryOnCore
     func run() async {
         guard !started else { return }; started = true
         do {
+            UserDefaults.standard.removeObject(forKey: "carryon.showInactiveConversations")
             model.addressText = "https://cache.carryon.test/"
             try KeychainSessionCredentials().save(UUID().uuidString, server: model.addressText)
             await model.restoreLogin()
@@ -58,26 +59,80 @@ import CarryOnCore
             screen = 2; await pause(); screen = 0; await pause(); screen = 2; await pause()
             checks["workspaceDetailsReentryReusesStatus"] = CacheProtocol.count("/api/status") == 1
             screen = 4; await pause(); screen = 0; await pause(); screen = 4; await pause()
-            checks["projectReentryReusesRows"] = CacheProtocol.count("/api/projects?limit=50&offset=0&search=&filter=all") == 1
+            checks["projectReentryReusesRows"] = CacheProtocol.count("/api/projects?limit=50&offset=0&search=&filter=all&availableOnly=true") == 1
+            UserDefaults.standard.set(true, forKey: "carryon.showInactiveConversations")
+            await pause()
+            checks["showInactiveRefreshesGlobalList"] = CacheProtocol.count("/api/projects?limit=50&offset=0&search=&filter=all&availableOnly=false") == 1
+            UserDefaults.standard.set(false, forKey: "carryon.showInactiveConversations")
+            await pause()
+
             let thread = try Record(.object(["id": .string("running-0"), "title": .string("执行中任务")]))
             let cached = model.displayCache.value(model.historyCacheKey(thread.id))
             model.open(thread)
             checks["openDisplaysPrefetchedMessagesSynchronously"] = cached != .null && model.history == cached
             checks["cacheDoesNotAuthorizeOrMarkRead"] = !model.connected && !model.canWrite && model.readSequence == 0
             screen = 3; await pause(); try capture("cache-conversation")
+            let retainedSocket = CacheSocket.connectionIDs(for: thread.id)
+            let retainedSubscriptions = CacheSocket.subscriptionCount(for: thread.id)
+            let beforeBackground = model.history["historyRevision"]
             model.setForeground(false); await pause()
             checks["backgroundStopsAdditionalStreams"] = CacheSocket.activeCount == 1
+            checks["backgroundContinuesCurrentHistory"] = model.history["historyRevision"] != beforeBackground
+            model.setForeground(true)
+            checks["shortResumeDoesNotShowReconnect"] = model.connected && !model.reconnecting
+            await pause()
+            checks["shortResumeReusesConnectionAndSubscription"] = !retainedSocket.isEmpty
+                && CacheSocket.connectionIDs(for: thread.id) == retainedSocket
+                && CacheSocket.subscriptionCount(for: thread.id) == retainedSubscriptions
+            model.setForeground(false)
+            model.expireBackgroundSync(); model.expireBackgroundSync()
+            await pause()
+            checks["expirationClosesStreamsAndDoesNotReconnectInBackground"] = CacheSocket.activeCount == 0 && !model.connected
+            model.setForeground(true)
+            checks["expiredResumeShowsReconnect"] = !model.connected && model.reconnecting
+            await pause(); await pause()
+            checks["expiredResumeReopensAndSynchronizes"] = model.connected
+                && !CacheSocket.connectionIDs(for: thread.id).isEmpty
+                && CacheSocket.connectionIDs(for: thread.id) != retainedSocket
+                && model.history["thread"]["id"].text == thread.id
+            model.setForeground(false)
             model.switchDevice("other"); model.open(thread)
             checks["workspaceIsolation"] = model.history == .null
             model.switchDevice("fixture"); model.open(thread)
             checks["returnToWorkspaceRetainsMessages"] = model.history != .null
+            let noticeA = "00000000-0000-0000-0000-000000000001"
+            let noticeB = "00000000-0000-0000-0000-000000000002"
+            func notification(_ id: String) -> PushTarget {
+                PushTarget(server: model.addressText, deviceID: "fixture", threadID: id, eventID: id)!
+            }
+            let pathA = "/api/workspace/threads?threadId=" + noticeA
+            func waitForRequest(_ count: Int) async {
+                for _ in 0..<100 {
+                    if CacheProtocol.count(pathA) > count { return }
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            }
+            var beforeNotice = CacheProtocol.count(pathA)
+            let first = Task { await model.openNotification(notification(noticeA)) }
+            await waitForRequest(beforeNotice)
+            model.open(thread)
+            await first.value
+            checks["lateNotificationDoesNotOverrideManualNavigation"] = CacheProtocol.count(pathA) > beforeNotice && model.selectedThread?.id == thread.id
+            beforeNotice = CacheProtocol.count(pathA)
+            let older = Task { await model.openNotification(notification(noticeA)) }
+            await waitForRequest(beforeNotice)
+            let newer = Task { await model.openNotification(notification(noticeB)) }
+            await older.value; await newer.value
+            checks["newerNotificationWins"] = CacheProtocol.count(pathA) > beforeNotice && model.selectedThread?.id == noticeB
+            let notificationDiagnostic: [String: Any] = ["selected": model.selectedThread?.id ?? "", "error": model.error ?? "", "aRequests": CacheProtocol.count(pathA), "bRequests": CacheProtocol.count("/api/workspace/threads?threadId=" + noticeB)]
+            model.open(thread)
             await model.displayCache.flush()
             let reopened = AppModel(); reopened.addressText = model.addressText; reopened.foreground = false
             await reopened.restoreLogin(); reopened.open(thread)
             checks["restartRestoresRecentMessages"] = reopened.history != .null && !reopened.connected
             await reopened.logout()
             checks["logoutClearsVisibleCache"] = reopened.displayCache.value(reopened.historyCacheKey(thread.id)) == .null
-            let result: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
+            let result: [String: Any] = ["notificationDiagnostic": notificationDiagnostic, "passed": checks.values.allSatisfy { $0 }, "checks": checks]
             try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL.documentsDirectory.appendingPathComponent("cache-result.json"))
         } catch {
             try? JSONSerialization.data(withJSONObject: ["passed": false, "checks": checks, "error": error.localizedDescription]).write(to: URL.documentsDirectory.appendingPathComponent("cache-result.json"))
