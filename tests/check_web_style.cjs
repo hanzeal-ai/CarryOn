@@ -66,7 +66,7 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
   assert(!await page.locator('#composer .input-shell').evaluate(e=>e.classList.contains('expanded')));
  }
  assert.deepEqual(errors,[]);assert(writes.every(w=>w.path==='/api/notifications/read'),'only read acknowledgements');
- 
+
  if(width<761){
   await page.getByRole('button',{name:'查看当前模型与思考强度',exact:true}).click();
   await page.screenshot({path:prefix+'-model.png'});await page.keyboard.press('Escape');
