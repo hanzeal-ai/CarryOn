@@ -72,9 +72,9 @@ class CurrentWorkflowTests(unittest.TestCase):
         initial = {'state':'new', 'url':DEFAULT_CLOUD_URL, 'environment':{'supportedPlatform':True,'backend':'app-server'}}
         bound = {'state':'bound', 'autoStart':False}
         args = SimpleNamespace(state_dir=self.root, input_json=False, url=None, permissions=None)
-        with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout', new_callable=io.StringIO), patch('builtins.input', side_effect=['n','n']) as inputs, patch('carryon.onboarding.known_accounts', return_value={'accounts':[], 'warnings':[]}), patch('carryon.onboarding.exchange', side_effect=[initial,bound,bound]) as call:
+        with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout', new_callable=io.StringIO), patch('builtins.input', side_effect=['n','n','']) as inputs, patch('carryon.onboarding.exchange', side_effect=[initial,bound,bound]) as call:
             self.assertEqual(command(args), 0)
-            self.assertEqual(inputs.call_count, 2)
+            self.assertEqual(inputs.call_count, 3)
             self.assertEqual(call.call_args_list[1].args[1]['url'], DEFAULT_CLOUD_URL)
 
     def test_new_cloud_does_not_reuse_existing_bound_state(self):

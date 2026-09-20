@@ -37,7 +37,6 @@ class PushConsoleTests(test_console.ConsoleTests):
         import time
         from carryon.workspace import Workspace
         from carryon.push import PushService
-        from carryon.pairing import redeem
         from test_workspace import Native
         from test_push import Sender, INSTALL
         from test_cloud import T
@@ -45,8 +44,7 @@ class PushConsoleTests(test_console.ConsoleTests):
         self.connector.binding_id='push-test'
         workspace=Workspace(self.bridge);self.bridge.workspace=workspace;workspace.catalog_refresh()
         self.login()
-        code=self.call('POST','/console/pairing',{'deviceId':'my-mac'})[1]['code']
-        self.connector.configure(redeem(self.url,code,dev_local=True));self.bridge.enable()
+        self.connector.configure(self.device_config());self.bridge.enable()
         deadline=time.monotonic()+4
         while not self.connector.status()['connected'] and time.monotonic()<deadline:time.sleep(.02)
         self.assertTrue(self.connector.status()['connected'])

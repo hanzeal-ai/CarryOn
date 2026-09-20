@@ -12,12 +12,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
-from .paths import default_codex_home, private_dir, save_json, workspace_codex_home, workspace_backend
-from .pairing import NoRedirect
+from .paths import default_codex_home, private_dir, save_json
+from .product import cloud_url
+
+DEFAULT_CLOUD_URL = cloud_url()
+from .http_transport import NoRedirect
 from .cloud_wire import endpoint, tls_context
-
-
-DEFAULT_CLOUD_URL = "https://carryon.hanzeal.com"
 
 
 class InvalidDeviceCredentials(ValueError):
@@ -81,14 +81,16 @@ def exchange(directory, data):
     from .cli import running, call, start
     if not isinstance(data, dict): raise ValueError('初始化输入无效')
     if data.get('useDefaultCloud') is True:
-        data = {**data, 'url':DEFAULT_CLOUD_URL}
+        data = {**data, 'url':cloud_url()}
     directory = private_dir(directory)
     with (directory/'init.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        from .workspaces import initialize
+        initialize(directory)
         path = directory/'onboarding.json'
         state = json.loads(path.read_text()) if path.exists() else {'state':'new'}
         action = data.get('action', 'status')
-        if action not in ('status', 'prepare', 'poll', 'known-accounts', 'apply-confirmed', 'cancel'): raise ValueError('初始化操作无效')
+        if action not in ('status', 'prepare', 'poll', 'apply-confirmed', 'cancel'): raise ValueError('初始化操作无效')
         if state.get('pending') and not state['pending'].get('confirmed') and state['pending']['expiresAt'] <= time.time():
             state.pop('pending'); state['state'] = 'configured'; save_json(path, state)
             if action == 'poll': raise ValueError('二维码已过期，配置已保留，请继续初始化')
@@ -109,7 +111,7 @@ def exchange(directory, data):
                 raise ValueError('绑定正在进行，请先完成当前云端绑定')
         if state.get('pending') and data.get('bindingId') and data['bindingId'] != state.get('replacement', {}).get('id'):
             raise ValueError('另一项绑定正在进行，请先完成或等待二维码过期')
-        if action != 'known-accounts' and not state.get('pending'):
+        if not state.get('pending'):
             from .binding_recovery import reconcile
             state, verification_error = reconcile(directory, state, data)
             if verification_error:
@@ -119,10 +121,8 @@ def exchange(directory, data):
             if state['state'] == 'bound' and str(directory) not in records():
                 info = running(directory)
                 register(directory, port=info['port'] if info else 0,
-                         codex_home=info['codexHome'] if info else workspace_codex_home(directory))
-        if action == 'known-accounts':
-            return known_accounts(data.get('url') or state.get('url') or DEFAULT_CLOUD_URL)
-        if action not in ('status', 'prepare', 'poll', 'apply-confirmed'): raise ValueError('初始化操作无效')
+                         codex_home=info['codexHome'] if info else default_codex_home())
+        if action not in ('status', 'prepare', 'poll', 'apply-confirmed', 'cancel'): raise ValueError('初始化操作无效')
         if action == 'apply-confirmed':
             confirmed = state.get('pending', {}).get('confirmed')
             replacement = state.get('replacement')
@@ -141,7 +141,7 @@ def exchange(directory, data):
         if action == 'prepare' and state.get('pending', {}).get('confirmed'):
             action = 'poll'
         if action == 'prepare' and state['state'] != 'bound':
-            url = data.get('url') or state.get('url') or DEFAULT_CLOUD_URL
+            url = data.get('url', state.get('url', cloud_url()))
             if not isinstance(url, str): raise ValueError('云端地址无效')
             auto = data.get('autoStart', state.get('autoStart', True))
             control = data.get('control', False)
@@ -151,33 +151,24 @@ def exchange(directory, data):
             if 'view' not in allowed: raise ValueError('请选择查看工作区权限')
             control = bool(set(allowed)-{'view','files'})
             if state.get('pending') and state['pending']['expiresAt'] > time.time():
-                if url.rstrip('/') != state['url'] or auto != state['autoStart'] or control != state['control'] or allowed != state.get('permissions',allowed):
+                if url.rstrip('/') != state['url'] or auto != state['autoStart'] or control != state['control'] or allowed != state.get('permissions',allowed) or data.get('targetAccount') != state.get('targetAccount'):
                     raise ValueError('绑定正在进行，请完成或等待二维码过期后调整选项')
             else:
                 saved = records().get(str(directory), {})
                 name = data.get('name', saved.get('name', socket.gethostname()))
-                codex = workspace_codex_home(directory, data.get('codexHome') or saved.get('codexHome'))
+                codex = Path(data.get('codexHome', saved.get('codexHome', str(default_codex_home())))).expanduser().resolve()
                 port = data.get('port', saved.get('port', 0))
                 register(directory, name=name, port=port, codex_home=codex)
                 request_id = state.get('requestId', secrets.token_hex(16))
                 replacement = state.get('replacement')
                 if replacement and url.rstrip('/') != state.get('url'):
                     raise ValueError('重新绑定时不能更改云端地址')
-                state = {'state':'configured', 'url':url.rstrip('/'), 'autoStart':auto, 'name':name, 'requestId':request_id, 'control':control,'permissions':allowed}
+                state = {'state':'configured', 'url':url.rstrip('/'), 'autoStart':auto, 'name':name, 'requestId':request_id, 'control':control,'permissions':allowed, 'targetAccount':data.get('targetAccount')}
                 if replacement: state['replacement'] = replacement
                 save_json(path, state)
                 from .workspace_access import CAPABILITIES
-                if data.get('sourceDirectory'):
-                    from .members_cli import binding
-                    source_url, source = binding(data['sourceDirectory'], data.get('sourceBindingId'))
-                    if source_url != state['url']: raise ValueError('账号必须来自同一云端')
-                    result = request(state['url'], 'known', {'name':name,'permissions':allowed,
-                        'source':source,'accountId':data.get('accountId'),'requestId':request_id})
-                    install_binding(directory, {'enabled':True,'url':'wss'+state['url'][5:]+'/device',
-                        'deviceId':result.get('deviceId'),'token':result.get('token'),'control':control}, state.get('replacement'))
-                    state.update(state='bound', account=result.get('account'),deviceId=result['deviceId']); save_json(path,state)
-                    return exchange_ready(directory, state, action)
-                pending = request(state['url'], 'start', {'name':name, 'permissions':allowed})
+                pending = request(state['url'], 'start', {'name':name, 'permissions':allowed,
+                    **({'targetAccount':data['targetAccount']} if data.get('targetAccount') else {})})
                 if not all(isinstance(pending.get(k), str) for k in ('id','secret','url')) or not isinstance(pending.get('expiresAt'), (float,int)):
                     raise ValueError('绑定响应无效')
                 if not pending['url'].startswith(state['url']+'/#carryon-bind='): raise ValueError('绑定地址与当前云端不一致')
@@ -186,6 +177,9 @@ def exchange(directory, data):
         if action == 'poll' and state.get('pending'):
             pending = state['pending']
             result = pending.get('confirmed') or request(state['url'], 'poll', {'id':pending['id'], 'secret':pending['secret']})
+            if result.get('state') == 'rejected':
+                state.pop('pending'); state['state'] = 'configured'; save_json(path,state)
+                raise ValueError('目标账号已拒绝绑定申请')
             if result.get('state') == 'bound':
                 config = {'enabled':True,'url':'wss'+state['url'][5:]+'/device',
                           'deviceId':result.get('deviceId'),'token':result.get('token'),'control':state['control']}
@@ -210,7 +204,7 @@ def exchange_ready(directory, state, action):
     from .services import records
     import sys
     saved = records().get(str(directory), {})
-    codex = workspace_codex_home(directory, saved.get('codexHome'))
+    codex = Path(saved.get('codexHome', default_codex_home()))
     if action in ('prepare','poll') and state['state'] == 'bound' and state.get('autoStart', True):
         saved = records()[str(directory)]
         with contextlib.redirect_stdout(io.StringIO()):
@@ -218,38 +212,13 @@ def exchange_ready(directory, state, action):
     info = running(directory)
     bridge = call(directory, '/status') if info else {}
     cloud = call(directory, '/cloud') if info else {}
-    return {k:v for k,v in {**state, 'url':state.get('url') or DEFAULT_CLOUD_URL, 'pending':None,
+    return {k:v for k,v in {**state, 'url':state.get('url', cloud_url()), 'pending':None,
             'environment': {'supportedPlatform':sys.platform == 'darwin', 'codexHome':str(codex),
-                            'backend':workspace_backend(directory), 'ipcAvailable':(codex/'ipc/ipc.sock').exists(), 'databaseAvailable':any(codex.glob('state_*.sqlite'))},
+                            'ipcAvailable':(codex/'ipc/ipc.sock').exists(), 'databaseAvailable':any(codex.glob('state_*.sqlite')), 'backend':saved.get('backend','ipc')},
             'confirmedAccount':state.get('pending', {}).get('confirmed', {}).get('account'),
-            'qrURL':None if state.get('pending', {}).get('confirmed') else state.get('pending', {}).get('url'), 'running':bool(info),
-            'accountReady':bridge.get('accountReady'),
-            'bridgeConnected':bool(bridge.get('enabled')) and bridge.get('accountReady', True), 'cloudConnected':bool(cloud.get('connected'))}.items() if k not in ('pending', 'replacement')}
-
-def known_accounts(url):
-    from .services import records
-    from .members_cli import binding, exchange as members
-    if not isinstance(url, str): raise ValueError('云端地址无效')
-    result, warnings = {}, []
-    for directory in records():
-        path = Path(directory)/'cloud.json'
-        if not path.exists(): continue
-        from .cloud_manager import CloudManager
-        bindings = CloudManager.saved_bindings(directory)
-        for ident in bindings:
-            if bindings[ident].get('url') != 'wss'+url.rstrip('/')[5:]+'/device': continue
-            source_url, _ = binding(directory, ident)
-            if source_url != url.rstrip('/'): continue
-            try:
-                values = members(directory, {'action':'list','bindingId':ident})
-            except (OSError, ValueError):
-                warnings.append('一个已有工作区的账号暂不可用，可继续扫码绑定。')
-                continue
-            for row in values['members']:
-                account = row['account']
-                result.setdefault(account['id'], {**account,'sourceDirectory':directory,'sourceBindingId':ident})
-    return {'accounts':list(result.values()), 'warnings':list(dict.fromkeys(warnings))}
-
+            'bindingMode':state.get('pending', {}).get('mode', 'scan'),
+            'qrURL':None if state.get('pending', {}).get('confirmed') or state.get('pending', {}).get('mode') == 'target' else state.get('pending', {}).get('url'), 'running':bool(info),
+            'bridgeConnected':bool(bridge.get('enabled')) and bridge.get('accountAuthenticated',True), 'codexAccountAuthenticated':bridge.get('accountAuthenticated'), 'cloudConnected':bool(cloud.get('connected'))}.items() if k not in ('pending', 'replacement')}
 
 def command(args):
     import sys
@@ -267,23 +236,14 @@ def command(args):
         print('尚未发现运行中的 Codex App；可以先绑定，启动服务后将等待 Codex。')
     if state['state'] != 'bound':
         if state['state'] != 'waiting':
-            url = args.url or state.get('url') or DEFAULT_CLOUD_URL
+            url = args.url or state.get('url') or cloud_url()
             auto = input('绑定完成后自动启动服务？[Y/n]：').strip().lower() != 'n'
             control = input('允许在手机上操作会话（发送、停止、编辑和审批）？[y/N]：').strip().lower() == 'y'
-            known = known_accounts(url)
-            accounts = known['accounts']
-            for warning in known['warnings']: print(warning)
-            selected = {}
-            if accounts:
-                print('0. 使用其他账号扫码绑定')
-                for index, account in enumerate(accounts, 1): print(str(index)+'. '+account['username'])
-                choice = input('选择已确认账号，或回车扫码：').strip()
-                if choice and choice != '0':
-                    if not choice.isdecimal() or not 1 <= int(choice) <= len(accounts): raise ValueError('账号选择无效')
-                    selected = accounts[int(choice)-1]
+            target = input('目标账号（回车使用手机扫码绑定）：').strip()
             state = exchange(args.state_dir, {'action':'prepare','url':url,'autoStart':auto,'control':control,
                 **({'permissions':args.permissions.split(',')} if args.permissions else {}),
-                **({'accountId':selected['id'],'sourceDirectory':selected['sourceDirectory'],'sourceBindingId':selected['sourceBindingId']} if selected else {})})
+                **({'targetAccount':target} if target else {})})
+            if target: print('请在目标账号的手机上核对工作区和权限，确认绑定。')
         if state.get('qrURL'):
             print(terminal_qr(state['qrURL']))
             print('请在已登录的 CarryOn App 中扫码，核对工作区及权限后确认。')

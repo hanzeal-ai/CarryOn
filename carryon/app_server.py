@@ -26,6 +26,14 @@ def native_turn(turn):
             'items': [item for item in items if item.get('type') != 'userMessage']}
 
 
+def project(thread, requests=()):
+    return NativeSnapshot({'id':thread['id'], 'title':thread.get('name') or thread.get('preview',''),
+        'cwd':thread.get('cwd',''), 'turns':[native_turn(t) for t in thread.get('turns',[])],
+        'requests':list(requests), 'threadRuntimeStatus':thread.get('status',{'type':'notLoaded'}),
+        'supportedOperations':sorted(AppServer.supported_operations),
+        'latestThreadSettings':{'model':thread.get('model'),'reasoningEffort':thread.get('reasoningEffort')}})
+
+
 class AppServer:
     protocol = 'codex-app-server'
     supported_operations = {'interrupt', 'steer', 'compact', 'command-approval', 'file-approval',
@@ -58,8 +66,6 @@ class AppServer:
         self.home_lock = (self.home / '.carryon-app-server.lock').open('a+')
         try:
             fcntl.flock(self.home_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            from .workspace_seed import seed
-            seed(self.home)
             with (self.home / 'app-server.log').open('ab') as log:
                 self.process = subprocess.Popen([executable(), 'app-server', '--listen', 'stdio://'],
                     cwd=str(self.home), env=dict(os.environ, CODEX_HOME=str(self.home)),
@@ -212,6 +218,10 @@ class AppServer:
 
     def _event(self, event):
         params = event.get('params', {})
+        if event['method'] == 'account/updated':
+            self.account_ready = bool(params.get('authMode'))
+            self.on_change()
+            return
         tid = params.get('threadId') or params.get('thread', {}).get('id')
         if 'id' in event and event['method'] not in {
                 'item/commandExecution/requestApproval', 'item/fileChange/requestApproval',

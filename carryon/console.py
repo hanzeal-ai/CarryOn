@@ -38,9 +38,7 @@ class ConsoleServer(Gateway):
         parsed=urlsplit(self.public_url)
         self.origin=parsed.scheme+'://'+parsed.netloc
         self.prefix=parsed.path.rstrip('/')
-        from .linking import LinkRequests
-        self.links=LinkRequests(Path(state_dir)/'link-history.json' if state_dir is not None else None)
-        self.sessions=self.auth.load_sessions();self.codes={};self.console_streams={};self.auth_lock=threading.RLock()
+        self.sessions=self.auth.load_sessions();self.console_streams={};self.auth_lock=threading.RLock()
         import copy
         config=copy.deepcopy(config)
         self.registry_path=Path(state_dir)/'devices.json' if state_dir is not None else None
@@ -66,7 +64,7 @@ class ConsoleServer(Gateway):
         updated.attempts=self.auth.attempts
         self.auth=updated
         # Persisted sessions are bound to the old authority and cannot restore.
-        self.sessions={};self.codes={}
+        self.sessions={}
         for sid in list(self.console_streams):self.release_stream(sid)
 
     def account_request(self, action, data):
@@ -100,6 +98,29 @@ class ConsoleServer(Gateway):
                 self.replace_auth(self.account_settings.effective())
             return {'configured':True,'changed':True}
 
+    def change_password(self, key, data):
+        with self.auth_lock:
+            identity = self.auth.identity(key)
+            username = self.auth.profile(identity)['username']
+            if self.auth.verify({'username':username, 'password':data.get('currentPassword')}) != identity:
+                raise PermissionError('当前密码不正确')
+            record = password_record(username, data.get('password'))
+            if identity == 'owner':
+                self.account_request('change', {'currentUsername':username, 'currentPassword':data.get('currentPassword'),
+                                               'username':username, 'password':data.get('password')})
+            else:
+                users = {**self.auth.users, identity:record}
+                if self.auth.users_path: save_json(self.auth.users_path, users)
+                self.auth.users = users
+                revoked = {session for session in self.sessions if self.auth.identity(session) == identity}
+                for stream, value in list(self.console_streams.items()):
+                    if value['session'] in revoked: self.release_stream(stream)
+                for session in revoked:
+                    self.sessions.pop(session, None)
+                    self.auth.identities.pop(session, None)
+                self.auth.save_sessions(self.sessions)
+            return {'changed':True}
+
     def server_close(self):
         if getattr(self,'push',None):self.push.close()
         super().server_close()
@@ -107,22 +128,6 @@ class ConsoleServer(Gateway):
     def save_devices(self,records):
         if self.registry_path:save_json(self.registry_path,records)
         self.config['devices']=records
-
-    def approve_link(self,key,device=None):
-        with self.links.lock, self.lock:
-            entry=self.links.get(key)
-            if entry['rejected']:raise ValueError('连接申请已拒绝')
-            if entry['name'] is None:
-                if not isinstance(device,str) or device not in self.config['devices']:raise PermissionError('设备未授权')
-                self.links.approve(key,device)
-                return device
-            if entry['device'] is not None:return entry['device']
-            if len(self.config['devices'])>=256:raise ValueError('最多登记 256 台设备')
-            device=secrets.token_hex(16)
-            record={'name':entry['name'],'deviceToken':secrets.token_urlsafe(32),'apiToken':secrets.token_urlsafe(32)}
-            self.save_devices({**self.config['devices'],device:record})
-            self.links.approve(key,device)
-            return device
 
     def revoke_device(self,device):
         import socket
@@ -136,14 +141,12 @@ class ConsoleServer(Gateway):
                 except (AttributeError,OSError):pass
         with self.auth_lock:
             streams=[sid for sid,e in self.console_streams.items() if e['device']==device]
-            self.codes={k:v for k,v in self.codes.items() if v[0]!=device}
         for sid in streams:self.release_stream(sid)
         if self.push:self.push.revoke(device)
 
     def prune(self):
         now=time.monotonic()
         self.sessions={k:v for k,v in self.sessions.items() if v>now}
-        self.codes={k:v for k,v in self.codes.items() if v[1]>now}
         self.auth.prune(self.sessions)
 
 
@@ -279,31 +282,10 @@ class ConsoleHandler(Handler):
                 except OSError:
                     self.reply(503,{'error':'无法确认云端账号设置结果，请检查存储状态并核对登录'});return
                 self.reply(200,result);return
-            # Redemption is a CLI exchange protected by a high-entropy single-use code.
-            if path=='/console/redeem' and method=='POST':
-                if self.headers.get('Origin'):raise PermissionError('请在本机 CarryOn 完成配对')
-                code=self.body().get('code','')
-                if not isinstance(code,str):raise ValueError('无效配对码')
-                with self.server.auth_lock:
-                    self.server.prune();entry=self.server.codes.pop(hashlib.sha256(code.encode()).hexdigest(),None)
-                if entry is None:raise PermissionError('配对码无效或已过期')
-                device=entry[0]
-                self.reply(200,{'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
-            if path in ('/console/link/start','/console/link/poll') and method=='POST':
-                if self.headers.get('Origin'):raise PermissionError('请在本机发起连接')
-                data=self.body()
-                if path.endswith('/start'):
-                    self.reply(200,self.server.links.start(data.get('name')));return
-                device=self.server.links.poll(data.get('id'),data.get('secret'))
-                self.reply(200,{'pending':True} if device is None else {'deviceId':device,'token':self.server.config['devices'][device]['deviceToken']});return
             if path == '/console/binding/manage' and method == 'POST':
                 if self.headers.get('Origin'): raise PermissionError('请在电脑端管理授权')
                 from .member_management import manage
                 self.reply(200, manage(self.server, self.body())); return
-            if path == '/console/binding/known' and method == 'POST':
-                if self.headers.get('Origin'): raise PermissionError('请在电脑端管理授权')
-                self.server.binding_invites.throttle(self.client_address[0])
-                self.reply(200, self.server.binding_invites.bind_known(self.body())); return
             if path in ('/console/binding/start', '/console/binding/poll', '/console/binding/cancel') and method == 'POST':
                 if self.headers.get('Origin'): raise PermissionError('请在电脑端发起绑定')
                 if path.endswith('/start'): self.server.binding_invites.throttle(self.client_address[0])
@@ -344,14 +326,16 @@ class ConsoleHandler(Handler):
                     self.reply(200,{'state':entry['state']});return
             key=self.session_key()
             if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path == '/console/password' and method == 'POST':
+                self.reply(200, self.server.change_password(key, self.body())); return
+            if path == '/console/binding/pending' and method == 'GET':
+                self.reply(200, self.server.binding_invites.pending(self.server.auth.identity(key))); return
+            if path == '/console/binding/respond' and method == 'POST':
+                self.reply(200, self.server.binding_invites.accept_target(self.body(), self.server.auth.identity(key))); return
             if path in ('/console/binding/inspect', '/console/binding/accept') and method == 'POST':
                 action = self.server.binding_invites.inspect if path.endswith('/inspect') else self.server.binding_invites.accept
                 self.reply(200, action(self.body(), self.server.auth.identity(key))); return
             from .workspace_access import granted, require, capability
-            if path == '/console/link/pending' and method == 'GET' and self.server.auth.identity(key) != 'owner':
-                self.reply(200, {'requests':[], 'history':[], 'historyError':None}); return
-            if (path.startswith('/console/link/') or path == '/console/pairing') and self.server.auth.identity(key) != 'owner':
-                raise PermissionError('请使用工作区邀请二维码连接')
             if path.startswith('/console/qr/') and method=='POST':
                 action=path.rsplit('/',1)[-1];data=self.body()
                 with self.server.auth_lock:
@@ -374,22 +358,6 @@ class ConsoleHandler(Handler):
                 else:
                     self.server.push.unregister(data.get('installationId'),key,data.get('revision'));result={'removed':True}
                 self.reply(200,result);return
-            if path=='/console/link/inspect' and method=='POST':
-                with self.server.links.lock:
-                    entry=self.server.links.get(self.body().get('id'))
-                    self.reply(200,{'verification':entry['verification']})
-                return
-            if path=='/console/link/approve' and method=='POST':
-                data=self.body()
-                if data.get('deviceId') is not None: require(self.server,key,data['deviceId'])
-                device=self.server.approve_link(data.get('id'),data.get('deviceId'))
-                self.reply(200,{'approved':True,'deviceId':device});return
-            if path=='/console/link/pending' and method=='GET':
-                self.reply(200,{'requests':self.server.links.pending(),'history':self.server.links.history_snapshot(),'historyError':self.server.links.history_error});return
-            if path=='/console/link/history' and method=='DELETE':
-                self.server.links.clear_history();self.reply(200,{'cleared':True});return
-            if path=='/console/link/reject' and method=='POST':
-                self.server.links.reject(self.body().get('id'));self.reply(200,{'rejected':True});return
             if path=='/console/logout' and method=='POST':
                 data=self.body() if self.headers.get('Transfer-Encoding') or int(self.headers.get('Content-Length','0')) else {}
                 with self.server.auth_lock:
@@ -409,16 +377,6 @@ class ConsoleHandler(Handler):
                     devices=[{'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed,
                               'permissions':granted(self.server,key,d)} for d in self.server.config['devices'] if 'view' in granted(self.server,key,d)]
                 self.reply(200,{'devices':devices,'publicUrl':self.server.public_url,'account':self.server.auth.profile(self.server.auth.identity(key))});return
-            if path=='/console/pairing' and method=='POST':
-                device=self.body().get('deviceId')
-                if not isinstance(device,str) or device not in self.server.config['devices']:raise ValueError('设备不存在')
-                require(self.server, key, device)
-                code=secrets.token_urlsafe(24)
-                with self.server.auth_lock:
-                    self.server.prune()
-                    if len(self.server.codes)>=64:raise ValueError('配对码过多')
-                    self.server.codes[hashlib.sha256(code.encode()).hexdigest()]=(device,time.monotonic()+300)
-                self.reply(200,{'code':code,'expiresIn':300,'publicUrl':self.server.public_url});return
             if path.startswith('/console/devices/'):
                 parts=path.split('/')
                 if len(parts)<4 or not ID.fullmatch(parts[3]) or parts[3] not in self.server.config['devices']:

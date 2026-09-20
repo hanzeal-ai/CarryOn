@@ -41,14 +41,12 @@ class ServiceCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):register(self.root/'new')
         self.assertEqual(p.read_text(),'{bad')
 
-    def test_import_running_directory_preserves_actual_startup_parameters(self):
-        import io
-        from contextlib import redirect_stdout
-        from carryon.cli import main
+    def test_discovered_running_directory_preserves_actual_startup_parameters(self):
         active={'port':8779,'codexHome':str(self.root/'actual-codex')}
-        with patch('carryon.cli.running',return_value=active),redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['services','add','--state-dir',str(self.root/'existing'),'--name','Existing','--port','0']),0)
-        entry=records()[str(self.root/'existing')]
+        existing=str(self.root/'existing')
+        with patch('carryon.cli.running',return_value=active), patch('carryon.services.process_directories',return_value={existing}):
+            list_services(existing)
+        entry=records()[existing]
         self.assertEqual(entry['port'],8779)
         self.assertEqual(entry['codexHome'],active['codexHome'])
 
@@ -69,14 +67,6 @@ class ServiceCatalogTests(unittest.TestCase):
         with patch('carryon.cli.running',return_value={'instanceId':'active'}):
             with self.assertRaisesRegex(ValueError,'先停止'):remove(a)
         self.assertEqual(records(),before)
-
-    def test_new_workspace_ignores_inherited_codex_home(self):
-        import io
-        from contextlib import redirect_stdout
-        from carryon.cli import main
-        with patch.dict(os.environ, {'CODEX_HOME':str(self.root/'actual-codex')}), patch('carryon.cli.running',return_value=None),redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['services','add','--state-dir',str(self.root/'new')]),0)
-        self.assertEqual(records()[str(self.root/'new')]['codexHome'],str(self.root/'new/codex-home'))
 
     def test_last_default_workspace_stays_removed(self):
         directory=self.root/'default'

@@ -23,6 +23,9 @@ if mode == "alignment":
         handle.write("\nextension AppModel { func fixtureClient(_ client: ConsoleAPI) { api = client } }\n")
 project = source / "CarryOn.xcodeproj/project.pbxproj"
 project.write_text(project.read_text().replace("com.hanzeal.carryon", "com.hanzeal.carryon." + mode + "regression"))
+# The project bundles its product configuration from the adjacent package.
+(work / "carryon").mkdir(exist_ok=True)
+shutil.copy2(repo / "carryon/product.json", work / "carryon/product.json")
 device = sys.argv[1]
 with (work / "build.log").open("w") as log:
     subprocess.run(["xcodebuild", "-project", str(source / "CarryOn.xcodeproj"), "-scheme", "CarryOn",

@@ -23,7 +23,7 @@ def records():
     return data['services']
 
 
-def register(directory, *, name=None, port=None, codex_home=None):
+def register(directory, *, name=None, port=None, codex_home=None, backend=None):
     directory=str(Path(directory).expanduser().resolve())
     if name is not None and (not isinstance(name,str) or not name.strip() or len(name)>100):raise ValueError('工作区名称应为 1–100 个字符')
     if port is not None and (type(port) is not int or not 0<=port<=65535):raise ValueError('端口无效')
@@ -31,14 +31,24 @@ def register(directory, *, name=None, port=None, codex_home=None):
     with (root/'services.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         data=records();previous=data.get(directory,{})
+        if previous.get('backend') == 'app-server':
+            if codex_home is not None and str(Path(codex_home).expanduser().resolve()) != previous['codexHome']:
+                raise ValueError('独立工作区的 Codex 目录不能更改')
+            if backend not in (None, 'app-server'): raise ValueError('独立工作区的后端不能更改')
         entry={**previous,'removed':False,'directory':directory,'name':name.strip() if name is not None else previous.get('name',Path(directory).name)}
         if port is not None:entry['port']=port
-        entry['backend'] = previous.get('backend') or workspace_backend(directory)
-        entry['codexHome'] = str(workspace_codex_home(directory, codex_home or previous.get('codexHome')))
+        if codex_home is not None:entry['codexHome']=str(Path(codex_home).expanduser().resolve())
+        if backend is not None:
+            if backend not in ('ipc','app-server'): raise ValueError('工作区后端无效')
+            entry['backend']=backend
+        if 'backend' not in entry: entry['backend'] = workspace_backend(directory)
         if entry['backend'] == 'app-server':
+            entry['codexHome'] = str(workspace_codex_home(directory, entry.get('codexHome')))
             for other, saved in data.items():
-                if other != directory and not saved.get('removed') and workspace_codex_home(other, saved.get('codexHome')) == Path(entry['codexHome']):
+                if other != directory and not saved.get('removed') and saved.get('codexHome') and Path(saved['codexHome']).resolve() == Path(entry['codexHome']):
                     raise ValueError('此 Codex 目录已被其他工作区使用，请选择独立目录')
+        elif 'codexHome' not in entry:
+            entry['codexHome'] = str(workspace_codex_home(directory))
         data[directory]=entry
         save_json(root/'services.json',{'version':1,'services':data})
     return entry
@@ -49,14 +59,19 @@ def remove(directory):
     from .cli import running
     directory = str(Path(directory).expanduser().resolve())
     root = private_dir(catalog_directory())
-    with (root/'services.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if running(Path(directory)):
-            raise ValueError('请先停止此工作区的服务，再删除工作区')
-        data = records()
-        # Keep a tombstone so the implicit default/current candidate stays removed.
-        data[directory] = {**data.get(directory, {}), 'directory': directory, 'removed': True}
-        save_json(root/'services.json', {'version': 1, 'services': data})
+    workspace = private_dir(Path(directory))
+    with (workspace/'launcher.lock').open('a+') as launcher, (workspace/'server.lock').open('a+') as service:
+        fcntl.flock(launcher, fcntl.LOCK_EX)
+        try: fcntl.flock(service, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('请先停止此工作区的服务，再删除工作区') from None
+        with (root/'services.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if running(Path(directory)):
+                raise ValueError('请先停止此工作区的服务，再删除工作区')
+            data = records()
+            # Tombstone prevents implicit discovery from restoring a removed entry.
+            data[directory] = {**data.get(directory, {}), 'directory': directory, 'removed': True}
+            save_json(root/'services.json', {'version': 1, 'services': data})
     return {'removed': True, 'directory': directory}
 
 

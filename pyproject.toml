@@ -22,4 +22,4 @@ carryon-console = "carryon.console:main"
 packages = ["carryon"]
 
 [tool.setuptools.package-data]
-carryon = ["native_contracts.json", "web/*"]
+carryon = ["native_contracts.json", "product.json", "web/*"]

@@ -7,7 +7,6 @@ import CoreImage.CIFilterBuiltins
     var rebind: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var members: [[String: Any]] = []
-    @State private var knownAccounts: [[String: Any]] = []
     @State private var selected = ""
     @State private var permissions: Set<String> = ["view"]
     @State private var invitation: [String: Any]?
@@ -29,23 +28,9 @@ import CoreImage.CIFilterBuiltins
                         let account = members[index]["account"] as? [String:Any] ?? [:]
                         Text(account["username"] as? String ?? "").tag(account["id"] as? String ?? "")
                     }
-                    ForEach(knownAccounts.indices, id: \.self) { index in
-                        let account = knownAccounts[index]
-                        if !members.contains(where: { ($0["account"] as? [String: Any])?["id"] as? String == account["id"] as? String }) {
-                            Text((account["username"] as? String ?? "") + "（已确认账号）").tag(account["id"] as? String ?? "")
-                        }
-                    }
                 }.onChange(of: selected) { _ in
                     permissions = Set(members.first(where: { ($0["account"] as? [String:Any])?["id"] as? String == selected })?["permissions"] as? [String] ?? ["view"])
                 }
-                Button("从已确认账号选择") { Task {
-                    busy = true; defer { busy = false }
-                    if let result = await exchange(["action":"known-accounts"]) {
-                        knownAccounts = result["accounts"] as? [[String: Any]] ?? []
-                        message = (result["warnings"] as? [String] ?? []).joined(separator: "\n")
-                        if knownAccounts.isEmpty && message.isEmpty { message = "此云端暂无其他已确认账号。" }
-                    }
-                } }
                 ForEach(fields, id: \.0) { key, label in
                     Toggle(label, isOn: Binding(get: { permissions.contains(key) }, set: { value in
                         if value { permissions.insert(key); permissions.insert("view") } else { permissions.remove(key) }
@@ -114,11 +99,7 @@ import CoreImage.CIFilterBuiltins
                 }
             }
         } else {
-            var fields: [String: Any] = ["action":"grant","accountId":selected,"permissions":permissions.sorted()]
-            if !isMember, let source = knownAccounts.first(where: { $0["id"] as? String == selected }) {
-                fields["sourceDirectory"] = source["sourceDirectory"]
-                fields["sourceBindingId"] = source["sourceBindingId"]
-            }
+            let fields: [String: Any] = ["action":"grant","accountId":selected,"permissions":permissions.sorted()]
             if await exchange(fields) != nil { message = "权限已保存"; await load() }
         }
     }

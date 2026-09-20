@@ -215,6 +215,6 @@ struct ActivityView: View {
                     .background(Design.surface, in: RoundedRectangle(cornerRadius: Design.corner)).padding(.horizontal, 20).padding(.top, 12)
             }
             RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true) { model.open($0) }
-        }.sheet(isPresented: $links) { ConnectionRequestsView() }
+        }.sheet(isPresented: $links) { NavigationStack { ScrollView { WorkspaceBindingRequests().padding(20) }.navigationTitle("连接申请") } }
     }
 }

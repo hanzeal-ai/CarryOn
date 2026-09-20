@@ -10,7 +10,6 @@ from carryon.console import ConsoleServer, public_url
 from carryon.cloud import CloudConnector
 from carryon.bridge import Bridge
 from carryon.store import Journal
-from carryon.pairing import redeem
 from test_cloud import Catalog, IPC, T
 
 class ConsoleTests(unittest.TestCase):
@@ -25,6 +24,9 @@ class ConsoleTests(unittest.TestCase):
         self.worker=threading.Thread(target=self.server.serve_forever,daemon=True);self.worker.start()
         self.cookie='';self.journal=Journal(self.root/'journal.sqlite')
         self.bridge=Bridge('fake',Catalog(),self.journal,IPC);self.connector=CloudConnector(self.bridge,self.root)
+    def device_config(self):
+        return {'enabled':True,'url':self.url.replace('http:','ws:')+'/device','deviceId':'my-mac',
+                'token':self.config['devices']['my-mac']['deviceToken'],'control':False,'devLocal':True}
     def tearDown(self):
         self.connector.stop();self.bridge.disable()
         if self.bridge.realtime:
@@ -54,30 +56,12 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(self.call('GET','/console/devices/not-owned')[0],403)
         old=self.cookie;self.assertEqual(self.call('POST','/console/logout',{})[0],200)
         self.cookie=old;self.assertEqual(self.call('GET','/console/session')[0],401)
-    def test_link_history_auth_and_clear_preserves_devices_and_pending(self):
-        self.assertEqual(self.call('DELETE','/console/link/history')[0],401)
-        self.login()
-        done=self.server.links.start('Done');pending=self.server.links.start('Pending')
-        self.server.links.reject(done['id'])
-        body=self.call('GET','/console/link/pending')[1]
-        self.assertEqual(body['history'][0]['result'],'rejected')
-        self.assertNotIn('secret',json.dumps(body))
-        self.assertEqual(self.call('DELETE','/console/link/history',origin='https://evil.test')[0],403)
-        devices=dict(self.server.config['devices'])
-        self.assertEqual(self.call('DELETE','/console/link/history')[0],200)
-        body=self.call('GET','/console/link/pending')[1]
-        self.assertEqual(body['history'],[])
-        self.assertEqual(body['requests'][0]['id'],pending['id'])
-        self.assertEqual(self.server.config['devices'],devices)
-
-    def test_pairing_once_and_end_to_end_read_only(self):
-        self.login();code=self.call('POST','/console/pairing',{'deviceId':'my-mac'})[1]['code']
-        config=redeem(self.url,code,dev_local=True)
+    def test_end_to_end_read_only(self):
+        self.login();config=self.device_config()
         self.assertFalse(config['control']);self.connector.configure(config);self.bridge.enable()
         end=time.monotonic()+4
         while not self.connector.status()['connected'] and time.monotonic()<end:time.sleep(.02)
         self.assertTrue(self.connector.status()['connected'])
-        with self.assertRaises(Exception):redeem(self.url,code,dev_local=True)
         route='/console/devices/my-mac/request'
         self.assertEqual(self.call('POST',route,{'method':'GET','path':'/api/threads'})[1]['threads'][0]['id'],T)
         self.assertEqual(self.call('POST',route,{'method':'POST','path':'/api/bridge','body':{'enabled':True}})[0],403)
@@ -97,11 +81,8 @@ class ConsoleTests(unittest.TestCase):
         end=time.monotonic()+3
         while 'my-mac' in self.server.devices and time.monotonic()<end:time.sleep(.02)
         self.assertEqual(self.call('POST',route,{'method':'GET','path':'/api/threads'})[0],503)
-    def test_pairing_expiry_and_static_example(self):
-        self.login();code=self.call('POST','/console/pairing',{'deviceId':'my-mac'})[1]['code']
-        with self.server.auth_lock:
-            self.server.codes={k:(v[0],0) for k,v in self.server.codes.items()}
-        self.assertEqual(self.call('POST','/console/redeem',{'code':code},False)[0],403)
+    def test_static_example(self):
+        self.login()
         page=self.call('GET','/example.html')[1]
         self.assertIn(b'console-mode.js',page)
         self.assertIn(b'CARRYON_CLOUD=true',self.call('GET','/console-mode.js')[1]);self.assertIn(b'cloud-console-client.js',page)

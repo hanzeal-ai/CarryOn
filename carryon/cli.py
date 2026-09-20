@@ -120,7 +120,6 @@ def main(argv=None):
     members.add_argument('--binding-id')
     members.add_argument('--account-id')
     members.add_argument('--permissions', help='逗号分隔：view,create,send,stop,edit,files,approve')
-    members.add_argument('--source-state-dir', type=Path, help='复用同一云端的已确认账号所在工作区')
     members.add_argument('--input-json', action='store_true')
     for name in ('start','serve','open','status','stop','doctor','cloud','bridge','standby','controller','notifications','services'):
         p = sub.add_parser(name)
@@ -132,10 +131,8 @@ def main(argv=None):
             p.add_argument('--no-open', action='store_true', default=True)
             p.add_argument('--open', dest='no_open', action='store_false')
         if name=='services':
-            p.add_argument('action',choices=['list','add','remove'])
+            p.add_argument('action',choices=['list','create','remove','login','auth-status','auth-start'])
             p.add_argument('--name')
-            p.add_argument('--port',type=int,default=0)
-            p.add_argument('--codex-home',type=Path)
         if name in ('bridge','standby'):p.add_argument('action',choices=['on','off','status'])
         if name == 'controller':
             p.add_argument('action',choices=['set','status'])
@@ -144,17 +141,14 @@ def main(argv=None):
             p.add_argument('action',choices=['status','set'])
             for kind in ('message','done','failed','approval'):p.add_argument('--'+kind,action=argparse.BooleanOptionalAction)
         if name == 'cloud':
-            p.add_argument('action', choices=['connect','pair','disconnect','status','control','link-status','account','qr'])
+            p.add_argument('action', choices=['disconnect','status','control','account','qr'])
             p.add_argument('account_action',nargs='?',choices=['status','setup','change'])
             p.add_argument('--input-json',action='store_true',help='账号设置从标准输入读取 JSON，不将密码放入命令行')
-            p.add_argument('--url', help='云端控制台 HTTPS 地址；connect 发起申请后由云端确认')
-            p.add_argument('--device-id', help='使用已有设备凭证连接时的设备 ID')
+            p.add_argument('--url', help='自定义云端 HTTPS 地址')
             p.add_argument('--binding-id',help='要断开的云端绑定 ID；多个绑定时必填')
-            p.add_argument('--token-file', type=Path)
             permission=p.add_mutually_exclusive_group()
             permission.add_argument('--allow-control', action='store_true', help='授权此网关投递、编辑、设置与审批等会话操作')
             permission.add_argument('--read-only',action='store_true',help='将已有云端绑定设为只读')
-            p.add_argument('--dev-local', action='store_true', help='仅用于本机 ws:// 网关测试')
     for name in ('update','uninstall'):
         p=sub.add_parser(name,help='更新 CLI' if name=='update' else '移除 CLI 命令入口，保留共享服务和数据')
         if name=='update':
@@ -176,18 +170,28 @@ def main(argv=None):
         if args.command in ('start', 'serve', 'doctor'):
             from .services import records
             saved = records().get(str(args.state_dir), {})
-            args.codex_home = workspace_codex_home(args.state_dir, args.codex_home or saved.get('codexHome'))
+            args.codex_home = (args.codex_home or Path(saved.get('codexHome', default_codex_home()))).expanduser().resolve()
             if hasattr(args, 'port') and args.port is None:
-                args.port = saved.get('port', 8769)
+                args.port = saved.get('port', 0)
         elif hasattr(args, 'codex_home'):
             args.codex_home = workspace_codex_home(args.state_dir, args.codex_home)
         if args.command=='services':
             from .services import list_services, register, remove
-            if args.action=='add':
-                private_dir(args.state_dir)
-                active=running(args.state_dir)
-                result=register(args.state_dir,name=args.name,port=active['port'] if active else args.port,
-                                codex_home=active['codexHome'] if active else args.codex_home)
+            if args.action=='create':
+                from .workspaces import create
+                result=create(args.name or '新工作区')
+                if sys.stdin.isatty():
+                    from types import SimpleNamespace
+                    from .onboarding import command as initialize
+                    return initialize(SimpleNamespace(state_dir=Path(result['directory']), input_json=False, url=None, permissions=None))
+            elif args.action in ('auth-start','auth-status'):
+                result=call(args.state_dir, '/codex-account', {} if args.action == 'auth-start' else None, timeout=25)
+            elif args.action=='login':
+                from .services import records
+                from .usage import executable
+                row=records().get(str(args.state_dir), {})
+                if row.get('backend') != 'app-server': raise ValueError('请在 Codex App 登录默认工作区')
+                return subprocess.call([executable(), 'login', '--device-auth'], env=dict(os.environ, CODEX_HOME=row['codexHome']), cwd=row['codexHome'])
             elif args.action=='remove':result=remove(args.state_dir)
             else:result=list_services(args.state_dir)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
@@ -200,7 +204,9 @@ def main(argv=None):
             run(args.port,args.codex_home,args.state_dir); return 0
         if args.command == 'doctor': return doctor(args)
         if args.command=='cloud' and args.action=='qr':
-            if not args.url:raise ValueError('需要 --url 指定云端 HTTPS 地址')
+            if not args.url:
+                from .product import cloud_url
+                args.url=cloud_url()
             from .qr_client import command as qr_command
             return qr_command(args)
         if args.command=='cloud' and args.action=='account':
@@ -239,31 +245,10 @@ def main(argv=None):
             print('CarryOn 已停止；Codex 已接收的任务不会被撤销。');return 0
         if args.command == 'cloud':
             if args.action=='status': result=call(args.state_dir,'/cloud')
-            elif args.action=='link-status':result=call(args.state_dir,'/cloud/link/status',timeout=20)
             elif args.action=='control':
                 if not (args.allow_control or args.read_only):raise ValueError('需要 --allow-control 或 --read-only 明确设置权限')
                 result=call(args.state_dir,'/cloud/control',{'id':args.binding_id,'control':args.allow_control},timeout=20)
             elif args.action=='disconnect':result=call(args.state_dir,'/cloud',{'enabled':False,'id':args.binding_id})
-            elif args.action=='pair':
-                from .pairing import redeem
-                code=args.token_file.read_text().strip() if args.token_file else getpass.getpass('一次性配对码（不回显）：')
-                config=redeem(args.url,code,args.allow_control,args.dev_local)
-                result=call(args.state_dir,'/cloud',config,timeout=20)
-            elif not args.device_id:
-                if not args.url:raise ValueError('需要 --url 指定云端控制台 HTTPS 地址')
-                if args.token_file or args.dev_local:
-                    raise ValueError('申请连接使用 HTTPS 地址，无需 Token；已有设备凭证连接需要 --device-id')
-                result=call(args.state_dir,'/cloud/link/start',{'url':args.url,'control':args.allow_control},timeout=20)
-                print('连接申请已提交，请在云端「连接申请」核对并确认。')
-                print('核对码：'+result['verification'])
-                print('云端链接：'+result['url'])
-                print('本地服务将在确认后自动完成绑定；申请有效期为五分钟，请保持本地服务运行。')
-                return 0
-            else:
-                if not args.url or not args.device_id:raise ValueError('需要 --url 和 --device-id')
-                token=args.token_file.read_text().strip() if args.token_file else getpass.getpass('设备 Token（不回显）：')
-                result=call(args.state_dir,'/cloud',{'enabled':True,'url':args.url,'deviceId':args.device_id,
-                    'token':token,'control':args.allow_control,'devLocal':args.dev_local})
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except urllib.error.HTTPError as exc:
         try: message=json.load(exc).get('error','请求失败')

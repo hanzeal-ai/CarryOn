@@ -29,30 +29,25 @@ class BindingInvites:
             if len(self.starts) > 1024: raise PermissionError('连接申请过多，请稍后重试')
             attempts.append(now)
 
-    def bind_known(self, data):
-        from .member_management import device_record
-        with self.lock, self.server.lock:
-            _, source = device_record(self.server, data.get('source', {}))
-            identity = data.get('accountId')
-            if identity not in source.get('members', {'owner':['view']}): raise PermissionError('账号尚未在此电脑确认')
-            key = self.digest(data.get('requestId'))
-            for ident, entry in self.entries.items():
-                if entry.get('knownRequest') == key and entry.get('knownSource') == data['source']['deviceId']:
-                    if entry.get('account') != identity or entry['permissions'] != permissions(data.get('permissions')):
-                        raise ValueError('初始化请求参数已改变')
-                    record = self.server.config['devices'].get(entry.get('deviceId'))
-                    if record is None: raise PermissionError('授权结果未确认或已撤销，请核对工作区')
-                    return {'state':'bound','deviceId':entry['deviceId'],'token':record['deviceToken'], 'account':self.server.auth.profile(identity)}
-            self.entries = {k:v for k,v in self.entries.items()
-                            if not v.get('knownRequest') or v.get('knownSource') in self.server.config['devices']}
-            if sum(bool(v.get('knownRequest')) for v in self.entries.values()) >= 1024:
-                raise ValueError('初始化历史已达上限，请核对已有工作区；不会重复创建')
-            result = self.start(data)
-            ident, scan = result['url'].split('#carryon-bind=')[1].split('.')
-            self.entries[ident].update(knownRequest=key, knownSource=data['source']['deviceId'])
-            self.save()
-            self.accept({'id':ident, 'secret':scan}, identity)
-            return self.poll({'id':ident,'secret':result['secret']})
+    def pending(self, identity):
+        with self.lock:
+            return {'requests': [dict(id=key, name=entry['name'], permissions=entry['permissions'],
+                    expiresAt=entry['expires'], account=self.server.auth.profile(identity))
+                for key, entry in self.entries.items()
+                if entry.get('targetAccount') == identity and entry['state'] == 'waiting'
+                and entry['expires'] > time.time()]}
+
+    def accept_target(self, data, identity):
+        with self.lock:
+            entry = self.entries.get(data.get('id'))
+            if not entry or entry.get('targetAccount') != identity:
+                raise PermissionError('绑定申请不属于当前账号')
+            if entry['expires'] <= time.time(): raise ValueError('绑定申请已过期')
+            if data.get('reject') is True:
+                if entry['state'] != 'waiting': raise ValueError('绑定申请已处理')
+                entry['state'] = 'rejected'; self.save()
+                return {'state':'rejected'}
+            return self._accept(entry, identity)
 
     def save(self):
         if self.path:
@@ -64,17 +59,26 @@ class BindingInvites:
             raise ValueError('工作区名称无效')
         allowed = permissions(data.get('permissions'))
         if 'view' not in allowed: raise ValueError('请选择查看工作区权限')
-        with self.lock:
-            self.entries = {k:v for k,v in self.entries.items() if v['expires'] > time.time() or v.get('knownRequest')}
-            if sum(v['expires'] > time.time() and v['state'] not in ('bound', 'cancelled') for v in self.entries.values()) >= 64:
+        with self.server.auth_lock, self.lock:
+            target = None
+            username = data.get('targetAccount')
+            if username is not None:
+                if not isinstance(username, str) or not username.strip(): raise ValueError('请输入目标账号')
+                candidates = {**self.server.auth.users}
+                if self.server.auth.account: candidates['owner'] = self.server.auth.account
+                target = next((key for key, account in candidates.items() if account['username'].casefold() == username.strip().casefold()), None)
+                if target is None: raise ValueError('无法向此账号发起申请，请核对账号或使用扫码绑定')
+            self.entries = {k:v for k,v in self.entries.items() if v['expires'] > time.time()}
+            if sum(v['expires'] > time.time() and v['state'] != 'bound' for v in self.entries.values()) >= 64:
                 raise ValueError('连接请求过多，请稍后重试')
             ident, poll, scan = secrets.token_urlsafe(24), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             self.entries[ident] = {'name': name.strip(), 'permissions': allowed,
                                   'poll': self.digest(poll), 'scan': self.digest(scan),
-                                  'expires': time.time()+300, 'state': 'waiting'}
+                                  'expires': time.time()+300, 'state': 'waiting', 'targetAccount': target}
             self.save()
             return {'id': ident, 'secret': poll, 'expiresAt': self.entries[ident]['expires'],
-                    'url': self.server.public_url+'/#carryon-bind='+ident+'.'+scan}
+                    'url': self.server.public_url+'/#carryon-bind='+ident+'.'+scan,
+                    'mode': 'target' if target else 'scan'}
 
     @staticmethod
     def digest(value):
@@ -118,14 +122,22 @@ class BindingInvites:
     def inspect(self, data, identity):
         with self.lock:
             entry = self.entry(data, 'scan')
+            if entry.get('targetAccount') not in (None, identity): raise PermissionError('绑定申请不属于当前账号')
             if entry.get('account') not in (None, identity): raise PermissionError('邀请已由其他账号确认')
             return {'name': entry['name'], 'permissions': entry['permissions'], 'state': entry['state'],
                     'account': self.server.auth.profile(identity)}
 
     def accept(self, data, identity):
-        with self.lock, self.server.lock:
-            entry = self.entry(data, 'scan')
+        with self.lock:
+            return self._accept(self.entry(data, 'scan'), identity)
+
+    def _accept(self, entry, identity):
+        with self.server.lock:
+            if entry.get('targetAccount') not in (None, identity): raise PermissionError('绑定申请不属于当前账号')
             if entry.get('account') not in (None, identity): raise PermissionError('邀请已由其他账号确认')
+            if entry['state'] == 'rejected': raise PermissionError('绑定申请已拒绝')
+            if entry['state'] not in ('waiting', 'accepted', 'bound'):
+                raise ValueError('绑定申请已取消或不可确认')
             if entry.get('workspaceId'):
                 if entry['workspaceId'] not in self.server.config['devices']: raise PermissionError('工作区已撤销')
                 if entry['state'] != 'bound':

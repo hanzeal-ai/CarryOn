@@ -98,11 +98,17 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.stream_slots.release()
                 return
             self.auth()
-            if method=='POST' and (path.startswith('/api/cloud') or path.startswith('/api/service') or path in ('/api/bridge','/api/controller','/api/notifications/preferences')):
+            if method=='POST' and (path.startswith('/api/cloud') or path.startswith('/api/service') or path in ('/api/codex-account','/api/bridge','/api/controller','/api/notifications/preferences')):
                 if self.headers.get('Origin') is not None or any(key.lower().startswith('sec-fetch-') for key in self.headers):
                     raise BridgeError('本机配置仅支持 CLI 或桌面端',403)
             bridge = self.server.bridge
             data = self.body() if method == "POST" else {}
+            if path == '/api/codex-account' and method in ('GET','POST'):
+                if bridge.status().get('backend') != 'app-server': raise ValueError('请在 Codex App 登录')
+                ipc, _ = bridge.require()
+                result = ipc.rpc('account/read', {'refreshToken':False}) if method == 'GET' else ipc.rpc('account/login/start', {'type':'chatgpt'})
+                self.reply(200,result); return
+
             if path == '/api/service' and method == 'GET':
                 self.reply(200, self.server.service_info)
                 return
@@ -119,19 +125,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/api/cloud/control' and method == 'POST':
                 self.reply(200,self.server.cloud.set_control(data.get('control'),data.get('id')));return
-            if path == '/api/cloud/link/status' and method == 'GET':
-                self.reply(200,self.server.local_link.status());return
-            if path == '/api/cloud/link/start' and method == 'POST':
-                self.reply(200,self.server.local_link.start(data.get('url'),data.get('control',False)));return
-            if path == '/api/cloud/link/poll' and method == 'POST':
-                self.reply(200,self.server.local_link.poll(data.get('id')));return
-            if path == '/api/cloud/pair' and method == 'POST':
-                from .pairing import redeem
-                config = redeem(data.get('url'),data.get('code'),data.get('control',False))
-                result=self.server.cloud.configure(config)
-                bridge.enable()
-                self.reply(200,result)
-                return
             if path == '/api/cloud' and method == 'POST':
                 self.reply(200, self.server.cloud.configure(data))
                 return
@@ -167,12 +160,17 @@ def run(port, codex_home, directory):
     codex_home = workspace_codex_home(directory, codex_home)
     os.umask(0o077)
     private_dir(directory)
+    from .workspaces import initialize
+    initialize(directory)
     lock = (directory / 'server.lock').open('a+')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         lock.close()
         raise ValueError('这个状态目录已有 CarryOn 实例运行')
+    from .services import records
+    if records().get(str(directory), {}).get('removed'):
+        lock.close(); raise ValueError('工作区已删除，未启动服务')
     token_file = directory / 'token'
     if token_file.exists():
         token = token_file.read_text().strip()
@@ -182,10 +180,20 @@ def run(port, codex_home, directory):
         token_file.write_text(token)
     token_file.chmod(0o600)
     journal = Journal(directory / 'jobs.sqlite')
-    if workspace_backend(directory) == 'app-server':
-        from .app_server import AppServer
-        bridge = Bridge(codex_home, Catalog(codex_home, independent=True), journal, ipc_factory=AppServer)
+    from .workspaces import backend
+    ipc_lock = None
+    if backend(directory) == 'app-server':
+        from .services import records
+        if Path(records()[str(directory)]['codexHome']).resolve() != codex_home.resolve():
+            raise ValueError('独立工作区必须使用创建时分配的 Codex 目录')
+        from .app_server_bridge import AppServerBridge
+        bridge = AppServerBridge(codex_home, journal)
     else:
+        from .services import catalog_directory
+        ipc_lock = (private_dir(catalog_directory())/'ipc-workspace.lock').open('a+')
+        try: fcntl.flock(ipc_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            ipc_lock.close(); raise ValueError('本机已有运行中的 Codex App 工作区') from None
         bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
     bridge.workspace_directory = directory
     from .lifecycle import BridgeLifecycle
@@ -202,8 +210,6 @@ def run(port, codex_home, directory):
     from .workspace import Workspace
     bridge.workspace=Workspace(bridge)
     server.cloud = CloudManager(bridge, directory)
-    from .pairing import LocalLink
-    server.local_link = LocalLink(server.cloud, bridge, background=True)
     save_json(directory/'service.json', server.service_info)
     print(f"CarryOn ready: http://127.0.0.1:{server.server_port}/", flush=True)
 
@@ -223,7 +229,6 @@ def run(port, codex_home, directory):
         bridge.lifecycle.close()
         bridge.workspace.close()
         server.standby.close()
-        server.local_link.close()
         server.cloud.stop()
         bridge.disable()
         if bridge.realtime:
@@ -236,11 +241,12 @@ def run(port, codex_home, directory):
         if record.exists() and json.loads(record.read_text()).get('instanceId') == server.service_info['instanceId']:
             record.unlink()
         lock.close()
+        if ipc_lock: ipc_lock.close()
 
 
 def main():
     parser = argparse.ArgumentParser(description='CarryOn 本地 Codex 桥接')
-    parser.add_argument('--port', type=int, default=8769)
+    parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--codex-home', type=Path, default=default_codex_home())
     parser.add_argument('--state-dir', type=Path, default=state_dir())
     args = parser.parse_args()

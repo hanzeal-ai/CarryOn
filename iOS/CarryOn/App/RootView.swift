@@ -11,6 +11,7 @@ struct RootView: View {
         @Bindable var model = model
         Group {
             if !model.restoringLogin && model.restorationError == nil && !model.authenticated { LoginView() }
+            else if model.authenticated && model.devices.isEmpty { WorkspaceConnectionHelp() }
             else {
               NavigationStack {
                 VStack(spacing: 0) {
@@ -124,6 +125,7 @@ struct LoginView: View {
                     .resizable().scaledToFit().frame(width: 112, height: 168)
                     .frame(maxWidth: .infinity).padding(.vertical, 8)
                     .accessibilityLabel("CarryOn")
+
                 VStack(alignment: .leading, spacing: 12) {
                     Text("账号").font(.caption).foregroundStyle(Design.secondary)
                     TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(Design.surface, in: RoundedRectangle(cornerRadius: Design.controlCorner))

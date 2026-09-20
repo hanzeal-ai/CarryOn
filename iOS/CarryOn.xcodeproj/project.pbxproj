@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B10000000000000000000001 = {isa = PBXBuildFile; fileRef = B10000000000000000000002; };
 		A00000000000000000000022 /* CarryOnCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000021 /* CarryOnCore */; };
 		A00000000000000000000032 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000031 /* MarkdownUI */; };
 		A00000000000000000000042 /* ExyteChat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000041 /* ExyteChat */; };
@@ -14,6 +15,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        B10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../carryon/product.json; sourceTree = SOURCE_ROOT; };
 		A00000000000000000000009 /* CarryOn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CarryOn.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -59,7 +61,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A00000000000000000000011 /* Build configuration list for PBXNativeTarget "CarryOn" */;
 			buildPhases = (
-				A00000000000000000000006 /* Sources */,
+                A00000000000000000000006 /* Sources */,
 				A00000000000000000000007 /* Frameworks */,
 				A00000000000000000000008 /* Resources */,
 			);
@@ -126,6 +128,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                B10000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,7 +175,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CARRYON_APNS_ENVIRONMENT = sandbox;
-				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
+				CARRYON_PUSH_ENTITLEMENTS = "CarryOn/CarryOn.entitlements";
+                CARRYON_APNS_ENVIRONMENT = development;
+                CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = MV673UW39G;
@@ -204,7 +209,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CARRYON_APNS_ENVIRONMENT = production;
-				CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
+				CARRYON_PUSH_ENTITLEMENTS = "CarryOn/CarryOn.entitlements";
+                CARRYON_APNS_ENVIRONMENT = production;
+                CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = MV673UW39G;

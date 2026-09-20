@@ -18,7 +18,8 @@ def workspace_backend(directory):
     from .services import records
     directory = Path(directory).expanduser().resolve()
     saved = records().get(str(directory), {}).get('backend')
-    if saved in ('desktop-ipc', 'app-server'): return saved
+    if saved in ('ipc', 'desktop-ipc'): return 'desktop-ipc'
+    if saved == 'app-server': return saved
     return 'desktop-ipc' if directory == state_dir().resolve() else 'app-server'
 
 

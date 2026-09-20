@@ -17,6 +17,7 @@ import AppKit
     @State private var nextBindingVerification = Date.distantPast
     @State private var setupRequired = false
     @State private var membersBinding: CloudBinding?
+    @State private var loginCodeBinding: CloudBinding?
     @State private var inviteBinding: CloudBinding?
 
     var body: some View {
@@ -48,12 +49,13 @@ import AppKit
         .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
         .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
         .sheet(isPresented: $initializing, onDismiss: { recoveryBindingID = nil; nextBindingVerification = .distantPast; Task { await refreshSetup() } }) { InitializationView(model: model, bindingID: recoveryBindingID).id(model.directory) }
-        .sheet(item: $inviteBinding) { binding in
-            RegistrationInviteView(model: model, bindingID: binding.id).id(model.directory)
-        }
         .sheet(item: $membersBinding, onDismiss: { if recoveryBindingID != nil { initializing = true } }) { binding in
             WorkspaceMembersView(model: model, bindingID: binding.id, rebind: { recoveryBindingID = binding.id }).id(model.directory)
         }
+        .sheet(item: $inviteBinding) { binding in
+            RegistrationInviteView(model: model, bindingID: binding.id).id(model.directory)
+        }
+        .sheet(item: $loginCodeBinding) { binding in AccountLoginCodeView(model: model, url: binding.url.replacingOccurrences(of: "wss://", with: "https://").replacingOccurrences(of: "/device", with: "")) }
         .sheet(isPresented: $adding, onDismiss: { Task { await refreshSetup() } }) { WorkspaceSetupView(model: model) }
         .sheet(isPresented: $connecting) { InitializationView(model: model).id(model.directory) }
         .alert("停止「\(model.selectedName)」的服务？", isPresented: $stopping) {
@@ -101,8 +103,7 @@ import AppKit
                                 Image(systemName: "laptopcomputer").font(.system(size: 20)).foregroundStyle(service.directory == model.directory ? DesktopDesign.blue : DesktopDesign.secondary).padding(.top, 3)
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(service.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                                    Text(shortPath(service.codexHome)).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary).lineLimit(1).truncationMode(.middle)
-                                    HStack(spacing: 5) { Circle().fill(service.running ? DesktopDesign.green : DesktopDesign.secondary).frame(width: 5, height: 5); Text(service.label + (service.running ? " · \(service.port)" : "")).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
+                                    HStack(spacing: 5) { Circle().fill(service.running ? DesktopDesign.green : DesktopDesign.secondary).frame(width: 5, height: 5); Text(service.label).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
                                 }; Spacer(minLength: 0)
                             }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(service.directory == model.directory ? Color.white : Color.clear, in: RoundedRectangle(cornerRadius: 13))
@@ -143,8 +144,7 @@ import AppKit
                 VStack(spacing: 13) {
                     Image(systemName: "laptopcomputer").font(.system(size: 48, weight: .ultraLight)).foregroundStyle(DesktopDesign.secondary)
                     Text(model.selectedName).font(.system(size: 23, weight: .semibold))
-                    Text(shortPath(model.codexHome)).font(.system(size: 11)).foregroundStyle(DesktopDesign.secondary).textSelection(.enabled)
-                    StatePill(label: model.running ? "服务运行中 · \(model.port)" : "服务未运行", active: model.running)
+                    StatePill(label: model.running ? "服务运行中" : "服务未运行", active: model.running)
                     HStack(spacing: 10) {
                         if model.running {
                             Button("打开会话") { Task { await model.perform(["open"]) } }.buttonStyle(AccentButton()).help("carryon open")
@@ -187,9 +187,10 @@ import AppKit
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 12) {
                             SymbolTile(name: "icloud", color: DesktopDesign.blue)
-                            VStack(alignment: .leading, spacing: 5) { Text(binding.url).font(.system(size: 12, weight: .medium)).textSelection(.enabled); StatePill(label: binding.connected ? "已连接" : "等待连接", active: binding.connected) }
+                            VStack(alignment: .leading, spacing: 5) { Text("云端连接").font(.system(size: 12, weight: .medium)); StatePill(label: binding.connected ? "已连接" : "等待连接", active: binding.connected) }
                             Spacer()
                             Menu {
+                                Button("生成账号登录码") { loginCodeBinding = binding }
                                 Button("检查绑定") { recoveryBindingID = binding.id; initializing = true }
                                 Button("解除绑定", role: .destructive) { removing = binding }
                             } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
@@ -204,16 +205,6 @@ import AppKit
                     }.padding(16).disabled(model.busy)
                     if binding.id != model.bindings.last?.id { RowDivider() }
                 }
-            }
-            if !model.linkDescription.isEmpty {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: model.linkIsError ? "exclamationmark.circle.fill" : "info.circle")
-                    Text(model.linkDescription).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    if model.linkCanRetry {
-                        Button("重新连接") { connecting = true }.buttonStyle(QuietButton()).disabled(model.busy)
-                    }
-                }.foregroundStyle(model.linkIsError ? Color.red : DesktopDesign.secondary)
-                    .padding(14).background((model.linkIsError ? Color.red : DesktopDesign.blue).opacity(0.06), in: RoundedRectangle(cornerRadius: 12)).padding(.top, 10)
             }
             SectionCaption(title: "任务与通知")
             Paper {
@@ -311,36 +302,17 @@ import AppKit
     @Environment(\.dismiss) private var dismiss
     @State private var configured = false
     @State private var name = "新工作区"
-    @State private var path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn/Workspaces/" + String(UUID().uuidString.prefix(8))).path
-    @State private var port = "0"
-    @State private var codex: String?
-    private var defaultCodexPath: String { URL(fileURLWithPath: path).appendingPathComponent("codex-home").path }
     var body: some View {
         if configured { InitializationView(model: model).id(model.directory) } else {
         VStack(alignment: .leading, spacing: 20) {
             HStack { SymbolTile(name: "plus", color: DesktopDesign.blue); Text("添加工作区").font(.title2.weight(.semibold)) }
             VStack(alignment: .leading, spacing: 10) {
                 Text("名称").font(.caption); TextField("工作区名称", text: $name)
-                Text("Codex 目录（CODEX_HOME）").font(.caption)
-                HStack { TextField("Codex 工作目录", text: Binding(get: { codex ?? defaultCodexPath }, set: { codex = $0 })); Button("选择…") {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
-                    if panel.runModal() == .OK, let url = panel.url { codex = url.path }
-                } }
-                DisclosureGroup("高级设置") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("CarryOn 配置目录").font(.caption)
-                        HStack { TextField("服务配置保存位置", text: $path); Button("选择…") {
-                            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
-                            if panel.runModal() == .OK, let url = panel.url { path = url.path; if name == "新工作区" {name = url.lastPathComponent} }
-                        } }
-                        VStack(alignment: .leading) { Text("端口（0 为自动分配）").font(.caption); TextField("0", text: $port) }.frame(width: 165, alignment: .leading)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
             }.textFieldStyle(.roundedBorder)
             if model.messageIsError { Text(model.message).font(.caption).foregroundStyle(.red) }
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("下一步") { Task { if await model.add(name: name.trimmingCharacters(in: .whitespacesAndNewlines), path: path, port: port, codex: codex ?? defaultCodexPath) { configured = true } } }.buttonStyle(AccentButton())
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.isEmpty || !(0...65535).contains(Int(port) ?? -1))
+                Button("下一步") { Task { if await model.createWorkspace(name: name.trimmingCharacters(in: .whitespacesAndNewlines)) { configured = true } } }.buttonStyle(AccentButton())
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(28).frame(width: 560).background(DesktopDesign.background).disabled(model.busy)
         }

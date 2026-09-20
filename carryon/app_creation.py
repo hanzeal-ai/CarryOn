@@ -51,7 +51,7 @@ def dispatch(bridge, ipc, generation, job, prompt, authorize):
         tid = result['thread']['id']
         bridge.journal.update(job['id'], threadId=tid, createdThreadId=tid)
         turn = ipc.start(tid, prompt, 'app-server', job['clientMessageId'], guarded)
-        bridge.journal.update(job['id'], state='completed', turnId=turn['id'], evidence='app-server-thread-start-and-turn-start')
+        bridge.journal.update(job['id'], state='accepted', turnId=turn['id'], evidence='app-server-thread-start-and-turn-start')
         bridge.workspace.catalog_refresh()
         bridge.notify()
     except Exception as exc:
