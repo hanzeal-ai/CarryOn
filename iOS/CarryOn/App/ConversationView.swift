@@ -13,6 +13,7 @@ struct ConversationView: View {
     @State private var changes = false
     @State private var newMessages = false
     @State private var lastTimelineItem: JSONValue?
+    @State private var selectionText: String?
     @State private var visibleCount = 120
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
@@ -31,10 +32,8 @@ struct ConversationView: View {
     @State private var disclosureState = ConversationDisclosureState()
     @State private var readingState: ConversationReadingState?
     @State private var navigationPreview: JSONValue?
-    @State private var navigationWindowStart = 0
-    @State private var navigationHoverOrigin: CGFloat?
-    @State private var navigationHoverStart = 0
-    @State private var navigationDragStart: Int?
+    @State private var navigationRailTracker = ConversationNavigationTracker()
+    @GestureState private var navigationDragging = false
     @State private var navigationPinned = false
     @State private var navigationAnchor: String?
     @State private var pendingNavigation: String?
@@ -129,8 +128,15 @@ struct ConversationView: View {
             messageRow(params)
         }, inputViewBuilder: { _ in
             composerView
-        }, messageMenuAction: { (_: CarryOnMessageAction, _, message) in
-            if let item = message.customData["entry"] as? JSONValue { UIPasteboard.general.string = item["text"].text }
+        }, messageMenuAction: { (action: CarryOnMessageAction, _, message) in
+            guard let item = message.customData["entry"] as? JSONValue else { return }
+            switch action {
+            case .copy: UIPasteboard.general.string = item["text"].text
+            case .selectText:
+                let user = item["type"].text != "agentMessage"
+                let text = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
+                selectionText = MessageTextSelectionView.plainText(text, resolveCreatedThreads: !user)
+            }
         })
         .setAvailableInputs([.text])
         .updateTransaction(transactionBinding)
@@ -184,6 +190,9 @@ struct ConversationView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { menu = true } label: { Image(systemName: "ellipsis") }.accessibilityLabel("会话操作")
             }
+        }
+        .sheet(isPresented: Binding(get: { selectionText != nil }, set: { if !$0 { selectionText = nil } })) {
+            if let selectionText { MessageTextSelectionView(text: selectionText) }
         }
         .sheet(isPresented: $activity) { ConversationActivityView(currentThreadID: thread.id) }
         .task(id: model.scope + thread.id + String(model.workspaceRevision)) {
@@ -284,7 +293,8 @@ struct ConversationView: View {
         let width = widths[min(4, abs(index - center))]
         let label = String((item["text"].string ?? item["title"].string ?? "执行活动").prefix(60))
         return Button {
-            if navigationPreview == nil { navigate(to: item.stableID) }
+            navigationPreview = nil
+            navigate(to: item.stableID)
         } label: {
             Rectangle().fill(selected ? Design.ink : Color.secondary.opacity(0.35))
                 .frame(width: width, height: 2)
@@ -311,52 +321,60 @@ struct ConversationView: View {
                 .shadow(color: .black.opacity(0.08), radius: 10, y: 4).offset(x: 40).allowsHitTesting(false)
         }
     }
+    private var navigationContentOrigin: CGFloat? {
+        let frames = navigationRailTracker.frames
+        guard let content = frames["content"], let viewport = frames["viewport"] else { return nil }
+        return content.minY - viewport.minY
+    }
+    private func navigationItem(at y: CGFloat) -> JSONValue? {
+        guard !timeline.isEmpty, let origin = navigationContentOrigin else { return nil }
+        let index = Int(floor((y - origin) / 10))
+        return timeline[max(0, min(timeline.count - 1, index))]
+    }
     private func keepNavigationVisible(_ anchor: String, proxy: ScrollViewProxy) {
-        guard let index = timeline.firstIndex(where: { $0.stableID == anchor }) else { return }
-        if index < navigationWindowStart {
-            navigationWindowStart = index
-            proxy.scrollTo(anchor, anchor: .top)
-        } else if index >= navigationWindowStart + 18 {
-            navigationWindowStart = index - 17
-            proxy.scrollTo(anchor, anchor: .bottom)
-        }
+        guard let index = timeline.firstIndex(where: { $0.stableID == anchor }),
+              let origin = navigationContentOrigin else { return }
+        let top = origin + CGFloat(index) * 10
+        let height = min(180, CGFloat(timeline.count) * 10)
+        if top < 0 { proxy.scrollTo(anchor, anchor: .top) }
+        else if top + 10 > height { proxy.scrollTo(anchor, anchor: .bottom) }
     }
     private var navigationRail: some View {
-        let center = timeline.firstIndex { $0.stableID == (navigationPreview?.stableID ?? navigationAnchor) } ?? -100
+        // Expansion belongs to the current gesture, not the last scroll destination.
+        let center = timeline.firstIndex { $0.stableID == navigationPreview?.stableID } ?? -100
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     ForEach(Array(timeline.enumerated()), id: \.element.stableID) { index, item in
                         navigationButton(item, index: index, center: center)
                     }
-                }
+                }.background(ConversationNavigationMarker(id: "content", tracker: navigationRailTracker))
             }.scrollIndicators(.hidden).frame(width: 32, height: min(180, CGFloat(timeline.count) * 10))
-                .highPriorityGesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    if navigationDragStart == nil { navigationDragStart = timeline.firstIndex { $0.stableID == navigationAnchor } ?? 0 }
-                    guard !timeline.isEmpty else { return }
-                    let index = max(0, min(timeline.count - 1, (navigationDragStart ?? 0) + Int(value.translation.height / 10)))
-                    let item = timeline[index]
-                    if navigationPreview?.stableID != item.stableID { navigationPreview = item }
-                }.onEnded { _ in navigationDragStart = nil; navigationPreview = nil })
+                .background(ConversationNavigationMarker(id: "viewport", tracker: navigationRailTracker))
+                .highPriorityGesture(DragGesture(minimumDistance: 0)
+                    .updating($navigationDragging) { _, active, _ in active = true }
+                    .onChanged { value in
+                        navigationPreview = navigationItem(at: value.location.y)
+                    }.onEnded { value in
+                        let target = navigationItem(at: value.location.y)?.stableID
+                        navigationPreview = nil
+                        if let target { navigate(to: target) }
+                    })
+                .onChange(of: navigationDragging) { _, active in
+                    if !active { navigationPreview = nil }
+                }
                 .onContinuousHover { phase in
+                    guard !navigationDragging else { return }
                     switch phase {
-                    case .active(let point):
-                        if navigationHoverOrigin == nil {
-                            navigationHoverOrigin = point.y
-                            navigationHoverStart = timeline.firstIndex { $0.stableID == navigationAnchor } ?? 0
-                        }
-                        guard !timeline.isEmpty else { return }
-                        let index = max(0, min(timeline.count - 1, navigationHoverStart + Int((point.y - (navigationHoverOrigin ?? point.y)) / 10)))
-                        if navigationPreview?.stableID != timeline[index].stableID { navigationPreview = timeline[index] }
-                    case .ended:
-                        navigationHoverOrigin = nil; navigationPreview = nil
+                    case .active(let point): navigationPreview = navigationItem(at: point.y)
+                    case .ended: navigationPreview = nil
                     }
                 }
                 .onChange(of: navigationPreview?.stableID) { _, preview in
-                    if let anchor = preview ?? navigationAnchor { keepNavigationVisible(anchor, proxy: proxy) }
+                    if let preview { keepNavigationVisible(preview, proxy: proxy) }
                 }
                 .onChange(of: navigationAnchor) { _, anchor in
-                    if let anchor { keepNavigationVisible(anchor, proxy: proxy) }
+                    if let anchor, navigationPreview == nil { keepNavigationVisible(anchor, proxy: proxy) }
                 }
         }.accessibilityLabel("对话消息导航")
     }
@@ -376,7 +394,7 @@ struct ConversationView: View {
                     Image(systemName: "plus").frame(width: 44, height: 44)
                 }.disabled(!model.canInteract(.send) || !["idle", "running", "waiting"].contains(model.state) || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
                     .accessibilityLabel("添加图片")
-                Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").offset(x: -6).frame(width: 44, height: 44) }
+                Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
                     .accessibilityLabel("模型与思考强度")
             }
         }
@@ -524,7 +542,7 @@ struct TimelineEntry: View {
                 if user { MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: true) }
                 else { ForEach(refs.filter { $0["kind"].text == "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID, inlineImage: true) } }
                 MessageMarkdown(text: user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item), artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
-                    .padding(user ? 13 : 0).background(user ? Design.background : .clear, in: RoundedRectangle(cornerRadius: 19))
+                    .padding(user ? 13 : 0).background(user ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 20))
                     .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
                     .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
                     .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
@@ -569,7 +587,7 @@ struct MessageImage: View {
             else if let failure { Button { self.failure = nil } label: { Label("重试", systemImage: "arrow.clockwise").font(.caption) }.accessibilityHint(failure) }
             else { ProgressView().task { await load() } }
         }.frame(width: 88, height: 88).clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Design.border))
             .onChange(of: model.allows(.files)) { _, allowed in
                 if !allowed { image = nil; model.previewImage = nil }
             }
@@ -847,8 +865,8 @@ struct AsyncQuestionView: View {
                         Button { touched = true; selected = option.text; useCustom = false } label: {
                             HStack(spacing: 10) {
                                 Text("\(index + 1)").font(.caption).frame(width: 28, height: 28)
-                                    .background(!useCustom && selected == option.text ? Design.ink : Color.black.opacity(0.05), in: Circle())
-                                    .foregroundStyle(!useCustom && selected == option.text ? .white : Design.secondary)
+                                    .background(!useCustom && selected == option.text ? Design.ink : Design.input, in: Circle())
+                                    .foregroundStyle(!useCustom && selected == option.text ? Design.onAccent : Design.secondary)
                                 Text(option.text).font(.system(size: 14)).multilineTextAlignment(.leading)
                                 Spacer(minLength: 0)
                             }.frame(minHeight: 40).contentShape(Rectangle())
@@ -868,7 +886,7 @@ struct AsyncQuestionView: View {
                 Button { touched = true; expanded = true } label: {
                     Label(question["answer"] != .null ? "回答已同步" : submitted ? "回答已发送，等待同步" : "回答问题", systemImage: "questionmark.bubble")
                         .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
-                        .overlay(Capsule().stroke(Color.black.opacity(0.12)))
+                        .overlay(Capsule().stroke(Design.border))
                 }.buttonStyle(.plain)
             }
         }
@@ -914,13 +932,13 @@ private struct MessageThumbnails: View {
 }
 
 enum CarryOnMessageAction: MessageMenuAction {
-    case copy
-    func title() -> String { "复制原文" }
-    func icon() -> Image { Image(systemName: "doc.on.doc") }
+    case copy, selectText
+    func title() -> String { self == .copy ? "复制原文" : "选择文字" }
+    func icon() -> Image { Image(systemName: self == .copy ? "doc.on.doc" : "text.cursor") }
     static func menuItems(for message: ExyteChat.Message) -> [Self] {
         guard let item = message.customData["entry"] as? JSONValue,
               ["userMessage", "steeringUserMessage", "agentMessage"].contains(item["type"].text) else { return [] }
-        return [.copy]
+        return [.selectText, .copy]
     }
 }
 

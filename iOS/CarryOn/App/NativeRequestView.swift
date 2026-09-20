@@ -35,13 +35,13 @@ struct NativeRequestView: View {
                         Text(question["question"].string ?? question["header"].text).font(.subheadline)
                         ForEach(question["options"].array, id: \.formatted) { option in
                             Button { answers[id] = option["label"].text } label: {
-                                VStack(alignment: .leading, spacing: 4) { Text(option["label"].text); if !option["description"].text.isEmpty { Text(option["description"].text).font(.caption).foregroundStyle(Design.secondary) } }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(answers[id] == option["label"].text ? Design.blue.opacity(0.08) : .white, in: RoundedRectangle(cornerRadius: 10))
+                                VStack(alignment: .leading, spacing: 4) { Text(option["label"].text); if !option["description"].text.isEmpty { Text(option["description"].text).font(.caption).foregroundStyle(Design.secondary) } }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(answers[id] == option["label"].text ? Design.blue.opacity(0.08) : Design.surface, in: RoundedRectangle(cornerRadius: 10))
                             }
                         }
                         if question["isSecret"].bool == true {
-                            SecureField("输入回答", text: answer(id)).textContentType(.password).padding(12).background(.white, in: RoundedRectangle(cornerRadius: 12))
+                            SecureField("输入回答", text: answer(id)).textContentType(.password).padding(12).background(Design.surface, in: RoundedRectangle(cornerRadius: 12))
                         } else {
-                            TextField("输入回答", text: answer(id), axis: .vertical).lineLimit(1...5).padding(12).background(.white, in: RoundedRectangle(cornerRadius: 12))
+                            TextField("输入回答", text: answer(id), axis: .vertical).lineLimit(1...5).padding(12).background(Design.surface, in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
                 }

@@ -3,6 +3,7 @@ import socket
 import struct
 import threading
 import unittest
+from unittest.mock import patch, Mock
 from carryon.ipc import DesktopIPC, IPCError
 
 
@@ -92,3 +93,36 @@ class SnapshotConcurrencyTests(unittest.TestCase):
             self.assertEqual(calls, ['same'])
         finally:
             release.set(); first.join(2); second.join(2)
+
+
+class WakeSnapshotTests(unittest.TestCase):
+    @patch('carryon.ipc.sys.platform', 'darwin')
+    @patch('carryon.ipc.subprocess.run')
+    def test_opens_existing_thread_and_reads_native_idle_state(self, run):
+        tid='11111111-1111-4111-8111-111111111111'
+        ipc=DesktopIPC('unused')
+        ipc.owner=Mock(return_value='owner')
+        state={'id':tid,'threadRuntimeStatus':{'type':'idle'}}
+        ipc._snapshot=Mock(return_value=('owner',state))
+        guard=Mock()
+        self.assertEqual(ipc.wake_snapshot(tid,before_open=guard),('owner',state))
+        run.assert_called_once_with(['open','-g','codex://threads/'+tid],check=True,capture_output=True,timeout=3)
+        self.assertGreaterEqual(guard.call_count,2)
+        ipc._snapshot.assert_called_once_with(tid,'owner')
+
+    @patch('carryon.ipc.sys.platform', 'darwin')
+    @patch('carryon.ipc.subprocess.run')
+    def test_revoked_authorization_or_invalid_id_never_opens(self, run):
+        ipc=DesktopIPC('unused')
+        denied=Mock(side_effect=PermissionError('revoked'))
+        with self.assertRaises(PermissionError):
+            ipc.wake_snapshot('11111111-1111-4111-8111-111111111111',before_open=denied)
+        with self.assertRaises(ValueError):ipc.wake_snapshot('bad/id',before_open=Mock())
+        run.assert_not_called()
+
+    @patch('carryon.ipc.sys.platform', 'darwin')
+    @patch('carryon.ipc.subprocess.run', side_effect=OSError('unavailable'))
+    def test_open_failure_remains_failure(self, run):
+        ipc=DesktopIPC('unused')
+        with self.assertRaises(IPCError):
+            ipc.wake_snapshot('11111111-1111-4111-8111-111111111111',before_open=Mock())

@@ -119,7 +119,7 @@ window.MobileUI=(()=>{
    const requestsDialog=$('requests-dialog');requestsDialog.classList.add('mobile-page-dialog');const requestHead=n('header','toolbar request-toolbar');requestHead.append(button('返回','icon-button',()=>requestsDialog.close(),'back'),n('strong','','连接申请'),n('span','toolbar-space'));requestsDialog.prepend(requestHead);const requestBody=n('main','scroll feature-page mobile-request-body');requestsDialog.append(requestBody);move($('connection-requests'),requestBody);
    const notification=$('notification-dialog');notification.classList.add('mobile-page-dialog');const nh=n('header','toolbar notification-toolbar');nh.append(button('返回','icon-button',()=>notification.close(),'back'),n('strong','','消息通知'),n('span','toolbar-space'));notification.prepend(nh);
    show(selected?'chat':page);
-  }else if(!mobileLayout.matches&&installed){installed=false;for(const [el,anchor]of homes){if(anchor.isConnected){anchor.before(el);anchor.remove();}}homes.clear();document.body.classList.remove('mobile-ready');q('.conversation').hidden=false;$('create').hidden=false;delete document.body.dataset.mobilePage;for(const d of [tools,aux,deviceDialog,connectDialog,controllerDialog])d.close();document.querySelectorAll('[data-mobile-inline]').forEach(el=>el.remove());chatScroll.remove();chatSubtitle.remove();mainInput.remove();root.querySelectorAll('.production-composer').forEach(el=>el.remove());$('create-form').querySelectorAll('.production-composer').forEach(el=>el.remove());newBody.remove();loginHead?.remove();q('.notification-toolbar')?.remove();q('.request-toolbar')?.remove();q('.mobile-request-body')?.remove();$('requests-dialog').classList.remove('mobile-page-dialog');$('create-dialog').classList.remove('mobile-page-dialog');$('notification-dialog').classList.remove('mobile-page-dialog');q('.controller-box').open=false;$('create').disabled=!canWrite()||(!independentWorkspace&&!controllerId);$('prompt').placeholder=originalPlaceholder;$('prompt').style.height='';$('send').classList.remove('send-touch');$('send').removeAttribute('aria-label');updateComposeButton();for(const [id,value,cls]of desktopText){$(id).textContent=value;$(id).className=cls;}originalCreateHead.classList.remove('toolbar');originalCreateHead.querySelectorAll('.toolbar-space').forEach(el=>el.remove());}
+  }else if(!mobileLayout.matches&&installed){for(const input of document.querySelectorAll('.production-composer textarea'))input.style.height='';installed=false;for(const [el,anchor]of homes){if(anchor.isConnected){anchor.before(el);anchor.remove();}}homes.clear();document.body.classList.remove('mobile-ready');q('.conversation').hidden=false;$('create').hidden=false;delete document.body.dataset.mobilePage;for(const d of [tools,aux,deviceDialog,connectDialog,controllerDialog])d.close();document.querySelectorAll('[data-mobile-inline]').forEach(el=>el.remove());chatScroll.remove();chatSubtitle.remove();mainInput.remove();root.querySelectorAll('.production-composer').forEach(el=>el.remove());$('create-form').querySelectorAll('.production-composer').forEach(el=>el.remove());newBody.remove();loginHead?.remove();q('.notification-toolbar')?.remove();q('.request-toolbar')?.remove();q('.mobile-request-body')?.remove();$('requests-dialog').classList.remove('mobile-page-dialog');$('create-dialog').classList.remove('mobile-page-dialog');$('notification-dialog').classList.remove('mobile-page-dialog');q('.controller-box').open=false;$('create').disabled=!canWrite()||(!independentWorkspace&&!controllerId);$('prompt').placeholder=originalPlaceholder;$('prompt').style.height='';$('send').classList.remove('send-touch');$('send').removeAttribute('aria-label');updateComposeButton();for(const [id,value,cls]of desktopText){$(id).textContent=value;$(id).className=cls;}originalCreateHead.classList.remove('toolbar');originalCreateHead.querySelectorAll('.toolbar-space').forEach(el=>el.remove());}
   sync();
  }
  function show(next){if(next==='chat'&&page!=='chat')origin=page==='settings'?'projects':page;page=next;if(installed)document.body.dataset.mobilePage=next;sync();}
@@ -160,11 +160,30 @@ window.MobileUI=(()=>{
   text(chatSubtitle,($('cwd').textContent.split('/').filter(Boolean).at(-1)||'会话')+' · '+state+($('runtime').textContent.match(/已执行 [^·]+/)?.[0]?' · '+$('runtime').textContent.match(/已执行 [^·]+/)[0].trim():''));text(controllerRow.value,$('controller').selectedOptions[0]?.textContent||'未选择');
   const modelName=modelContext==='new'?'会话默认':composeHistory?.controls?.settings?.model||composeHistory?.metadata?.latestModel||'会话默认',effort=modelContext==='new'?'会话默认':composeHistory?.controls?.settings?.effort||composeHistory?.metadata?.latestReasoningEffort||'会话默认';if(modelSelect.options[0]?.text!==modelName)modelSelect.replaceChildren(new Option(modelName));if(effortSelect.options[0]?.text!==effort)effortSelect.replaceChildren(new Option(effort));
   const send=$('send');const label=send.textContent.includes('停止任务')?'停止任务':send.textContent.includes('发送任务')?'发送指令':send.getAttribute('aria-label')||'发送指令';sendIcon(send,label);send.dataset.mode=label==='停止任务'?'stop':'send';send.firstElementChild.classList.toggle('stop',label==='停止任务');running.hidden=composeHistory?.runtime?.type!=='active'||composeHistory?.syncing===true||!composeHistory?.timeline?.length;modelButton.disabled=!selected;$('prompt').placeholder='回复 CarryOn…';
-  renderList();decorate();syncScroll();
+  renderList();decorate();syncScroll();scheduleComposers();
  }
  $('new-prompt').addEventListener('input',sync);
  const observer=new MutationObserver(sync);observer.observe($('operations'),{attributes:true,subtree:true,attributeFilter:['disabled']});for(const el of [$('pairing'),$('status'),$('runtime'),$('console-device'),$('console-requests'),$('send'),$('controller')])observer.observe(el,{childList:true,subtree:true,attributes:el===$('pairing'),attributeFilter:el===$('pairing')?['hidden']:undefined});
- $('prompt').addEventListener('input',()=>{if(installed){$('prompt').style.height='auto';$('prompt').style.height=Math.min($('prompt').scrollHeight,100)+'px';}});
+ // Measure at the compact width even after expansion, so wrapping cannot oscillate.
+ const measureInput=document.createElement('textarea');
+ measureInput.tabIndex=-1;measureInput.setAttribute('aria-hidden','true');
+ measureInput.style.cssText='position:fixed;left:-10000px;top:0;visibility:hidden;height:0;min-height:0;max-height:none;padding:0;border:0;box-sizing:content-box;overflow:hidden;pointer-events:none';
+ document.body.append(measureInput);
+ let composerFrame=0;
+ function scheduleComposers(){if(composerFrame)return;composerFrame=requestAnimationFrame(()=>{composerFrame=0;if(!installed)return;
+  for(const shell of document.querySelectorAll('#composer .input-shell,.production-composer .input-shell')){
+   const input=shell.querySelector('textarea');if(!input||!shell.clientWidth)continue;
+   const style=getComputedStyle(input);measureInput.style.font=style.font;measureInput.style.lineHeight=style.lineHeight;measureInput.style.letterSpacing=style.letterSpacing;
+   measureInput.value=input.value||input.placeholder;
+   measureInput.style.width=Math.max(1,shell.clientWidth-12-32-32-44-8)+'px';
+   const expanded=measureInput.scrollHeight>parseFloat(style.lineHeight)+2;
+   shell.classList.toggle('expanded',expanded);
+   input.style.height='0px';input.style.height=Math.min(input.scrollHeight,144)+'px';
+  }
+ });}
+ document.addEventListener('input',event=>{if(event.target.matches('#prompt,.production-composer textarea'))scheduleComposers();});
+ const composerResize=new ResizeObserver(scheduleComposers);composerResize.observe(document.body);
+
  scroll.addEventListener('touchstart',event=>{scroll.startY=scroll.scrollTop===0&&event.touches.length===1?event.touches[0].clientY:null;},{passive:true});scroll.addEventListener('touchend',event=>{if(scroll.startY!==null&&event.changedTouches[0]?.clientY-scroll.startY>80&&enabled&&listLoadState.phase==='idle')loadThreads().catch(e=>notice(e.message));scroll.startY=null;},{passive:true});scroll.addEventListener('touchcancel',()=>{scroll.startY=null;},{passive:true});
  mobileLayout.addEventListener('change',layout);layout();return {sync,show,decorate,beforeOperationsRender:restoreAux,resetOperations(){restoreAux();aux.close();}};
 })();

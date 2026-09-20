@@ -455,9 +455,8 @@ class Bridge:
             if job["kind"] == "create":
                 project = job.get('creationProject')
                 if project:
-                    from .creation import resolve_project, belongs
-                    if resolve_project(self.catalog, project['groupId']) != project or not any(row['id'] == job['threadId'] and belongs(row, project) for row in self.catalog.list(2147483647)):
-                        raise BridgeError('项目或控制会话归属已改变，请重新选择项目')
+                    from .creation import validate_controller
+                    validate_controller(self.catalog, job['threadId'], project)
                 payload = json.dumps({"prompt": prompt, "title": job["expectedTitle"]}, ensure_ascii=False)
                 target_instruction = ('先调用 codex_app 的 list_projects，确认 projectId 为 ' + json.dumps(project['id']) +
                     ' 的本机项目存在，路径为 ' + json.dumps(project['cwd']) + '；不匹配就停止并报告失败。'
@@ -482,9 +481,8 @@ class Bridge:
                     if current is not None: idle_snapshot(current)
                     project = job.get('creationProject')
                     if project:
-                        from .creation import resolve_project, belongs
-                        if resolve_project(self.catalog, project['groupId']) != project or not any(row['id'] == job['threadId'] and belongs(row, project) for row in self.catalog.list(2147483647)):
-                            raise BridgeError('项目或控制会话归属已改变，请重新选择项目')
+                        from .creation import validate_controller
+                        validate_controller(self.catalog, job['threadId'], project)
                     self.journal.update(job["id"], state="dispatching")
                     dispatched = True
                     write()

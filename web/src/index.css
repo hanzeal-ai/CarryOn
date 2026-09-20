@@ -5,27 +5,26 @@
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 240 6% 10%;
-    --primary: 240 4% 13%;
+    --foreground: 0 0% 11%;
+    --primary: 0 0% 11%;
     --primary-foreground: 0 0% 98%;
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 4% 13%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
-    --accent: 240 5% 96%;
-    --accent-foreground: 240 4% 13%;
+    --secondary: 0 0% 97%;
+    --secondary-foreground: 0 0% 11%;
+    --muted: 0 0% 97%;
+    --muted-foreground: 0 0% 44%;
+    --accent: 0 0% 97%;
+    --accent-foreground: 0 0% 11%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
     --border: 240 6% 90%;
     --input: 240 6% 90%;
     --ring: 240 5% 65%;
-    --radius: .625rem;
+    --radius: .875rem;
   }
   * { border-color: hsl(var(--border)); }
 }
 
-@layer components {
-  html { font-family: "IBM Plex Sans", "PingFang SC", "Helvetica Neue", Arial, sans-serif; color: hsl(var(--foreground)); background: hsl(var(--muted)); }
+  html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; color: hsl(var(--foreground)); background: hsl(var(--muted)); }
   body { background: hsl(var(--muted)); }
   header, .cloud-console header { min-height:64px; height:64px; padding:0 28px; gap:16px; background:hsl(var(--muted)); border:0; }
   .brand { gap:10px; }
@@ -56,13 +55,13 @@
   .timeline-toolbar { border-color:hsl(var(--border)); }
   .messages { padding:24px 5px; }
   .message .text { line-height:1.75; }
-  .message.user .text { background:hsl(var(--muted)); border-radius:14px; }
+  .message.user .text { background:hsl(var(--muted)); border-radius:20px; }
   .welcome-icon { border-radius:14px; }
   .composer { border-color:hsl(var(--border)); border-radius:14px; box-shadow:0 1px 3px rgb(0 0 0 / .04); }
   .composer textarea { box-shadow:none; }
   .job, .request-card, .async-question-card { background:hsl(var(--muted)); border-color:hsl(var(--border)); }
-  dialog { width:min(560px,calc(100vw - 32px)); padding:28px; color:hsl(var(--foreground)); background:hsl(var(--background)); border:1px solid hsl(var(--border)); border-radius:32px; box-shadow:0 24px 80px rgb(0 0 0 / .24); }
-  dialog::backdrop { background:rgb(0 0 0 / .78); backdrop-filter:blur(4px); }
+  dialog { width:min(560px,calc(100vw - 32px)); padding:28px; color:hsl(var(--foreground)); background:hsl(var(--background)); border:1px solid hsl(var(--border)); border-radius:20px; box-shadow:0 24px 80px rgb(0 0 0 / .24); }
+  dialog::backdrop { background:rgb(0 0 0 / .4); backdrop-filter:blur(4px); }
   dialog h2 { font-size:18px; font-weight:600; }
   dialog p { color:hsl(var(--muted-foreground)); }
   dialog input, dialog textarea, dialog select { background:hsl(var(--muted)); }
@@ -75,9 +74,70 @@
   .visual-device, .visual-phone { border-color:hsl(var(--border)); background:hsl(var(--background)); }
   .side-drawer { top:64px; border-color:hsl(var(--border)); }
   #notice { background:hsl(var(--foreground)); border-radius:12px; }
-}
 
 .welcome-icon { color:hsl(var(--foreground)); background:hsl(var(--muted)); box-shadow:none; }
 .welcome .eyebrow, .welcome p, .auth-card .auth-help, .auth-security, .auth-card #auth-description, .auth-story > p, .controller-box > summary { color:hsl(var(--muted-foreground)); }
 .account-avatar { color:hsl(var(--foreground)); background:hsl(var(--muted)); border-color:hsl(var(--border)); }
 .activity-icon { color:hsl(var(--muted-foreground)); }
+
+/* Shared visual language with iOS, sized for a pointer and a wide reading pane. */
+:root { color-scheme:light dark; --canvas:#fff; --surface:#fff; --field:#f2f2f2; --ink:#1c1c1e; --subtle:#707070; --hairline:#0000001a; --inverse:#fff; }
+html, body { color:var(--ink); background:hsl(var(--muted)); }
+button, input, select, textarea { font-family:inherit; }
+button, summary, a { -webkit-tap-highlight-color:transparent; }
+button { color:var(--ink); background:var(--surface); border-color:var(--hairline); border-radius:14px; }
+button.primary { background:var(--ink); border-color:var(--ink); color:var(--inverse); }
+button.primary:hover:enabled { background:var(--ink); opacity:.85; }
+button.quiet { background:transparent; color:var(--subtle); }
+button:hover:enabled, summary:hover { background:var(--field); }
+:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
+input, select, textarea { color:var(--ink); background:var(--field); border-color:var(--hairline); }
+input::placeholder, textarea::placeholder { color:var(--subtle); }
+.conversation { padding-inline:max(24px,calc((100vw - 1100px)/2)); }
+.conversation-head h2 { font-size:18px; font-weight:600; }
+.message .text { font-size:16px; line-height:1.75; }
+.message.user .text { background:var(--field); border-radius:20px; }
+.composer { background:var(--field); border:1px solid transparent; border-radius:24px; padding:12px; box-shadow:none; }
+.composer:focus-within { border-color:var(--hairline); }
+.composer textarea { background:transparent; border:0; padding:4px 4px 10px; min-height:44px; font-size:16px; outline:none; box-shadow:none; }
+.composer-footer { gap:12px; }
+.composer-tools { gap:8px; }
+.composer-footer small { color:var(--subtle); }
+.thread { padding:12px; }
+.thread strong { font-weight:500; }
+.thread-status.idle { color:var(--subtle); background:var(--field); }
+.side-drawer, .account-panel, .display-menu>div, .session-info[open]>div, .session-actions[open]>#operations { background:var(--surface); color:var(--ink); border-color:var(--hairline); }
+.job, .request-card, .async-question-card, .activity, .original, pre, .message pre { background:var(--field); border-color:var(--hairline); color:var(--ink); border-radius:14px; }
+.activity { color:var(--subtle); }
+.request-card input, .request-card textarea, .request-card select, #operations input, #operations textarea, #operations select { background:var(--surface); color:var(--ink); border-color:var(--hairline); border-radius:14px; }
+dialog { border-radius:20px; }
+.auth-card { border-radius:24px; box-shadow:none; }
+.auth-card input { border-radius:14px; background:var(--field); }
+.conversation-navigation-preview { background:var(--surface); color:var(--ink); border-color:var(--hairline); }
+.conversation-navigator button.active span { background:var(--ink); }
+@media (min-width:1600px) { main { grid-template-columns:280px minmax(0,1fr); } }
+@media (prefers-color-scheme:dark) {
+ :root { --background:0 0% 0%; --foreground:0 0% 95%; --primary:0 0% 95%; --primary-foreground:0 0% 0%; --secondary:0 0% 16%; --secondary-foreground:0 0% 95%; --muted:0 0% 7%; --muted-foreground:0 0% 65%; --accent:0 0% 16%; --accent-foreground:0 0% 95%; --border:0 0% 22%; --input:0 0% 22%; --ring:0 0% 65%; --canvas:#000; --surface:#1f1f1f; --field:#292929; --ink:#f2f2f2; --subtle:#aaa; --hairline:#ffffff1a; --inverse:#000; }
+ img[src="/logo.svg"] { filter:invert(1); }
+ .thread-status.running { color:#dbb76b; background:#32291b; }
+ .thread-status.waiting { color:#ffc474; background:#332615; }
+ .thread-status.error, .error { color:#ff928b; }
+ #notice { color:var(--inverse); }
+}
+#search, #controller, #console-device, #token, #login-username, #registration-invite { background:var(--field); color:var(--ink); border-color:var(--hairline); border-radius:14px; }
+#search { min-height:40px; }
+#console-device { min-height:36px; }
+.thread-status.unknown { background:var(--field); color:var(--subtle); }
+.subagents-dialog { background:var(--surface); color:var(--ink); border-color:var(--hairline); }
+.subagents-dialog button, .question-input, .question-option { background:var(--field); color:var(--ink); border-color:var(--hairline); }
+.view-state, .outgoing-status { color:var(--subtle); }
+.view-state strong { color:var(--ink); }
+@media (prefers-color-scheme:dark) {
+ .badge.enabled, .badge.online, .badge.on { background:#172a20; color:#79c897; }
+ .async-question-card, .question-options label { color:var(--ink); }
+}
+.auth-card label, .auth-caption, .visual-device span, .visual-phone span, .visual-device strong, .visual-phone strong, .visual-link, .message-head, .thread small, .thread-status-summary, .jobs-panel>summary, .footnote { color:var(--subtle); }
+.auth-visual i { background:var(--field); }
+.pairing .auth-card input { min-height:46px; background:var(--field); border-color:transparent; font-size:15px; }
+.auth-card #pair { min-height:44px; box-shadow:none; }
+dialog textarea, dialog input, dialog select { background:var(--field); color:var(--ink); border-color:var(--hairline); border-radius:14px; }

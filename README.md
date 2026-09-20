@@ -37,7 +37,7 @@ carryon stop
 
 源码开发者在项目根目录使用 `python3 -m carryon start`。默认数据目录为 `~/Library/Application Support/CarryOn`，可通过 `CARRYON_HOME` 或命令后的 `--state-dir` 设置。旧源码项目 `.runtime` 不自动迁移，有历史请求时请按安装文档沿用原目录。
 
-`start` 自动开启桥接；`bridge off` 可暂停桥接及自动重连。未在 Codex App 中打开的已有会话可同步本地历史；实时状态和交互仍需原生会话加载就绪。创建新任务仍需要一个已加载、空闲且具备原生 create_thread 工具的专用控制会话。
+`start` 自动开启桥接；`bridge off` 可暂停桥接及自动重连。未在 Codex App 中打开的已有会话可同步本地历史；实时状态和交互仍需原生会话加载就绪。为指定项目创建任务时，优先借用“最近”中的空闲会话，再查其他会话；未加载时会尝试在 Codex 桌面打开并确认状态。旧版不指定项目的创建入口仍使用手动选择的控制会话。
 
 关闭页面不停止服务；使用桌面端「停止服务」或 CLI stop。重复启动复用同一个数据目录下的服务。CarryOn 不替换原生 socket、不修改 Codex 数据库，已被 Codex 接收的任务不会随桥接关闭而撤销。
 

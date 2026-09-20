@@ -88,7 +88,7 @@ struct WorkspaceConnectionHelp: View {
                     Divider()
                     Text("绑定后，等待工作区在线即可使用。未开启自动启动时，在桌面端点击「启动服务」，或在对应配置下执行 carryon start。")
                     Button { scanning = true } label: { Label("扫码绑定工作区", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 48) }
-                        .foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
+                        .foregroundStyle(Design.onAccent).background(Design.ink, in: RoundedRectangle(cornerRadius: Design.controlCorner))
                 }.padding(20)
             }.navigationTitle("连接新工作区").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭") } }
