@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import test_console
 from test_cloud import T
-from carryon.pairing import redeem
 from carryon.websocket import WebSocket
 
 
@@ -21,8 +20,7 @@ class ConsoleSocketTests(test_console.ConsoleTests):
 
     def connect_device(self):
         self.login()
-        code = self.call('POST', '/console/pairing', {'deviceId': 'my-mac'})[1]['code']
-        self.connector.configure(redeem(self.url, code, dev_local=True))
+        self.connector.configure(self.device_config())
         self.bridge.enable()
         self.wait_for(lambda: self.connector.status()['connected'])
 

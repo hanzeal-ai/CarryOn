@@ -3,6 +3,7 @@ import CoreImage.CIFilterBuiltins
 
 @MainActor struct InitializationView: View {
     @ObservedObject var model: SettingsModel
+    var bindingID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
     @State private var autoStart = true
@@ -10,33 +11,33 @@ import CoreImage.CIFilterBuiltins
     @State private var phase = "new"
     @State private var message = ""
     @State private var busy = false
+    @State private var applyingConfirmed = false
+    @State private var confirmedAccount = ""
     @State private var polling: Task<Void, Never>?
-    @State private var accounts: [[String: Any]] = []
     @State private var selectedAccount = ""
+    @State private var directed = false
     @State private var fineGrained = false
     @State private var permissions: Set<String> = ["view", "files"]
     @State private var codexAvailable = false
+    @State private var appServer = false
+    @State private var loginCode = false
     private var allowsControl: Bool { !permissions.subtracting(["view", "files"]).isEmpty }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("连接工作区").font(.title2.weight(.semibold))
-            Label("本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
-            if !codexAvailable { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
-            if phase != "waiting" && phase != "bound" {
-                TextField("云端 HTTPS 地址", text: $url).textFieldStyle(.roundedBorder)
-                    .onChange(of: url) { _ in accounts = []; selectedAccount = "" }
-                Button("从已确认账号选择") { Task {
-                    if let state = await exchange(["action":"known-accounts", "url":url]) {
-                        accounts = state["accounts"] as? [[String:Any]] ?? []
-                        let warnings = state["warnings"] as? [String] ?? []
-                        message = warnings.isEmpty ? (accounts.isEmpty ? "此云端暂无已确认账号，请扫码绑定。" : "") : warnings.joined(separator: "\n")
-                    }
-                } }.disabled(busy || url.isEmpty)
-                if !accounts.isEmpty {
-                    Picker("使用者", selection: $selectedAccount) {
-                        Text("其他账号扫码绑定").tag("")
-                        ForEach(accounts.indices, id: \.self) { index in Text(accounts[index]["username"] as? String ?? "").tag(accounts[index]["id"] as? String ?? "") }
-                    }
+            HStack { Text("连接工作区").font(.title2.weight(.semibold)); Spacer(); Button("账号登录码") { loginCode = true }.disabled(url.isEmpty) }
+            Label(appServer ? "独立 Codex 工作区" : "本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
+            if appServer {
+                Button("登录 Codex 模型账号") { Task { await loginCodex() } }.disabled(busy)
+            }
+            if !codexAvailable && !appServer { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
+            if phase != "waiting" && phase != "bound" && phase != "confirming" {
+                Picker("绑定方式", selection: $directed) {
+                    Text("手机扫码").tag(false)
+                    Text("向账号发起申请").tag(true)
+                }.pickerStyle(.segmented)
+                if directed { TextField("目标账号", text: $selectedAccount).textFieldStyle(.roundedBorder) }
+                DisclosureGroup("高级设置") {
+                    TextField("云端 HTTPS 地址", text: $url).textFieldStyle(.roundedBorder)
                 }
                 Toggle("绑定完成后自动启动服务", isOn: $autoStart)
                 Toggle("允许手机操作会话", isOn: Binding(get: {allowsControl}, set: {value in permissions = Set(value ? ["view","create","send","stop","edit","files","approve"] : ["view","files"]) }))
@@ -56,26 +57,55 @@ import CoreImage.CIFilterBuiltins
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
                 Button(phase == "bound" ? "完成" : "稍后继续") { dismiss() }.keyboardShortcut(.cancelAction)
-                if phase != "waiting" && phase != "bound" {
-                    Button(selectedAccount.isEmpty ? "生成二维码" : "确认分配") { Task { await prepare() } }.buttonStyle(AccentButton()).disabled(busy || url.isEmpty)
+                if phase == "confirming" {
+                    Button("重试") { Task {
+                        busy = true; defer { busy = false }
+                        if let state = await exchange(["action":"poll"]) { render(state) }
+                    } }.disabled(busy)
+                    Button("应用扫码结果") { applyingConfirmed = true }.disabled(busy)
+                } else if phase == "unverified" {
+                    Button("重试") { Task { await load() } }.disabled(busy)
+                } else if phase != "waiting" && phase != "bound" {
+                    Button(directed ? "发起申请" : "生成二维码") { Task { await prepare() } }.buttonStyle(AccentButton()).disabled(busy || url.isEmpty || (directed && selectedAccount.trimmingCharacters(in: .whitespaces).isEmpty))
                 }
             }
         }.padding(28).frame(width: 470).background(DesktopDesign.background)
-            .task {
-                if let state = await exchange(["action":"status"]) {
-                    url = state["url"] as? String ?? ""
-                    autoStart = state["autoStart"] as? Bool ?? true
-                    permissions = Set(state["permissions"] as? [String] ?? ["view","files"])
-                    render(state)
-                    if phase == "waiting" { beginPolling() }
-                }
-            }.onDisappear { polling?.cancel() }
+            .sheet(isPresented: $loginCode) { AccountLoginCodeView(model: model, url: url) }
+            .task { await load() }.onDisappear { polling?.cancel() }
+            .alert("应用本次扫码绑定？", isPresented: $applyingConfirmed) {
+                Button("取消", role: .cancel) {}
+                Button("应用") { Task {
+                    busy = true; defer { busy = false }
+                    if let state = await exchange(["action":"apply-confirmed"]) { render(state) }
+                } }
+            } message: { Text("将使用本次扫码确认的账号「\(confirmedAccount)」替换此云端当前的绑定。") }
+    }
+    private func loginCodex() async {
+        busy = true; defer { busy = false }
+        await model.perform(["start"])
+        let target = model.directory
+        let result = await Task.detached { executeCLI(["services", "auth-start"], directory: target) }.value
+        guard result.code == 0, let value = model.object(result.text), let raw = value["authUrl"] as? String,
+              let address = URL(string: raw), address.scheme == "https" else { message = result.text; return }
+        NSWorkspace.shared.open(address)
+    }
+    private func load() async {
+        busy = true; defer { busy = false }
+        if let state = await exchange(["action":"status"]) {
+            url = state["url"] as? String ?? ""
+            autoStart = state["autoStart"] as? Bool ?? true
+            permissions = Set(state["permissions"] as? [String] ?? ["view","files"])
+            render(state)
+            if phase == "waiting" { beginPolling() }
+        }
     }
     private func exchange(_ fields: [String: Any]) async -> [String: Any]? {
+        var fields = fields
+        if let bindingID { fields["bindingId"] = bindingID }
         guard let data = try? JSONSerialization.data(withJSONObject: fields) else { return nil }
         let target = model.directory
         let result = await Task.detached { executeCLI(["init", "--input-json"], directory: target, input: data) }.value
-        guard !Task.isCancelled else { return nil }
+        guard !Task.isCancelled, model.directory == target else { return nil }
         guard result.code == 0, let state = model.object(result.text) else { message = result.text; return nil }
         return state
     }
@@ -84,17 +114,20 @@ import CoreImage.CIFilterBuiltins
         var fields: [String: Any] = ["action":"prepare", "url":url, "autoStart":autoStart, "control":allowsControl,
                                      "codexHome":model.codexHome, "port":Int(model.port) ?? 0]
         fields["permissions"] = permissions.sorted()
-        if let account = accounts.first(where: { $0["id"] as? String == selectedAccount }) {
-            fields["accountId"] = selectedAccount; fields["sourceDirectory"] = account["sourceDirectory"]; fields["sourceBindingId"] = account["sourceBindingId"]
-        }
+        if directed { fields["targetAccount"] = selectedAccount.trimmingCharacters(in: .whitespaces) }
         if let state = await exchange(fields) {
             render(state)
             if phase == "waiting" { beginPolling() }
         }
     }
     private func render(_ state: [String: Any]) {
+        appServer = (state["environment"] as? [String: Any])?["backend"] as? String == "app-server"
         codexAvailable = (state["environment"] as? [String: Any])?["ipcAvailable"] as? Bool ?? false
         phase = state["state"] as? String ?? "new"
+        message = state["error"] as? String ?? ""
+        confirmedAccount = (state["confirmedAccount"] as? [String: Any])?["username"] as? String ?? ""
+        qr = nil
+        if phase == "waiting" && state["bindingMode"] as? String == "target" { message = "请在目标账号的手机上核对并确认绑定。" }
         if let link = state["qrURL"] as? String {
             let filter = CIFilter.qrCodeGenerator(); filter.message = Data(link.utf8)
             if let image = filter.outputImage, let cg = CIContext().createCGImage(image, from: image.extent) {
@@ -114,6 +147,7 @@ import CoreImage.CIFilterBuiltins
                 guard let state = await exchange(["action":"poll"]) else { phase = "configured"; qr = nil; return }
                 render(state)
                 if phase == "bound" { await model.refresh(); return }
+                if phase == "confirming" { return }
             }
         }
     }

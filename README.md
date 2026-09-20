@@ -49,7 +49,7 @@ CLI 和 macOS 桌面端共用同一数据目录和本机服务，设置双向可
 CLI 提供云端控制台 HTTPS 地址即可申请连接，然后在云端「连接申请」核对确认：
 
 ```sh
-carryon cloud connect --url https://你的云端域名/carryon
+carryon init
 carryon cloud status
 carryon cloud disconnect
 ```

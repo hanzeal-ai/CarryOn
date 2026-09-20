@@ -65,28 +65,23 @@ struct WorkspaceConnectionHelp: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var scanning = false
-    private var command: String {
-        let url = model.addressText.replacingOccurrences(of: "'", with: "'\\''")
-        return "carryon init --url '" + url + "'"
-    }
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("CLI").font(.headline)
                     Text("1. 在电脑上安装 CarryOn，并打开 Codex App。\n2. 在终端执行以下命令：")
-                    WorkspaceCopyBlock(text: command, label: "复制命令", monospaced: true)
+                    WorkspaceCopyBlock(text: "carryon init", label: "复制命令", monospaced: true)
                     Text("3. 扫描电脑显示的二维码，核对账号、工作区和权限后确认绑定。")
                     Button { scanning = true } label: { Label("扫码绑定工作区", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 48) }
                         .foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
                     Divider()
                     Text("桌面端").font(.headline)
-                    Text("1. 打开 CarryOn 桌面端的初始化向导。\n2. 输入以下云端地址，生成工作区二维码：")
-                    WorkspaceCopyBlock(text: model.addressText, label: "复制云端地址")
-                    Text("3. 扫码确认后，电脑默认自动启动工作区。")
+                    Text("打开 CarryOn 桌面端，生成工作区绑定二维码；也可指定你的账号发起申请，在下方确认。")
+                    WorkspaceBindingRequests()
                 }.padding(20)
             }.navigationTitle("连接新工作区").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭") } }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { if !model.devices.isEmpty { Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("关闭") } else { Button("退出登录") { Task { await model.logout() } } } } }
         }.presentationDetents([.large]).sheet(isPresented: $scanning) { WorkspaceBindingView() }
     }
 }

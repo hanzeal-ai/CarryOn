@@ -23,7 +23,7 @@
   <header>
     <div class="brand"><img class="mark" src="/logo.svg" alt="" width="42" height="42"><div><strong>CarryOn</strong><small>换个设备，接着做。</small></div></div>
     <span id="environment-label" class="environment-label">本地工作台</span>
-    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><span id="bridge" class="badge">请在 CLI 或桌面端管理桥接</span><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-pair-device" hidden>获取备用配对码</button><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
+    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><span id="bridge" class="badge">请在 CLI 或桌面端管理桥接</span><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <section id="pairing" class="pairing" hidden aria-labelledby="auth-title">
@@ -31,7 +31,6 @@
     <form id="pairing-form" class="auth-card"><span class="auth-symbol" aria-hidden="true"><img src="/logo.svg" alt="" width="44" height="44"></span><span class="eyebrow">欢迎回来</span><h2 id="auth-title">连接本机工作台</h2><p id="auth-description">使用本机凭证，继续你的工作。</p><label for="token">本机配对凭证</label><input id="token" type="password" autocomplete="off" required placeholder="输入本机配对凭证"><p id="pairing-error" class="error" role="alert" hidden></p><button id="pair" type="submit" class="primary">连接工作台 <span aria-hidden="true">→</span></button><p id="auth-help" class="auth-help">运行 carryon open，可自动打开已配对页面。</p><div class="auth-security"><span aria-hidden="true">◇</span> 凭证仅用于验证此次连接</div></form>
   </section>
   <dialog id="notification-dialog"><h2>消息通知</h2><div id="notification-preferences"></div><p>开启的消息类型会显示在动态中。关闭不会删除消息或未读标记。</p><p id="system-notification-status"></p><button id="notification-close">关闭</button></dialog>
-  <dialog id="console-code-dialog"><h2>在本机连接此云端</h2><p>配对码有效期为 5 分钟，仅可使用一次。请在自己的电脑上执行下列命令，并输入配对码。</p><pre id="console-pair-command"></pre><p>配对码：<code id="console-pair-code"></code></p><button id="console-close-code">关闭</button></dialog>
   <main>
     <aside>
       <div class="aside-top"><h1>会话</h1><button id="toggle-threads" class="quiet" aria-expanded="false" aria-controls="threads">展开会话列表</button><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
@@ -77,7 +76,6 @@
   </section>
   <dialog id="question-dialog" aria-labelledby="question-heading"><div class="dialog-head"><h2 id="question-heading">Codex 需要你的回答</h2><button id="question-later" type="button">稍后回答</button></div><div id="question-content"></div></dialog>
   <dialog id="requests-dialog"><h2>待连接设备</h2><p>请与本机核对确认码，再批准连接。</p><div id="connection-requests" role="status"></div><button id="requests-close">关闭</button></dialog>
-  <dialog id="link-dialog" aria-labelledby="link-heading"><h2 id="link-heading">连接这台电脑</h2><p>请核对 CLI 或桌面端显示的确认码，仅批准你刚刚发起的连接。</p><strong id="link-verification"></strong><p>确认后自动登记这台电脑。远程控制权限由本机决定。</p><button id="link-approve" class="primary">确认连接</button><button id="link-cancel">取消</button></dialog>
   <dialog id="create-dialog">
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>

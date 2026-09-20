@@ -34,7 +34,7 @@ class BindingTests(AccountTests):
         self.assertEqual(self.request('binding/accept', scan, bob)[0], 403)
         self.assertEqual([d['id'] for d in self.request('session', cookie=alice)[1]['devices']], [device])
         self.assertEqual(self.request('session', cookie=bob)[1]['devices'], [])
-        self.assertEqual(self.request('link/pending', cookie=bob)[1]['requests'], [])
+        self.assertEqual(self.request('binding/pending', cookie=bob)[1]['requests'], [])
         self.assertEqual(self.request('devices/'+device+'/request', {'method':'GET','path':'/api/status'}, bob)[0], 403)
         self.assertEqual(self.request('devices/'+device+'/request', {'method':'POST','path':'/api/threads','body':{}}, alice)[0], 403)
         with self.assertRaises(PermissionError): self.server.binding_invites.poll(scan)
@@ -80,16 +80,25 @@ class BindingTests(AccountTests):
         for method, path in [('GET','/api/status'),('GET','/api/threads/t/artifacts/'+'a'*64),('POST','/api/threads')]:
             self.assertEqual(self.request('devices/mac/request',{'method':method,'path':path,'body':{}},bob)[0],403)
 
-    def test_known_account_reuses_identity_without_scanning_and_is_idempotent(self):
+    def test_directed_binding_requires_target_phone_confirmation(self):
         alice = self.register_user('alice')
-        aid = self.request('session',cookie=alice)[1]['account']['id']
-        self.server.save_devices({'mac':{'deviceToken':'d'*40,'apiToken':'a'*40,'members':{aid:['view']}}})
-        data={'source':{'deviceId':'mac','token':'d'*40},'accountId':aid,'requestId':'r'*32,'name':'Second','permissions':['view']}
-        result = self.server.binding_invites.bind_known(data)
-        self.assertEqual(self.server.binding_invites.bind_known(data)['deviceId'],result['deviceId'])
-        self.assertEqual(len(self.server.config['devices']),2)
+        bob = self.register_user('bob')
+        invitation = self.server.binding_invites.start({'name':'Second','permissions':['view'],'targetAccount':'alice'})
+        self.assertEqual(self.server.config['devices'], {})
+        self.assertEqual(self.request('binding/pending',cookie=bob)[1]['requests'], [])
+        pending = self.request('binding/pending',cookie=alice)[1]['requests']
+        self.assertEqual(pending[0]['id'], invitation['id'])
+        self.assertEqual(self.request('binding/respond', {'id':invitation['id']}, bob)[0],403)
+        status, result, _ = self.request('binding/respond', {'id':invitation['id']}, alice)
+        self.assertEqual(status,200)
+        self.assertEqual(self.request('binding/respond', {'id':invitation['id']}, alice)[1],result)
+        self.assertEqual(len(self.server.config['devices']),1)
+        self.assertEqual(self.request('session',cookie=bob)[1]['devices'],[])
+        self.assertEqual(self.request('session',cookie=alice)[1]['devices'][0]['id'],result['deviceId'])
+        polled=self.server.binding_invites.poll({'id':invitation['id'],'secret':invitation['secret']})
+        self.assertEqual(polled['deviceId'],result['deviceId'])
         self.server.revoke_device(result['deviceId'])
-        with self.assertRaises(PermissionError): self.server.binding_invites.bind_known(data)
+        self.assertEqual(self.request('binding/respond',{'id':invitation['id']},alice)[0],403)
 
     def test_revocation_during_forward_preserves_uncertainty_and_cleans_new_stream(self):
         from types import SimpleNamespace
@@ -113,24 +122,16 @@ class BindingTests(AccountTests):
         self.assertEqual(device.streams,{})
         self.assertEqual(self.server.console_streams,{})
 
-    def test_existing_account_grant_requires_current_source_proof(self):
+    def test_new_members_require_confirmation_even_with_other_workspace_credentials(self):
+        alice=self.register_user('alice')
+        identity=self.request('session',cookie=alice)[1]['account']['id']
+        self.server.save_devices({'source':{'deviceToken':'s'*40,'apiToken':'a'*40,'members':{identity:['view']}},
+                                  'target':{'deviceToken':'t'*40,'apiToken':'b'*40,'members':{}}})
         from carryon.member_management import manage
-        alice = self.register_user('alice')
-        identity = self.request('session', cookie=alice)[1]['account']['id']
-        self.server.save_devices({
-            'source': {'deviceToken':'s'*40, 'apiToken':'a'*40, 'members':{identity:['view']}},
-            'target': {'deviceToken':'t'*40, 'apiToken':'b'*40, 'members':{}},
-        })
-        grant = {'deviceId':'target', 'token':'t'*40, 'action':'grant',
-                 'accountId':identity, 'permissions':['view','send']}
-        with self.assertRaises(PermissionError): manage(self.server, grant)
-        proof = {'deviceId':'source', 'token':'s'*40}
-        manage(self.server, {**grant, 'source':proof})
-        self.assertEqual(self.request('session', cookie=alice)[1]['devices'][-1]['id'], 'target')
-        manage(self.server, {**grant, 'action':'revoke'})
-        manage(self.server, {**proof, 'action':'revoke', 'accountId':identity})
-        with self.assertRaises(PermissionError): manage(self.server, {**grant, 'source':proof})
-        self.assertEqual(self.server.config['devices']['target']['members'], {})
+        with self.assertRaises(PermissionError):
+            manage(self.server, {'deviceId':'target','token':'t'*40,'action':'grant','accountId':identity,
+                   'permissions':['view'], 'source':{'deviceId':'source','token':'s'*40}})
+        self.assertEqual(self.server.config['devices']['target']['members'],{})
 
     def test_activity_owner_is_derived_from_login_not_request_body(self):
         from types import SimpleNamespace
@@ -190,7 +191,7 @@ class InitializationTests(unittest.TestCase):
             root = Path(temp); directory = root/'workspace'
             invitation = {'id':'a'*32, 'secret':'b'*43, 'url':'https://example.test/#carryon-bind='+'a'*32+'.'+'c'*43, 'expiresAt':time.time()+300}
             result = {'state':'bound','deviceId':'mac','token':'t'*43,'account':{'id':'alice','username':'Alice'}}
-            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result]) as request, patch('carryon.cli.start') as start:
+            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.cli.start') as start:
                 state = exchange(directory, {'action':'prepare','url':'https://example.test','autoStart':False,'control':False})
                 self.assertEqual(state['state'], 'waiting')
                 self.assertNotIn('secret', state)
@@ -205,9 +206,33 @@ class InitializationTests(unittest.TestCase):
     def test_expiry_preserves_configuration(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); (root/'onboarding.json').write_text(json.dumps({'state':'waiting','url':'https://example.test','autoStart':False,'pending':{'expiresAt':0}}))
-            with self.assertRaisesRegex(ValueError, '过期'): exchange(root, {'action':'poll'})
+            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}):
+                with self.assertRaisesRegex(ValueError, '过期'): exchange(root, {'action':'poll'})
             self.assertEqual(json.loads((root/'onboarding.json').read_text())['state'], 'configured')
 
     def test_unknown_operations_fail_closed(self):
         with self.assertRaises(PermissionError): capability('POST','/api/threads/id/operations',{'action':'unknown'})
         self.assertEqual(capability('GET','/api/threads/id/artifacts/hash'),'files')
+
+
+class OnboardingRequestErrorTests(unittest.TestCase):
+    def test_native_binding_error_survives_http_transport(self):
+        import io
+        import urllib.error
+        from carryon.onboarding import request
+        error = urllib.error.HTTPError('https://example.test/console/binding/manage',403,'Forbidden',{},
+            io.BytesIO(json.dumps({'error':'设备凭证无效'}).encode()))
+        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+            factory.return_value.open.side_effect = error
+            with self.assertRaisesRegex(ValueError,'设备凭证无效，请重新绑定'):
+                request('https://example.test','manage',{'action':'list'})
+
+    def test_non_json_http_error_keeps_status(self):
+        import io
+        import urllib.error
+        from carryon.onboarding import request
+        error = urllib.error.HTTPError('https://example.test',502,'Bad Gateway',{},io.BytesIO(b'<html>bad gateway</html>'))
+        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+            factory.return_value.open.side_effect = error
+            with self.assertRaisesRegex(ValueError,'HTTP 502'):
+                request('https://example.test','start',{})

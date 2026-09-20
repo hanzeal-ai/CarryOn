@@ -129,7 +129,7 @@ const cloudMode = window.CARRYON_CLOUD === true;
 const client = new (cloudMode ? CloudConsoleClient : CarryOnClient)({
   onUpdate: receiveUpdate,
   onDisconnect: streamDisconnected,
-  onAuthError: () => { historyCache.clear();outgoingMessages.clear(); $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('console-code-dialog').close();$('console-pair-code').textContent='';$('link-dialog').close();$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;} },
+  onAuthError: () => { historyCache.clear();outgoingMessages.clear(); $('pairing').hidden = false;if(cloudMode){applyStatus({enabled:false,controllerId:null});$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;} },
   onError: error => notice('实时同步失败：' + error.message)
 });
 const api = (path, body) => client.request(path, body);
@@ -149,8 +149,8 @@ function applyStatus(status) {
   enabled = status.enabled; controllerId = status.controllerId;
   $('status').textContent = enabled ? (cloudMode?(client.control?'可远程操作':'只读连接'):'已连接') : '等待连接'; $('status').classList.toggle('on', enabled);
   $('bridge').textContent = '请在 CLI 或桌面端管理桥接';
-  $('create').disabled = !canWrite() || !controllerId;
-  $('create').title=!controllerId?'先在 CLI 或桌面端选择控制会话':'';
+  $('create').disabled = !canWrite() || (!controllerId && !status.supportsDirectCreation);
+  $('create').title=!controllerId&&!status.supportsDirectCreation?'先在 CLI 或桌面端选择控制会话':'';
   for (const id of ['search','refresh']) $(id).disabled = !enabled;
   $('attach-images').disabled=!canAttach(); $('prompt').disabled = !canInteract() || !selected; $('send').disabled = !canInteract() || !selected;
   $('open-side').disabled=!enabled||!selected;
@@ -387,7 +387,7 @@ $('pairing-form').onsubmit=async event=>{
   try {
     historyCache.clear();outgoingMessages.clear();
     await client.pair($('token').value,cloudMode?$('login-username').value:undefined);
-    if(cloudMode){$('pairing').hidden=true;$('token').value='';await offerLink();}
+    if(cloudMode){$('pairing').hidden=true;$('token').value='';}
     if(!cloudMode||client.device)applyStatus(await api('/status'));$('pairing').hidden=true;$('token').value='';
     client.connect();if(enabled)await loadThreads();
   } catch(e){if(!client.token){$('pairing-error').textContent=e.message;$('pairing-error').hidden=false;}else notice(e.message);}
@@ -460,18 +460,6 @@ async function tick(){
     if(enabled){const {jobs}=await api('/jobs');if(enabled)renderJobs(jobs);await loadHistory();}}
   catch(e){if(enabled)notice(e.message);}finally{refreshBusy=false;}
 }
-const linkRequest=new URLSearchParams(location.hash.slice(1)).get('connect');
-async function offerLink(){
-  if(!cloudMode||!linkRequest)return;
-  try{const result=await client.consoleRequest('link/inspect',{id:linkRequest});$('link-verification').textContent=result.verification;$('link-dialog').showModal();}
-  catch(e){notice(e.message);}
-}
-$('link-cancel').onclick=()=>$('link-dialog').close();
-$('link-approve').onclick=async()=>{
-  $('link-approve').disabled=true;
-  try{await client.consoleRequest('link/approve',{id:linkRequest});$('link-dialog').close();history.replaceState(null,'',location.pathname);await refreshConsoleDevices();notice('已确认连接，等待设备上线');}
-  catch(e){notice(e.message);}finally{$('link-approve').disabled=false;}
-};
 let consoleDirectoryRefresh=null;
 async function refreshConsoleDevices(){
   if(client.removing)return;
@@ -519,49 +507,24 @@ async function refreshConnectionRequests(){
   if(!cloudMode||!client.token)return;
   const version=++connectionRequestsVersion;
   let result;
-  try{result=await client.consoleRequest('link/pending');}
+  try{result=await client.consoleRequest('binding/pending');}
   catch(error){if(version!==connectionRequestsVersion)return;throw error;}
   if(version!==connectionRequestsVersion)return;
-  $('console-requests').textContent='连接申请'+(result.requests.length?' · '+result.requests.length:'');
-  const list=$('connection-requests'),signature=JSON.stringify([result.requests,result.history,result.historyError]);
-  if(list.dataset.signature===signature&&list.childNodes.length)return;
-  list.dataset.signature=signature;list.replaceChildren();
-  if(!result.requests.length)list.textContent='暂无待连接设备';
+  $('console-requests').textContent='绑定申请'+(result.requests.length?' · '+result.requests.length:'');
+  const list=$('connection-requests');list.replaceChildren();
+  if(!result.requests.length)list.textContent='暂无待确认的申请';
+  const labels={view:'查看会话',create:'新建会话',send:'发送消息',stop:'停止任务',edit:'编辑会话与设置',files:'查看和下载文件',approve:'处理审批'};
   for(const request of result.requests){
-    const row=document.createElement('section'),title=document.createElement('p');
-    title.textContent=request.name;row.className='connection-request-card group';
-    const created=node('p','caption','申请时间 · '+new Date(request.created*1000).toLocaleString()),verification=node('div','code-display',request.verification);
-    const approve=document.createElement('button'),reject=document.createElement('button');
-    approve.textContent='确认连接';reject.textContent='拒绝';
-    const respond=async action=>{
+    const row=node('section','connection-request-card group');
+    row.append(node('strong','',request.name),node('p','',request.account.username),node('p','',request.permissions.map(p=>labels[p]||p).join('、')));
+    const approve=node('button','primary','确认绑定'),reject=node('button','secondary','拒绝');
+    const respond=async rejected=>{
       approve.disabled=reject.disabled=true;
-      try{await client.consoleRequest('link/'+action,{id:request.id});await refreshConnectionRequests();await refreshConsoleDevices();}
-      catch(e){notice(e.message);approve.disabled=reject.disabled=false;}
+      try{await client.consoleRequest('binding/respond',{id:request.id,reject:rejected});await refreshConnectionRequests();await refreshConsoleDevices();}
+      catch(error){notice(error.message);approve.disabled=reject.disabled=false;}
     };
-    approve.onclick=()=>respond('approve');reject.onclick=()=>respond('reject');approve.className='primary';reject.className='secondary';row.append(title,created,verification,approve,reject);list.append(row);
+    approve.onclick=()=>respond(false);reject.onclick=()=>respond(true);row.append(approve,reject);list.append(row);
   }
-  const past=result.history||[];
-  const historyHeading=node('div','group-title connection-history-heading');historyHeading.append(node('span','','历史申请'));
-  list.append(historyHeading);
-  if(result.historyError)list.append(node('p','error',result.historyError));
-  if(!past.length)list.append(node('p','caption','暂无历史申请'));
-  else {
-    const clear=node('button','history-clear-icon');clear.type='button';clear.setAttribute('aria-label','清空历史');clear.title='清空历史';
-    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width','18');svg.setAttribute('height','18');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.6');svg.setAttribute('aria-hidden','true');
-    const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7');svg.append(path);clear.append(svg);
-    clear.onclick=async()=>{
-      if(!confirm('清空全部历史申请？待处理申请和已连接设备不受影响。'))return;
-      clear.disabled=true;
-      try{await client.consoleRequest('link/history',undefined,'DELETE');await refreshConnectionRequests();notice('历史申请已清空');}
-      catch(e){notice(e.message);clear.disabled=false;}
-    };
-    historyHeading.append(clear);
-    for(const entry of past){
-      const row=node('section','connection-request-card connection-history-card group');
-      row.append(node('strong','',entry.name),node('p','caption','申请时间 · '+new Date(entry.created*1000).toLocaleString()),node('p','','结果 · '+({approved:'已同意',rejected:'已拒绝',expired:'已过期'}[entry.result]||'未知')),node('p','caption','处理时间 · '+new Date(entry.resolvedAt*1000).toLocaleString()));list.append(row);
-    }
-  }
-
 }
 async function init(){
   $('notification-settings').hidden=!cloudMode;
@@ -571,10 +534,10 @@ async function init(){
     document.querySelector('.footnote').textContent='与你的 Codex 工作空间保持同步';
     $('environment-label').textContent='云端工作台';$('auth-title').textContent='登录你的工作空间';$('auth-description').textContent='安全连接，接着上次的进度继续。';$('account-menu').hidden=false;
     document.querySelector('label[for="token"]').textContent='密码';
-    setupConsoleLogin(client,async()=>{await client.initialize();$('pairing').hidden=true;await offerLink();if(client.device)applyStatus(await api('/status'));client.connect();if(enabled)await loadThreads();});
+    setupConsoleLogin(client,async()=>{await client.initialize();$('pairing').hidden=true;if(client.device)applyStatus(await api('/status'));client.connect();if(enabled)await loadThreads();});
     $('token').placeholder='输入密码';$('token').autocomplete='current-password';$('pair').textContent='登录工作空间 →';
     $('auth-help').textContent='';document.querySelector('.auth-security').hidden=true;
-    for(const id of ['console-device','console-pair-device','console-logout','console-requests','console-remove-device','console-standby'])$(id).hidden=false;
+    for(const id of ['console-device','console-logout','console-requests','console-remove-device','console-standby'])$(id).hidden=false;
     $('console-requests').onclick=async()=>{try{await refreshConnectionRequests();$('requests-dialog').showModal();}catch(e){notice(e.message);}};
     $('requests-close').onclick=()=>$('requests-dialog').close();
     $('console-standby').onclick=async()=>{try{const s=await api('/standby');notice(s.error||(!s.supported?'此设备不支持远程待机':s.effective?'远程待机已生效（接电）':s.enabled?'远程待机已开启，当前未生效':'远程待机未开启；请在本机管理'));}catch(e){notice(e.message);}};
@@ -587,20 +550,13 @@ async function init(){
       applyStatus({enabled:false,controllerId:null});
       try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}finally{client.connect();}
     };
-    $('console-pair-device').onclick=async()=>{
-      try{const p=await client.consoleRequest('pairing',{deviceId:client.device});
-        $('console-pair-command').textContent='carryon start\ncarryon cloud pair --url '+p.publicUrl+(p.publicUrl.startsWith('http:')?' --dev-local':'');
-        $('console-pair-code').textContent=p.code;$('console-code-dialog').showModal();
-      }catch(e){notice(e.message);}
-    };
-    $('console-close-code').onclick=()=>{$('console-code-dialog').close();$('console-pair-code').textContent='';};
     $('console-logout').onclick=async()=>{
       subagentNavigation.reset();
       $('console-logout').disabled=true;
       client.close();client.epoch++;client.selection=null;
       try{await client.consoleRequest('logout',{});historyCache.clear();outgoingMessages.clear();client.token='';applyStatus({enabled:false,controllerId:null});$('pairing').hidden=false;$('pairing-error').hidden=true;$('requests-dialog').close();$('connection-requests').replaceChildren();$('account-menu').open=false;$('token').value='';$('token').focus();}catch(e){notice(e.message);client.connect();}finally{$('console-logout').disabled=false;}
     };
-    try{await client.initialize();await offerLink();}catch(e){if(e.message!=='请先登录云端控制台'){$('pairing-error').textContent=e.message;$('pairing-error').hidden=false;}}
+    try{await client.initialize();}catch(e){if(e.message!=='请先登录云端控制台'){$('pairing-error').textContent=e.message;$('pairing-error').hidden=false;}}
   }
   $('pairing').hidden=!!client.token;
   if(client.token&&(!cloudMode||client.device))try{applyStatus(await api('/status'));if(enabled)await loadThreads();}catch(e){notice(e.message);}

@@ -100,7 +100,6 @@ class AccountSettingsTests(unittest.TestCase):
         self.setup_account()
         _, _, cookie = self.http('login', {'username': 'admin', 'password': PASSWORD}, origin=self.url)
         self.http('qr/create', {}, cookie, self.url)
-        self.server.codes['old'] = ('mac', time.monotonic()+300)
         old_authority = self.server.auth.fingerprint
         self.assertEqual(self.change(currentPassword='wrong')[0], 403)
         self.assertEqual(self.change(currentUsername='other')[0], 403)
@@ -108,7 +107,7 @@ class AccountSettingsTests(unittest.TestCase):
         self.assertEqual(self.http('account/change', {'token': 'd'*40})[0], 403)
         self.assertEqual(self.change()[0], 200)
         self.assertNotEqual(self.server.auth.fingerprint, old_authority)
-        self.assertFalse(self.server.auth.qrs); self.assertFalse(self.server.codes)
+        self.assertFalse(self.server.auth.qrs)
         self.assertEqual(self.http('session', cookie=cookie)[0], 401)
         self.stop(); self.start()
         self.assertEqual(self.http('session', cookie=cookie)[0], 401)

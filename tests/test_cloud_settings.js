@@ -8,7 +8,7 @@ test('web console keeps cloud approval and conversation entry points without loc
   for(const id of ['cloud-link-form','cloud-pair-form','cloud-form','standby-enabled','service-stop','set-controller']) {
     assert.equal(html.includes(`id="${id}"`),false,id);
   }
-  for(const id of ['link-approve','connection-requests','create','prompt','send'])assert.ok(html.includes(`id="${id}"`),id);
+  for(const id of ['connection-requests','create','prompt','send'])assert.ok(html.includes(`id="${id}"`),id);
   assert.equal(app.includes('CloudSettings'),false);
   assert.equal(app.includes("api('/bridge',"),false);
   assert.equal(app.includes("api('/controller',"),false);

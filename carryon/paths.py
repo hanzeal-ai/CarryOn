@@ -10,6 +10,10 @@ def state_dir():
     return Path(override).expanduser().resolve() if override else Path.home() / 'Library/Application Support/CarryOn'
 
 
+def default_codex_home():
+    return Path(os.environ.get("CODEX_HOME") or Path.home()/".codex").expanduser().resolve()
+
+
 def assets():
     packaged = Path(__file__).parent / 'web'
     return packaged if packaged.is_dir() else Path(__file__).resolve().parent.parent

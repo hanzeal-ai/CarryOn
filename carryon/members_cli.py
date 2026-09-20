@@ -21,14 +21,7 @@ def binding(directory, ident=None):
 
 def exchange(directory, data):
     url, credentials = binding(directory, data.get('bindingId'))
-    if data.get('action') == 'known-accounts':
-        from .onboarding import known_accounts
-        return known_accounts(url)
-    body = {k:v for k,v in data.items() if k not in ('bindingId','sourceDirectory','sourceBindingId')}
-    if data.get('sourceDirectory'):
-        source_url, source = binding(data['sourceDirectory'], data.get('sourceBindingId'))
-        if source_url != url: raise ValueError('已有账号必须来自同一云端')
-        body['source'] = source
+    body = {k:v for k,v in data.items() if k != 'bindingId'}
     return request(url, 'manage', {**body, **credentials})
 
 
@@ -40,8 +33,7 @@ def command(args):
         if not isinstance(data, dict): raise ValueError('成员输入无效')
         print(json.dumps(exchange(args.state_dir, data), ensure_ascii=False)); return 0
     data = {'action':args.action, 'bindingId':args.binding_id, 'accountId':args.account_id,
-            'permissions':args.permissions.split(',') if args.permissions else ['view'],
-            'sourceDirectory':str(args.source_state_dir) if args.source_state_dir else None}
+            'permissions':args.permissions.split(',') if args.permissions else ['view']}
     if args.action == 'invite' and not sys.stdin.isatty(): raise ValueError('请在交互终端邀请使用者')
     result = exchange(args.state_dir, data)
     if args.action != 'invite':

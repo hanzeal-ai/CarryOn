@@ -13,7 +13,6 @@ from carryon.cloud import CloudConnector
 from carryon.cloud_manager import CloudManager
 from carryon.console import ConsoleServer
 from carryon.errors import BridgeError
-from carryon.pairing import LocalLink
 from carryon.paths import save_json
 from carryon.remote_scope import scoped_dispatch, project_packet, request_key
 from carryon.store import Journal
@@ -68,16 +67,10 @@ class MultiCloudTests(unittest.TestCase):
 
     def bind(self,local,console,control=False):
         self.login(console)
-        status,request=self.call(console,'POST','/console/link/start',{'name':f'电脑 {local}'},True)
-        self.assertEqual(status,200)
-        pending=self.call(console,'GET','/console/link/pending')[1]['requests']
-        self.assertIn(request['id'],[p['id'] for p in pending]);self.assertNotIn('secret',json.dumps(pending))
-        approved=self.call(console,'POST','/console/link/approve',{'id':request['id']})
-        self.assertEqual(approved[0],200)
-        # Retrying confirmation and credential receipt produces the same binding.
-        self.assertEqual(self.call(console,'POST','/console/link/approve',{'id':request['id']})[1],approved[1])
-        _,credentials=self.call(console,'POST','/console/link/poll',{'id':request['id'],'secret':request['secret']},True)
-        self.assertEqual(self.call(console,'POST','/console/link/poll',{'id':request['id'],'secret':request['secret']},True)[1],credentials)
+        invite=self.servers[console][0].binding_invites.start({'name':f'电脑 {local}','permissions':['view','files','create','send','stop','edit','approve']})
+        key,secret=invite['url'].split('#carryon-bind=')[1].split('.')
+        self.servers[console][0].binding_invites.accept({'id':key,'secret':secret},'owner')
+        credentials=self.servers[console][0].binding_invites.poll({'id':key,'secret':invite['secret']})
         manager=self.managers[local]
         manager.configure({'enabled':True,'url':self.servers[console][0].public_url.replace('http:','ws:')+'/device',
                            'deviceId':credentials['deviceId'],'token':credentials['token'],'devLocal':True,'control':control})
@@ -147,41 +140,12 @@ class MultiCloudTests(unittest.TestCase):
                 self.assertEqual(IPC.sends,0)
         finally:release.set()
 
-    def test_approval_auth_rejection_and_registry_restart(self):
-        status,r=self.call(0,'POST','/console/link/start',{'name':'my laptop'},True)
-        self.assertEqual(status,200)
-        self.assertEqual(self.call(0,'GET','/console/link/pending')[0],401)
-        self.assertEqual(self.call(0,'POST','/console/link/approve',{'id':r['id']})[0],401)
-        self.login(0)
-        self.assertEqual(self.call(0,'POST','/console/link/reject',{'id':r['id']})[0],200)
-        self.assertEqual(self.call(0,'POST','/console/link/approve',{'id':r['id']})[0],400)
-        self.assertEqual(self.call(0,'POST','/console/link/poll',{'id':r['id'],'secret':r['secret']},True)[0],403)
-        self.assertEqual(self.call(0,'GET','/console/link/pending')[1]['requests'],[])
+    def test_confirmed_binding_survives_registry_restart(self):
         device,_=self.bind(0,0)
         server=ConsoleServer(('127.0.0.1',0),{'publicUrl':'http://127.0.0.1','consoleToken':'c'*40,'devices':{}},self.root/'console-0')
         try:self.assertIn(device,server.config['devices'])
         finally:server.server_close()
 
-    def test_background_binding_without_local_browser_poll(self):
-        self.login(0)
-        link=LocalLink(self.managers[0],self.bridges[0],background=True)
-        def transport(url,action,body):
-            status,result=self.call(0,'POST','/console/link/'+action,body,True)
-            if status!=200:raise ValueError(str(result))
-            return result
-        # TLS itself is covered by test_cloud_tls. The credential flow uses real HTTP.
-        with patch.object(link,'request',side_effect=transport), patch('carryon.pairing.LocalLink.poll', wraps=link.poll):
-            # Use a mocked configure to avoid treating loopback HTTP as production WSS.
-            with patch.object(self.managers[0],'configure',return_value={'enabled':True}) as configure:
-                request=link.start('https://console.test',False)
-                self.call(0,'POST','/console/link/approve',{'id':request['id']})
-                wait(lambda:configure.called)
-                self.assertFalse(configure.call_args.args[0]['control'])
-                self.assertEqual(configure.call_args.args[0]['url'],'wss://console.test/device')
-            link.close()
-
-
-class ManagerUnitTests(unittest.TestCase):
     def test_legacy_migration_duplicate_and_targeted_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             config={'enabled':True,'url':'wss://one.test/device','deviceId':'old','token':'x'*40,'control':True}
@@ -217,16 +181,6 @@ class ManagerUnitTests(unittest.TestCase):
                 wait(lambda:IPC.sends==1)
                 self.assertEqual(len(journal.list()),1)
             finally:bridge.disable();journal.conn.close()
-
-    def test_binding_survives_unavailable_codex(self):
-        cloud=Mock();cloud.validate=CloudConnector.validate
-        bridge=Mock();bridge.enable.side_effect=OSError('Codex closed')
-        link=LocalLink(cloud,bridge)
-        with patch.object(link,'request',side_effect=[{'id':'request-123','secret':'s'*40,'verification':'ABC123'},{'deviceId':'new-device','token':'t'*40}]):
-            request=link.start('https://console.test',False)
-            result=link.poll(request['id'])
-        self.assertFalse(result['pending']);self.assertFalse(result['bridgeEnabled'])
-        cloud.configure.assert_called_once()
 
     def test_new_console_config_starts_without_predefined_devices(self):
         import subprocess,sys

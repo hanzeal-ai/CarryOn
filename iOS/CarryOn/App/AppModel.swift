@@ -2,7 +2,7 @@ import SwiftUI
 import CarryOnCore
 
 @MainActor @Observable final class AppModel {
-    var addressText = UserDefaults.standard.string(forKey: "carryon.server") ?? ""
+    var addressText = UserDefaults.standard.string(forKey: "carryon.server") ?? ProductConfiguration.cloudURL
     var username = ""
     var credential = ""
     var authenticated = false
@@ -46,8 +46,6 @@ import CarryOnCore
     }
     var workspaceRevision = 0
     var requests: [Record] = []
-    var requestHistory: [Record] = []
-    var requestHistoryError: String?
     var drafts: [String: String] = [:] { didSet { scheduleDraftSave() } }
     var attachments: [String: [String]] = [:] { didSet { scheduleDraftSave() } }
     var foreground = true
@@ -125,6 +123,7 @@ import CarryOnCore
         if device?.value["online"].bool != true { return "离线" }
         if !connected { return reconnecting ? "正在重连" : "连接中" }
         if status["enabled"].bool != true { return "Codex 未就绪" }
+        if status["accountAuthenticated"].bool == false { return "Codex 未登录" }
         return status["remoteControl"].bool == true ? "在线" : "在线 · 只读"
     }
     var draft: String {
@@ -210,7 +209,7 @@ import CarryOnCore
         let previous = api; api = nil
         Task { await previous?.invalidate() }
         authenticated = false; connected = false; reconnecting = false; status = .null; history = .null; historyFailure = nil
-        devices = []; selectedDevice = ""; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; requestHistory = []; requestHistoryError = nil; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
+        devices = []; selectedDevice = ""; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; drafts = [:]; attachments = [:]; historyCache.clear(); outgoing = [:]; credential = ""
     }
     func logout() async {
         guard let api else { return }
@@ -372,12 +371,10 @@ import CarryOnCore
         guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
         devices = try values.map(Record.init)
         if !devices.contains(where: { $0.id == selectedDevice }) { switchDevice(devices.first?.id ?? "") }
-        let result = try await console("link/pending")
+        let result = try await console("binding/pending")
         guard version == directoryVersion else { return }
         guard case .array(let values) = result["requests"] else { throw APIError("连接申请格式不正确") }
         requests = try values.map(Record.init)
-        requestHistory = try result["history"].array.map(Record.init)
-        requestHistoryError = result["historyError"].string
         try await refreshActivityCounts()
         } catch {
             if version == directoryVersion { throw error }
@@ -554,7 +551,7 @@ import CarryOnCore
                     result = try await deviceRequest("/api/jobs/" + ConsoleAddress.component(id))
                 }
                 guard version == epoch, capturedScope == scope else { return false }
-                guard result["state"].text == "completed" || (composing && ["accepted", "inProgress"].contains(result["state"].text)) else {
+                guard result["state"].text == "completed" || ((composing || (path == "/api/threads" && result["createdThreadId"].string != nil)) && ["accepted", "inProgress"].contains(result["state"].text)) else {
                     try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
                     throw APIError(result["error"].string ?? "操作结果尚未确认，请核对请求记录")
                 }

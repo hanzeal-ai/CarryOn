@@ -42,10 +42,7 @@ def manage(server, data):
             allowed = entry['permissions']
         elif action == 'grant':
             allowed = permissions(data.get('permissions'))
-            # A new account must be proved by a workspace already authorized on this machine.
-            if identity not in members:
-                _, source = device_record(server, data.get('source', {}))
-                if identity not in source.get('members', {'owner':list(CAPABILITIES)}): raise PermissionError('账号身份尚未确认，请生成邀请')
+            if identity not in members: raise PermissionError('请使用绑定申请，由手机确认新账号授权')
         elif action == 'revoke':
             if identity not in members: return {'removed':True}
             allowed = []

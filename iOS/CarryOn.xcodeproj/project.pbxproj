@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B10000000000000000000001 = {isa = PBXBuildFile; fileRef = B10000000000000000000002; };
 		A00000000000000000000022 /* CarryOnCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000021 /* CarryOnCore */; };
 		A00000000000000000000032 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000031 /* MarkdownUI */; };
 		A00000000000000000000042 /* ExyteChat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000041 /* ExyteChat */; };
@@ -14,6 +15,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        B10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../carryon/product.json; sourceTree = SOURCE_ROOT; };
 		A00000000000000000000009 /* CarryOn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CarryOn.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -59,7 +61,8 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A00000000000000000000011 /* Build configuration list for PBXNativeTarget "CarryOn" */;
 			buildPhases = (
-				A00000000000000000000006 /* Sources */,
+				B10000000000000000000003 /* Product signing configuration */,
+                A00000000000000000000006 /* Sources */,
 				A00000000000000000000007 /* Frameworks */,
 				A00000000000000000000008 /* Resources */,
 			);
@@ -126,11 +129,15 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                B10000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+        B10000000000000000000003 = {isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = ("$(SRCROOT)/../carryon/product.json", "$(SRCROOT)/../scripts/apple_association.py"); outputPaths = ("$(DERIVED_FILE_DIR)/CarryOn.entitlements"); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "/usr/bin/python3 \"$SRCROOT/../scripts/apple_association.py\" --entitlements \"$DERIVED_FILE_DIR/CarryOn.entitlements\" --apns \"$CARRYON_APNS_ENVIRONMENT\""; };
+/* End PBXShellScriptBuildPhase section */
 /* Begin PBXSourcesBuildPhase section */
 		A00000000000000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;

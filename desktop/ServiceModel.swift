@@ -1,6 +1,12 @@
 import SwiftUI
 import AppKit
 
+func defaultCodexHome() -> String {
+    let path = ProcessInfo.processInfo.environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+    return NSString(string: path).expandingTildeInPath
+}
+
 struct CommandResult: Sendable { let code: Int32; let text: String }
 func cliExecutable() -> URL {
     URL(fileURLWithPath: ProcessInfo.processInfo.environment["CARRYON_DESKTOP_CLI"] ?? Bundle.main.executableURL!
@@ -37,7 +43,7 @@ struct ServiceRecord: Identifiable, Equatable {
         name = value["name"] as? String ?? URL(fileURLWithPath: directory).lastPathComponent
         state = value["state"] as? String ?? "unavailable"
         port = value["port"] as? Int ?? 0
-        codexHome = value["codexHome"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+        codexHome = value["codexHome"] as? String ?? defaultCodexHome()
     }
 }
 
@@ -82,16 +88,12 @@ struct ServiceRecord: Identifiable, Equatable {
     @Published var standbyDescription = ""
     @Published var bindings: [CloudBinding] = []
     @Published var controller = ""
-    @Published var linkDescription = ""
-    @Published var linkIsError = false
-    @Published var linkCanRetry = false
-    @Published var linkURL = ""
     @Published var preferences: [String: Bool] = [:]
     @Published var message = ""
     @Published var messageIsError = false
     @Published var busy = false
     @Published var port = "0"
-    @Published var codexHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+    @Published var codexHome = defaultCodexHome()
     @Published var processID: Int?
     @Published var diagnostics: [String: Any] = [:]
     @Published var diagnosticText = ""
@@ -109,14 +111,29 @@ struct ServiceRecord: Identifiable, Equatable {
     }
     func clearService() {
         running = false; enabled = false; bridgeRequested = false; standby = false; bindings = []; processID = nil
-        controller = ""; linkDescription = ""; linkIsError = false; linkCanRetry = false; linkURL = ""; preferences = [:]; standbyDescription = ""
+        controller = ""; preferences = [:]; standbyDescription = ""
     }
     func reload() async {
         let target = directory
-        let catalog = await call(["services", "list"], at: target)
-        if let rows = object(catalog.text)?["services"] as? [[String: Any]] {
-            services = rows.map(ServiceRecord.init); catalogError = ""
-        } else { services = []; catalogError = catalog.text }
+        let catalog = await call(["services", "list"], at: target.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CarryOn").path : target)
+        guard directory == target else { return }
+        guard catalog.code == 0, let rows = object(catalog.text)?["services"] as? [[String: Any]] else {
+            catalogError = catalog.text; return
+        }
+        services = rows.map(ServiceRecord.init); catalogError = ""
+        if target.isEmpty {
+            if let first = services.first {
+                directory = first.directory; loadedStartupDirectory = nil
+                await reload()
+            } else { clearService() }
+            return
+        }
+        if directory == target, !services.contains(where: { $0.directory == target }) {
+            directory = services.first?.directory ?? ""; loadedStartupDirectory = nil
+            clearService()
+            if !directory.isEmpty { await reload() }
+            return
+        }
         if directory == target, loadedStartupDirectory != target,
            let record = services.first(where: {$0.directory == target}) {
             port = String(record.port); codexHome = record.codexHome; loadedStartupDirectory = target
@@ -137,7 +154,6 @@ struct ServiceRecord: Identifiable, Equatable {
         let active = bridge["enabled"] as? Bool ?? false
         let cloud = await call(["cloud", "status"], at: target)
         let power = await call(["standby", "status"], at: target)
-        let link = await call(["cloud", "link-status"], at: target)
         let notifications = active ? await call(["notifications", "status"], at: target) : CommandResult(code: 0, text: "{}")
         guard directory == target else { return }
         running = true; enabled = active; bridgeRequested = bridge["requested"] as? Bool ?? active
@@ -153,7 +169,6 @@ struct ServiceRecord: Identifiable, Equatable {
             standby = powerState["enabled"] as? Bool ?? false
             standbyDescription = powerState["error"] as? String ?? ((powerState["effective"] as? Bool == true) ? "接电时保持后台运行" : standby ? "等待接电后生效" : "使用系统睡眠设置")
         } else { standby = false; standbyDescription = power.text }
-        applyLinkStatus(link)
     }
     func applyBindings(_ result: CommandResult) {
         bindings = (object(result.text)?["bindings"] as? [[String: Any]] ?? []).compactMap { value in
@@ -162,30 +177,6 @@ struct ServiceRecord: Identifiable, Equatable {
                                 control: value["control"] as? Bool ?? false, error: value["error"] as? String ?? "")
         }
         if result.code != 0 { message = result.text; messageIsError = true }
-    }
-    func applyLinkStatus(_ result: CommandResult) {
-        linkIsError = false; linkCanRetry = false; linkURL = ""
-        if let state = object(result.text), let phase = state["state"] as? String {
-            linkURL = state["url"] as? String ?? ""
-            // Older services may report expired while retaining the terminal rejection.
-            if let error = state["error"] as? String, !error.isEmpty {
-                linkDescription = error; linkIsError = true; linkCanRetry = true; return
-            }
-            linkIsError = phase == "expired" || phase == "failed"
-            linkCanRetry = linkIsError
-            switch phase {
-            case "pending": linkDescription = "等待云端确认 · \(state["verification"] as? String ?? "") · 剩余 \(state["expiresIn"] as? Int ?? 0) 秒"
-            case "bound": linkDescription = state["bridgeEnabled"] as? Bool == true ? "云端已确认绑定" : "绑定已保存，请打开 Codex 后开启桥接"
-            case "expired": linkDescription = "连接申请已过期，请重新申请"
-            case "failed": linkDescription = state["error"] as? String ?? "连接申请失败"
-            default: linkDescription = ""
-            }
-        } else {
-            linkIsError = true
-            linkDescription = result.text.contains("接口不存在")
-                ? "此工作区仍运行旧版服务，无法显示申请结果。请停止后重新启动此工作区，再发起申请。"
-                : "无法获取连接申请状态，请刷新重试。\n" + result.text
-        }
     }
     func refresh() async {
         guard !busy, refreshTask == nil else { return }
@@ -209,16 +200,38 @@ struct ServiceRecord: Identifiable, Equatable {
         message = result.code == 0 ? (object(result.text) == nil ? result.text : "操作已完成") : result.text
         await reload()
     }
-    func add(name: String, path: String, port: String, codex: String) async -> Bool {
+    func createWorkspace(name: String) async -> Bool {
         guard !busy else { return false }
         busy = true; defer { busy = false }; await refreshTask?.value
-        let result = await call(["services", "add", "--name", name, "--port", port, "--codex-home", codex], at: path)
+        let result = await call(["services", "create", "--name", name])
         guard result.code == 0, let entry = object(result.text) else { message = result.text; messageIsError = true; return false }
         let record = ServiceRecord(entry)
         diagnostics = [:]; diagnosticText = ""
         loadedStartupDirectory = record.directory
         directory = record.directory; self.port = String(record.port); codexHome = record.codexHome; clearService()
         message = "工作区已保存，请继续设置"; messageIsError = false; await reload(); return true
+    }
+    func remove(_ service: ServiceRecord) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }; await refreshTask?.value
+        let status = await call(["status"], at: service.directory)
+        guard let active = object(status.text)?["running"] as? Bool else {
+            message = status.text; messageIsError = true; return
+        }
+        if active {
+            let stopped = await call(["stop"], at: service.directory)
+            guard stopped.code == 0 else { message = stopped.text; messageIsError = true; await reload(); return }
+        }
+        let result = await call(["services", "remove"], at: service.directory)
+        guard result.code == 0 else { message = result.text; messageIsError = true; await reload(); return }
+        services.removeAll { $0.directory == service.directory }
+        if directory == service.directory {
+            directory = services.first?.directory ?? ""
+            loadedStartupDirectory = nil
+            clearService(); diagnostics = [:]; diagnosticText = ""
+        }
+        message = ""; messageIsError = false
+        await reload()
     }
     func diagnose() async {
         guard !busy else { return }; busy = true; defer { busy = false }; await refreshTask?.value

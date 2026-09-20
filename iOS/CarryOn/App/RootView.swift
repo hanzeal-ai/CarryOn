@@ -9,6 +9,7 @@ struct RootView: View {
         @Bindable var model = model
         Group {
             if !model.authenticated { LoginView() }
+            else if model.devices.isEmpty { WorkspaceConnectionHelp() }
             else {
               NavigationStack {
                 VStack(spacing: 0) {
@@ -89,6 +90,9 @@ struct LoginView: View {
                     .resizable().scaledToFit().frame(width: 112, height: 168)
                     .frame(maxWidth: .infinity).padding(.vertical, 8)
                     .accessibilityLabel("CarryOn")
+                Button { scan = true } label: {
+                    Label("扫码登录", systemImage: "qrcode.viewfinder").font(.headline).frame(maxWidth: .infinity, minHeight: 54)
+                }.foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13)).disabled(model.busy)
                 VStack(alignment: .leading, spacing: 12) {
                     Text("账号").font(.caption).foregroundStyle(Design.secondary)
                     TextField("输入账号", text: $model.username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(15).background(.white, in: RoundedRectangle(cornerRadius: 13))
@@ -107,7 +111,6 @@ struct LoginView: View {
         }.frame(maxWidth: .infinity).background(Design.background).scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 4) {
-                Button { scan = true } label: { Label("扫码登录", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 44) }.disabled(model.busy)
                 Button("高级设置") { advancedSettings = true }
                     .font(.footnote).foregroundStyle(Design.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44).disabled(model.busy)

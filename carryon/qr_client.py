@@ -9,7 +9,7 @@ import urllib.request
 from urllib.parse import urlsplit
 
 from .cloud_wire import endpoint, tls_context
-from .pairing import NoRedirect
+from .http_transport import NoRedirect
 
 
 def console_request(url, route, data, session=None):

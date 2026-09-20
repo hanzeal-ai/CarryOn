@@ -8,6 +8,7 @@ struct NewConversationView: View {
     @State private var projects: [Record] = []
     @State private var project = ""
     @State private var selecting = false
+    private var directCreation: Bool { model.status["supportsDirectCreation"].bool == true }
     private var text: String { model.drafts[model.scope + "\nnew"] ?? "" }
     private var draftBinding: Binding<String> {
         Binding(get: { text }, set: { model.drafts[model.scope + "\nnew"] = $0 })
@@ -20,15 +21,17 @@ struct NewConversationView: View {
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite || !projects.contains(where: { $0.id == project }) || loading,
+                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite || (!directCreation && !projects.contains(where: { $0.id == project })) || loading,
                                     send: { Task { await create() } }) { EmptyView() }
             })
             .setAvailableInputs([.text])
             .mainHeaderBuilder {
                 VStack(alignment: .leading, spacing: 16) {
+                    if !directCreation {
                     SectionCaption(title: "项目")
                     Paper {
                         Button { selecting = true } label: { SettingRow(icon: "folder", title: projects.first(where: { $0.id == project })?.title ?? "选择项目", chevron: true) }
+                    }
                     }
                     if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
                 }.padding(20)
@@ -52,6 +55,7 @@ struct NewConversationView: View {
         }
     }
     private func loadProjects(reset: Bool) async {
+        if directCreation { return }
         let scope = model.scope, version = UUID(); loadVersion = version
         loading = true; defer { if loadVersion == version { loading = false } }
         do {
@@ -64,10 +68,12 @@ struct NewConversationView: View {
         } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard model.canWrite, projects.contains(where: { $0.id == project }) else { return }
+        guard model.canWrite, directCreation || projects.contains(where: { $0.id == project }) else { return }
         loading = true; defer { loading = false }
         let draftKey = model.scope + "\nnew", sent = text
-        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(["prompt": .string(sent), "projectId": .string(project)])) {
+        var fields: [String: JSONValue] = ["prompt": .string(sent)]
+        if !directCreation { fields["projectId"] = .string(project) }
+        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields)) {
             if model.drafts[draftKey] == sent { model.drafts[draftKey] = ""; model.saveDrafts() }
             dismiss()
         }

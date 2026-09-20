@@ -28,35 +28,36 @@ struct ConversationView: View {
     @State private var disclosureState = ConversationDisclosureState()
     @State private var readingState: ConversationReadingState?
     @State private var restoreScroll: ScrollToParams?
-    @State private var refreshingMessages = false
-    @State private var messagesNeedRefresh = false
+    @State private var messageRefresh = ConversationRefreshQueue()
+    @State private var displayGeneration = UUID()
     private func refreshMessages() {
-        messagesNeedRefresh = true
-        guard !refreshingMessages else { return }
-        refreshingMessages = true
-        Task { @MainActor in
-            defer { refreshingMessages = false }
-            while messagesNeedRefresh {
-                messagesNeedRefresh = false
-                let revision = model.historyRevision
-                if projectedHistoryRevision != revision {
-                    let source = model.history["timeline"].array, scope = model.scope
-                    let grouped = await Task.detached(priority: .userInitiated) {
-                        ConversationProcess.timeline(source)
-                    }.value
-                    guard model.scope == scope, model.selectedThread?.id == thread.id else { return }
-                    guard model.historyRevision == revision else { messagesNeedRefresh = true; continue }
-                    timeline = grouped; projectedHistoryRevision = revision
-                }
-                let next = projectedMessages()
-                guard next != chatMessages else { continue }
-                if let tableUpdates {
-                    // Serialize snapshots: overlapping transactions can consume each other's animation mode.
-                    await tableUpdates(animationMode: bottomVisible ? .none : .keepStable) { chatMessages = next }
-                } else { chatMessages = next }
+        let scope = model.scope, epoch = model.epoch, generation = displayGeneration
+        let isCurrent = {
+            model.scope == scope && model.epoch == epoch &&
+            model.selectedThread?.id == thread.id && displayGeneration == generation
+        }
+        messageRefresh.request {
+            guard isCurrent() else { return }
+            let revision = model.historyRevision
+            if projectedHistoryRevision != revision {
+                let source = model.history["timeline"].array
+                let grouped = await Task.detached(priority: .userInitiated) {
+                    ConversationProcess.timeline(source)
+                }.value
+                guard isCurrent() else { return }
+                timeline = grouped; projectedHistoryRevision = revision
             }
+            let next = projectedMessages()
+            guard next != chatMessages else { return }
+            if let tableUpdates {
+                // Serialize snapshots: overlapping transactions can consume each other's animation mode.
+                await tableUpdates(animationMode: bottomVisible ? .none : .keepStable) {
+                    if isCurrent() { chatMessages = next }
+                }
+            } else { chatMessages = next }
         }
     }
+
     private func projectedMessages() -> [ExyteChat.Message] {
         let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let rows = Array(timeline.suffix(visibleCount))
@@ -174,13 +175,14 @@ struct ConversationView: View {
         .onChange(of: model.historyFailure) { _, _ in refreshMessages() }
         .onChange(of: model.conversationReadOnly) { _, _ in refreshMessages() }
         .onChange(of: photos) { _, selection in Task { await loadPhotos(selection) } }
-        .onDisappear { selectionGeneration = UUID(); loadingImages = false }
+        .onDisappear { displayGeneration = UUID(); selectionGeneration = UUID(); loadingImages = false }
         .onAppear {
             let state = model.readingState(for: thread.id)
             readingState = state; disclosureState = state.disclosure; visibleCount = state.visibleCount
             bottomVisible = state.offset <= 20
             if let anchor = state.anchorID { restoreScroll = ScrollToParams(messageID: anchor, position: .middle) }
             else if state.offset > 20 { restoreScroll = ScrollToParams(offset: state.offset) }
+            refreshMessages()
         }
     }
     private func messageRow(_ params: MessageBuilderParameters) -> some View {
