@@ -44,8 +44,9 @@ class ServiceCatalogTests(unittest.TestCase):
     def test_discovered_running_directory_preserves_actual_startup_parameters(self):
         active={'port':8779,'codexHome':str(self.root/'actual-codex')}
         existing=str(self.root/'existing')
-        with patch('carryon.cli.running',return_value=active), patch('carryon.services.process_directories',return_value={existing}):
+        with patch('carryon.cli.running',side_effect=lambda d: active if str(d) == existing else None), patch('carryon.services.process_directories',return_value={existing}):
             list_services(existing)
+        self.assertEqual(set(records()), {existing})
         entry=records()[existing]
         self.assertEqual(entry['port'],8779)
         self.assertEqual(entry['codexHome'],active['codexHome'])
