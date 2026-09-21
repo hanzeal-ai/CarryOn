@@ -241,7 +241,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','shadcn.css','shadcn-ui.js','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','client.js',
+        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','shadcn.css','shadcn-ui.js','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','workspace-binding.js','client.js',
                  'cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()

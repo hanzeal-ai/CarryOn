@@ -39,7 +39,7 @@ const assert=require('node:assert/strict');
  await page.screenshot({path:'.runtime/mobile-projects.png'});await checkLayout(['.mobile-list-page .toolbar', '.search', '#mobile-session-list .project-row', '.bottom-nav']);
  await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await checkLayout(['#create-dialog .toolbar', '#create-dialog .group', '#create-dialog .production-composer', '#create-dialog .input-shell']);
  assert.equal(await page.locator('#create-dialog').evaluate(el=>Math.round(el.getBoundingClientRect().height)),844);
- await page.getByRole('button',{name:'控制会话',exact:true}).click();assert(await page.locator('#controller').isVisible());await page.locator('#mobile-controller button[aria-label="返回"]').click();await page.locator('#close-dialog').click();
+ assert(await page.locator('#new-project').isVisible());await page.locator('#new-project').selectOption('p1');assert.equal(await page.locator('#new-project').inputValue(),'p1');await page.locator('#close-dialog').click();
  await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().waitFor();await page.screenshot({path:'.runtime/mobile-sessions.png'});
  await page.locator('.session').first().click();
  await page.evaluate(async()=>{
@@ -57,7 +57,7 @@ const assert=require('node:assert/strict');
  await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.screenshot({path:'.runtime/mobile-tools.png'});
  assert((await page.getByRole('button',{name:'队列管理',exact:true}).boundingBox()).height>=44);await checkLayout(['#mobile-tools .sheet-top', '#mobile-tools .setting']);await page.locator('#mobile-tools button[aria-label="关闭"]').click();
  // Exercise the restored actions through the existing transport, against mocked API responses.
- await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+ await page.bringToFront();await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  for(const selector of ['.message.user','.message.assistant']){
   const message=page.locator(selector).first();await message.getByRole('button',{name:'复制原文',exact:true}).click();
   const expected=await message.locator('.text').textContent();

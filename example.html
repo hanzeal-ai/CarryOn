@@ -18,6 +18,7 @@
   <script src="/console-login.js" defer></script>
   <script src="/subagents.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/workspace-binding.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
 </head>
 <body class="booting">
@@ -36,8 +37,9 @@
     <aside>
       <div class="aside-top"><h1>会话</h1><button id="toggle-threads" class="quiet" aria-expanded="false" aria-controls="threads">展开会话列表</button><button id="refresh" class="quiet" aria-label="刷新会话">刷新</button></div>
       <button id="create" class="primary new" disabled>＋ 新建会话</button>
-      <div><button id="show-projects" class="quiet">项目</button><button id="show-activity" class="quiet">动态</button><button id="notification-settings" class="quiet">通知设置</button></div>
-      <label id="project-filter-label" hidden>会话筛选<select id="project-filter"><option value="all">全部</option><option value="waiting">待处理</option><option value="running">进行中</option></select></label>
+      <div><button id="show-projects" class="quiet">项目</button><button id="clear-read" class="quiet" hidden>清空已读</button><button id="show-all" class="quiet">全部会话</button><button id="show-activity" class="quiet">动态</button><button id="notification-settings" class="quiet">通知设置</button></div>
+      <label id="inactive-preference"><span>显示不活跃会话</span><input id="show-inactive" type="checkbox"></label>
+      <label id="project-filter-label" hidden>会话筛选<select id="project-filter"><option value="all">全部</option><option value="waiting">待处理</option><option value="running">进行中</option><option value="unread">未读</option></select></label>
       <input id="search" type="search" placeholder="搜索会话或项目…" aria-label="搜索会话或项目" disabled>
       <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
       <div id="threads" class="threads"><div class="empty-small">开启桥接后，查看本机会话。</div></div>
@@ -50,7 +52,7 @@
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="view-changes" class="quiet">查看改动</button><button id="jump-latest" class="quiet" hidden>回到最新</button><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon"><img src="/logo.svg" alt="" width="48" height="48"></span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
 
       <section id="requests" aria-label="待处理请求" hidden></section>
@@ -80,12 +82,13 @@
   <dialog id="create-dialog">
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>
-      <p>控制会话将创建一个独立任务，并交给 Codex 执行。</p>
+      <label id="new-project-label" for="new-project">项目<select id="new-project" required><option value="">选择项目</option></select></label>
       <label for="new-prompt">交互文案</label><textarea id="new-prompt" rows="7" required maxlength="16000" placeholder="描述你希望新会话完成的任务…"></textarea>
       <p id="create-error" class="error" role="alert"></p>
       <div class="dialog-actions"><button type="button" id="cancel-create">取消</button><button id="submit-create" class="primary">提交并创建</button></div>
     </form>
   </dialog>
+  <dialog id="changes-dialog"><div class="dialog-head"><h2>文件改动</h2><button id="changes-close" class="quiet">关闭</button></div><p>仅显示当前已加载历史中的改动。</p><div id="changes-content"></div></dialog>
   <script src="/shadcn-ui.js"></script>
 </body>
 </html>

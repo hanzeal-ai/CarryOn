@@ -223,6 +223,15 @@ class WSTests(unittest.TestCase):
         c,h=self.connect();c.settimeout(.1)
         with self.assertRaises(socket.timeout):c.recv(1)
 
+    def test_browser_probe_does_not_replace_subscription(self):
+        c, _ = self.connect()
+        self.send(c, {'type':'auth', 'token':self.server.token})
+        self.send(c, {'type':'subscribe', 'threadId':THREAD, 'subscription':'probe'})
+        self.until(c, lambda d:d.get('subscription') == 'probe')
+        self.send(c, {'type':'ping'})
+        self.assertEqual(self.until(c, lambda d:d.get('type') == 'pong'), {'type':'pong'})
+        self.assertTrue(any(s.selection['subscription'] == 'probe' for s in self.server.bridge.realtime.sessions))
+
     def test_heartbeat_continues_while_history_is_loading(self):
         from unittest.mock import patch
         from carryon import websocket

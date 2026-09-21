@@ -117,6 +117,7 @@ class Bridge:
         self.enabled = False
         self.controller = None
         self.generation = 0
+        self.workspace_session = uuid.uuid4().hex
         self.lock = threading.RLock()
         self.events = threading.Condition()
         self.event_revision = 0
@@ -160,6 +161,7 @@ class Bridge:
         import socket
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
+                    "workspaceSession": self.workspace_session,
                     "controllerId": self.controller, "protocol": getattr(self.ipc_factory, 'protocol', 'codex-desktop-ipc'),
                     "testedDesktopVersion": "26.901.51231",
                     **({'accountReady': self.ipc.account_ready} if self.ipc is not None and hasattr(self.ipc, 'account_ready') else {}),
