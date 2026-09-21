@@ -117,6 +117,7 @@ class Bridge:
         self.enabled = False
         self.controller = None
         self.generation = 0
+        self.workspace_session = uuid.uuid4().hex
         self.lock = threading.RLock()
         self.events = threading.Condition()
         self.event_revision = 0
@@ -160,6 +161,7 @@ class Bridge:
         import socket
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
+                    "workspaceSession": self.workspace_session,
                     "controllerId": self.controller, "protocol": getattr(self.ipc_factory, 'protocol', 'codex-desktop-ipc'),
                     "testedDesktopVersion": "26.901.51231",
                     **({'accountReady': self.ipc.account_ready} if self.ipc is not None and hasattr(self.ipc, 'account_ready') else {}),
@@ -310,19 +312,28 @@ class Bridge:
             self.check_generation(ipc, generation)
         return result
 
-    def preview_history(self, thread_id, limit=None):
-        """Persisted display only while the background native loader establishes authority."""
+    def persisted_history(self, thread_id, limit=None):
+        """Read persisted history without requiring a loaded native conversation."""
         ipc, generation = self.require()
         row = self.catalog.get(thread_id)
         from .subagents import is_subagent
         if is_subagent(row):
             return self.subagent_history(thread_id, limit)
-        try:
-            result = dict(self.catalog.history(thread_id))
-        except (ValueError, OSError):
-            result = {'thread': {k: row.get(k, '') for k in ('id', 'title', 'cwd')}, 'messages': [], 'timeline': []}
-        result.update(syncing=True, controls={}, runtime={'type': 'unknown'}, status={'state': 'unknown', 'label': '同步中'})
-        result['historyRevision'] = 'preview:' + hashlib.sha256(json.dumps(result, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        state = self.catalog.rollout_state(thread_id, limit=limit)
+        result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
+        if state.get('rolloutWindow'):
+            result.update(historyWindow=state['rolloutWindow'], earlierDurationMs=state['earlierDurationMs'])
+        status = {'state': 'unknown', 'label': '状态未知'}
+        with self.lock:
+            previous = self.realtime.unavailable.get(thread_id) if self.realtime else None
+            if previous and previous[0] is ipc and previous[2]:
+                status = dict(previous[2])
+            self.check_generation(ipc, generation)
+        status['label'] = '历史已同步 · ' + status['label']
+        result.update(source='local-rollout', syncing=False, controls={}, pendingRequests=[],
+                      runtime={'type': status['state']}, status=status)
+        result = self.subagents.resolve_titles(self.subagents.decorate(result, row))
+        result['historyRevision'] = 'persisted:' + result['historyRevision'] + ':' + status['state']
         with self.lock:
             self.check_generation(ipc, generation)
         return result
@@ -333,21 +344,16 @@ class Bridge:
         if is_subagent(row):
             return self.subagent_history(thread_id, limit)
         ipc, generation = self.require()
+        state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
+        if state is None or state.get('_metadataOnly'):
+            return self.persisted_history(thread_id, limit)
+        result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
         try:
-            state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
-            if state is None or state.get('_metadataOnly'):
-                _, state = ipc.snapshot(thread_id)
-            result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
-            try:
-                result['queue'] = self.queue(thread_id)
-                result['historyRevision'] += ':' + result['queue']['fingerprint']
-            except (ValueError, OSError):
-                result['queue'] = {'error': '无法读取原生排队消息，请稍后刷新'}
-                result['historyRevision'] += ':queue-unavailable'
-        except IPCError as exc:
-            if str(exc) != "no-client-found":
-                raise
-            result = self.catalog.history(thread_id)
+            result['queue'] = self.queue(thread_id)
+            result['historyRevision'] += ':' + result['queue']['fingerprint']
+        except (ValueError, OSError):
+            result['queue'] = {'error': '无法读取原生排队消息，请稍后刷新'}
+            result['historyRevision'] += ':queue-unavailable'
         result = self.subagents.resolve_titles(result)
         with self.lock:
             self.check_generation(ipc, generation)

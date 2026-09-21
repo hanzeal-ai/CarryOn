@@ -27,7 +27,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   await page.routeWebSocket('**/api/stream',socket=>socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,controllerId:P},...(m.threadId?{history:history(m.threadId)}:{})}));}));
   await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8897/example.html'));
   await page.waitForFunction(()=>typeof selectThread==='function'&&enabled);
-  const parent=async()=>{await page.evaluate(id=>selectThread(id),P);await page.locator('#messages .subagent-links button').waitFor();};
+  const parent=async()=>{await page.evaluate(id=>selectThread(id),P);await page.locator('#messages .subagent-links button').waitFor({state:'attached'});await page.locator('#messages details.activity-group > summary').click();};
   const menu=async()=>{if(width<760){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'子会话',exact:true}).click();}else{await page.locator('summary[aria-label="会话菜单"]').click();await page.locator('#open-subagents').click();}};
   await parent();await page.locator('#prompt').fill('parent draft');await menu();
   await page.getByRole('button',{name:'Sol release review · 只读',exact:true}).waitFor();
@@ -51,6 +51,14 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   delay=150;await menu();await page.evaluate(id=>selectThread(id),C);await page.waitForTimeout(250);assert.equal(await page.locator('.subagents-dialog').count(),0);assert.equal(await page.evaluate(()=>selected),C);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.evaluate(()=>streamDisconnected({code:1006}));assert.equal(await page.locator('#send').isDisabled(),true);
+  await page.evaluate(async()=>{
+    applyStatus({enabled:true,workspaceSession:'workspace-one'});await selectThread('same-id');
+    historyCache.set(conversationKey('same-id'),{thread:{id:'same-id'},timeline:[{id:'private',type:'agentMessage',text:'workspace one private'}]});
+    conversationDrafts.set(conversationKey('same-id'),{text:'old private draft'});
+    await receiveUpdate({status:{enabled:true,workspaceSession:'workspace-two'},subscription,threadId:'same-id',history:{thread:{id:'same-id'},timeline:[{id:'stale',type:'agentMessage',text:'stale workspace packet'}]}},()=>true);
+  });
+  assert.equal(await page.evaluate(()=>selected),null);assert.equal(await page.evaluate(()=>historyCache.entries.size),0);assert.equal(await page.evaluate(()=>conversationDrafts.size),0);
+  assert(!(await page.locator('#messages').textContent()).includes('stale workspace packet'));
   await page.close();
  }
  const cloud=await browser.newPage({viewport:{width:1280,height:844}});cloud.on('pageerror',e=>errors.push(e.message));let authenticated=true;
@@ -72,10 +80,10 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
  });
  await cloud.routeWebSocket('**/console/devices/*/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,controllerId:P,remoteControl:true},...(m.threadId?{history:history(m.threadId)}:{})}}));});});
  await cloud.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8897/example.html');await cloud.waitForFunction(()=>enabled);
- await cloud.evaluate(id=>selectThread(id),P);await cloud.locator('#messages .subagent-links button').waitFor();
+ await cloud.evaluate(id=>selectThread(id),P);await cloud.locator('#messages .subagent-links button').waitFor({state:'attached'});
  await cloud.evaluate(()=>{subagentNavigation.show();$('console-device').value='two';$('console-device').dispatchEvent(new Event('change'));});
  await cloud.waitForFunction(()=>client.device==='two'&&enabled);await cloud.waitForTimeout(250);assert.equal(await cloud.locator('.subagents-dialog').count(),0);assert.equal(await cloud.evaluate(()=>selected),null);
- await cloud.evaluate(id=>selectThread(id),P);await cloud.locator('#messages .subagent-links button').waitFor();
+ await cloud.evaluate(id=>selectThread(id),P);await cloud.locator('#messages .subagent-links button').waitFor({state:'attached'});
  await cloud.evaluate(()=>{subagentNavigation.show();$('console-logout').click();});await cloud.locator('#pairing').waitFor();await cloud.waitForTimeout(250);assert.equal(await cloud.locator('.subagents-dialog').count(),0);assert.equal(await cloud.evaluate(()=>selected),null);
  await cloud.close();
  assert.deepEqual(errors,[]);console.log('PASS desktop/mobile: navigation, readonly/ready gates, drafts, errors, disconnect; cloud device switch/logout reject late directories');

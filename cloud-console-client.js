@@ -77,6 +77,10 @@ class CloudConsoleClient extends CarryOnClient {
     else this.connect();
     return this.selection.subscription;
   }
+  resume(){
+    if(this.socket&&this.lastReceived&&Date.now()-this.lastReceived>45000){this.close();this.onDisconnect({});}
+    this.connect();
+  }
   connect() {
     if(this.removing||!this.token||!this.device||this.active)return;
     if(!this.selection)this.selection={historyProtocol:1,historyLimit:40,threadId:null,threadIds:[],subscription:crypto.randomUUID()};
@@ -102,7 +106,8 @@ class CloudConsoleClient extends CarryOnClient {
       }catch(error){if(current()&&this.socket===socket){this.onError(error);socket.close();}}
       finally{processing=false;}
     };
-    const heartbeat=()=>{clearTimeout(this.heartbeatTimer);this.heartbeatTimer=setTimeout(()=>{if(current())socket.close();},45000);};
+    const heartbeat=()=>{this.lastReceived=Date.now();clearTimeout(this.heartbeatTimer);this.heartbeatTimer=setTimeout(()=>{if(current())socket.close();},45000);};
+    heartbeat();
     socket.onopen=()=>{if(current()){heartbeat();socket.send(JSON.stringify({type:'subscribe',...this.selection}));}else socket.close();};
     socket.onmessage=event=>{
       if(!current())return;heartbeat();

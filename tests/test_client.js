@@ -185,3 +185,32 @@ test('display cache uses history revision before serializing a newly decoded obj
   context.cache.set('t',{historyRevision:'one',toJSON(){throw Error('unchanged revision must not be encoded');}});
   assert.equal(context.cache.get('t'),first);
 });
+
+
+test('short return probes the existing socket without resubscribing; lost probe reconnects',()=>{
+ const f=fixture();const id=f.client.subscribe({threadId:'a',threadIds:['a']});const socket=f.sockets[0];socket.open();
+ f.client.subscribe({threadId:'a',threadIds:['a']});f.client.resume();
+ assert.equal(f.sockets.length,1);assert.equal(f.client.selection.subscription,id);
+ assert.equal(socket.sent.filter(x=>x.type==='subscribe').length,1);assert.equal(socket.sent.at(-1).type,'ping');
+ const timeout=[...f.timers.values()][0];timeout();assert.equal(f.disconnects.length,1);
+ const retry=[...f.timers.values()][0];retry();assert.equal(f.sockets.length,2);
+});
+test('project creation uses server project identity and keeps uncertain retry identity',async()=>{
+ const f=fixture();f.respond(async()=>({ok:true,json:async()=>({state:'uncertain'})}));
+ await f.client.createInProject('project-a','task');await f.client.createInProject('project-a','task');
+ assert.equal(f.requests[0].body.projectId,'project-a');assert.equal(f.requests[0].body.requestId,f.requests[1].body.requestId);
+ await assert.rejects(f.client.createInProject('project-b','task',()=>false),/已改变/);
+ assert.equal(f.requests.length,2);
+});
+
+
+test('local workspace identity isolates pending jobs and invalidates old HTTP responses',async()=>{
+ const f=fixture();f.client.setWorkspaceSession('workspace-one');
+ f.respond(async()=>{throw Error('offline');});await assert.rejects(f.client.submit('compose','same-thread','hello'),/offline/);
+ const original=f.requests.at(-1).body.requestId;
+ let finish;f.respond(()=>new Promise(r=>finish=r));const old=f.client.request('/status');
+ f.client.setWorkspaceSession('workspace-two');finish({ok:true,json:async()=>({enabled:true})});await assert.rejects(old,/已改变/);
+ f.respond(async()=>({ok:true,json:async()=>({state:'accepted'})}));await f.client.submit('compose','same-thread','hello');
+ assert.notEqual(f.requests.at(-1).body.requestId,original);
+ assert(f.storage.has('carryon-local:workspace-one:pending'));
+});

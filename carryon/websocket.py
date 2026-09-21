@@ -177,7 +177,11 @@ def serve(handler):
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
         while not closed.is_set():
-            session.subscribe(ws.receive())
+            message = ws.receive()
+            if message.get('type') == 'ping':
+                ws.send({'type': 'pong'})
+            else:
+                session.subscribe(message)
     except (OSError, EOFError, ValueError):
         pass
     finally:

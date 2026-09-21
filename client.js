@@ -101,7 +101,14 @@ class CarryOnClient {
     return result;
   }
 
+  setWorkspaceSession(session){
+    if(this.workspaceSession===session)return;
+    if(this.workspaceSession)this.epoch++;
+    this.workspaceSession=session;this.localStorageScope='carryon-local:'+session+':';
+    this.pending=this.restore(this.localStorageScope+'pending');this.operations=this.restore(this.localStorageScope+'operations');
+  }
   async requestJob(path, body, key, pending, storageKey, retainUncertain = false) {
+    if(this.localStorageScope)storageKey=this.localStorageScope+(storageKey==='carryon-pending'?'pending':'operations');
     const requestId = pending.get(key) || crypto.randomUUID();
     pending.set(key, requestId);
     sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
@@ -132,6 +139,11 @@ class CarryOnClient {
       {prompt,...(images.length?{images}:{})}, key, this.pending, 'carryon-pending',kind==='compose');
   }
 
+  async createInProject(projectId,prompt,isCurrent=()=>true){
+    if(!isCurrent())throw Error('工作区或项目已改变');
+    return this.requestJob('/threads',{projectId,prompt},'project:'+projectId+':'+prompt,this.pending,'carryon-pending',true);
+  }
+
   async operation(target, action, fields, isCurrent = () => true) {
     const epoch = this.epoch;
     const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([target, action, fields])));
@@ -153,10 +165,25 @@ class CarryOnClient {
   }
 
   subscribe(selection) {
+    const normalized={historyProtocol:1,historyLimit:40,...selection};
+    const previous=this.selection&&Object.fromEntries(Object.entries(this.selection).filter(([key])=>!['type','subscription'].includes(key)));
+    if(previous&&JSON.stringify(previous)===JSON.stringify(normalized)){this.connect();return this.selection.subscription;}
     this.selection = {historyProtocol:1, historyLimit:40, ...selection, type: 'subscribe', subscription: crypto.randomUUID()};
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(this.selection));
     else this.connect();
     return this.selection.subscription;
+  }
+
+  probe(){
+    if(this.socket?.readyState!==WebSocket.OPEN||this.probePending)return;
+    const socket=this.socket;this.probePending=true;clearTimeout(this.healthTimer);
+    socket.send(JSON.stringify({type:'ping'}));
+    this.healthTimer=setTimeout(()=>{if(this.socket===socket)socket.close();},15000);
+  }
+  scheduleProbe(){this.probePending=false;clearTimeout(this.healthTimer);this.healthTimer=setTimeout(()=>this.probe(),15000);}
+  resume() {
+    // Browser WebSocket control pongs are invisible to JavaScript.
+    if(this.socket?.readyState===WebSocket.OPEN)this.probe();else this.connect();
   }
 
   connect() {
@@ -167,23 +194,28 @@ class CarryOnClient {
     const socket = new WebSocket(url);
     const wire = new HistoryWire();
     this.socket = socket;
+    this.healthTimer=setTimeout(()=>{if(this.socket===socket)socket.close();},15000);
     const current = () => this.socket === socket;
     socket.onopen = () => {
       if (!current()) return;
       this.delay = 500;
+      this.lastReceived=Date.now();this.scheduleProbe();
       socket.send(JSON.stringify({type: 'auth', token: this.token}));
       if (this.selection) socket.send(JSON.stringify(this.selection));
     };
     socket.onmessage = async event => {
       if (!current()) return;
       try {
-        const data = wire.decode(JSON.parse(event.data));
+        this.lastReceived=Date.now();
+        const packet=JSON.parse(event.data);
+        if(packet.type==='pong'){this.scheduleProbe();return;}
+        const data = wire.decode(packet);
         if (data.type === 'update') await this.onUpdate(data, current);
       } catch (error) { if (current()) { this.onError(error); socket.close(); } }
     };
     socket.onclose = event => {
       if (!current()) return;
-      this.socket = null;
+      this.socket = null;clearTimeout(this.healthTimer);this.probePending=false;
       this.onDisconnect(event);
       if (event.code === 1008) { this.onAuthError(); return; }
       this.timer = setTimeout(() => this.connect(), this.delay);
@@ -192,6 +224,7 @@ class CarryOnClient {
   }
 
   close() {
+    clearTimeout(this.healthTimer);this.probePending=false;
     clearTimeout(this.timer);
     const socket = this.socket;
     this.socket = null;

@@ -6,9 +6,9 @@ const assert=require('node:assert/strict');
  await reference.goto(require('node:url').pathToFileURL(require('node:path').resolve('design/mobile/index.html')).href);
  await reference.locator('[name=token]').fill('demo');await reference.locator('#login-form button').click();
  const visualChecks=[];
- async function compare(route,pairs,yOffset=0){
+ async function compare(route,pairs,yOffset=0,heightOffset=0){
   await reference.evaluate(value=>{location.hash=value},route);await reference.waitForTimeout(60);
-  for(const [actual,expected]of pairs){const a=await page.locator(actual).first().boundingBox(),b=await reference.locator(expected).first().boundingBox();assert(a&&b,actual+' exists');for(const key of ['x','y','width','height'])assert(Math.abs(a[key]-(b[key]+(key==='y'?yOffset:0)))<=2,actual+' '+key+': '+a[key]+' vs '+b[key]);visualChecks.push(actual);}
+  for(const [actual,expected]of pairs){const a=await page.locator(actual).first().boundingBox(),b=await reference.locator(expected).first().boundingBox();assert(a&&b,actual+' exists');for(const key of ['x','y','width','height'])assert(Math.abs(a[key]-(b[key]+(key==='y'?yOffset:key==='height'?heightOffset:0)))<=2,actual+' '+key+': '+a[key]+' vs '+b[key]);visualChecks.push(actual);}
  }
  const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGEERROR',e.stack)});let authenticated=true;
  const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/CarryOn',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/CarryOn',unread:false}];
@@ -43,7 +43,7 @@ const assert=require('node:assert/strict');
  await page.screenshot({path:'.runtime/mobile-projects.png'});await compare('tasks',[['.mobile-list-page .toolbar','.toolbar'],['.search','.search'],['#mobile-session-list .project-row','.project-row'],['.bottom-nav','.bottom-nav']]);
  await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await compare('new',[['#create-dialog .toolbar','.toolbar'],['#create-dialog .group','.feature-page .group'],['#create-dialog .production-composer','.composer'],['#create-dialog .input-shell','.input-shell']]);
  assert.equal(await page.locator('#create-dialog').evaluate(el=>Math.round(el.getBoundingClientRect().height)),844);
- await page.getByRole('button',{name:'控制会话',exact:true}).click();assert(await page.locator('#controller').isVisible());await page.locator('#mobile-controller button[aria-label="返回"]').click();await page.locator('#close-dialog').click();
+ assert(await page.locator('#new-project').isVisible());await page.locator('#new-project').selectOption('p1');assert.equal(await page.locator('#new-project').inputValue(),'p1');await page.locator('#close-dialog').click();
  await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().waitFor();await page.screenshot({path:'.runtime/mobile-sessions.png'});
  await page.locator('.session').first().click();
  await page.evaluate(async()=>{
@@ -58,12 +58,12 @@ const assert=require('node:assert/strict');
  }
  await page.locator('#prompt').fill('保留独立草稿');assert.equal(await page.locator('#send').getAttribute('data-mode'),'send');
  await page.getByRole('button',{name:'查看当前模型与思考强度',exact:true}).click();assert(await page.locator('#mobile-model').isVisible());assert.equal(await page.locator('#mobile-model select').first().inputValue(),'gpt-6-astra');await page.screenshot({path:'.runtime/mobile-model.png'});await reference.locator('#model-trigger').click();await compare('chat/1',[['#mobile-model','#model-popover']]);await reference.keyboard.press('Escape');await page.keyboard.press('Escape');
- await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.screenshot({path:'.runtime/mobile-tools.png'});await reference.evaluate(()=>showFeature('operations'));// The restored queue row adds one design-standard row to the bottom sheet.
- const toolRowHeight=(await reference.locator('#sheet .setting').first().boundingBox()).height;assert.equal((await page.getByRole('button',{name:'队列管理',exact:true}).boundingBox()).height,toolRowHeight);await compare('chat/1',[['#mobile-tools .sheet-top','#sheet .sheet-top'],['#mobile-tools .setting','#sheet .setting']],-toolRowHeight);await reference.locator('#sheet button[aria-label=关闭]').click();await page.locator('#mobile-tools button[aria-label="关闭"]').click();
+ await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.screenshot({path:'.runtime/mobile-tools.png'});await reference.evaluate(()=>showFeature('operations'));// Additional functional rows keep the design row height and bottom-sheet alignment.
+ const toolRowHeight=(await reference.locator('#sheet .setting').first().boundingBox()).height;assert.equal((await page.getByRole('button',{name:'队列管理',exact:true}).boundingBox()).height,toolRowHeight);const additionalRows=await page.locator('#mobile-tools .setting').count()-await reference.locator('#sheet .setting').count();await compare('chat/1',[['#mobile-tools .sheet-top','#sheet .sheet-top'],['#mobile-tools .setting','#sheet .setting']],-additionalRows*toolRowHeight);await reference.locator('#sheet button[aria-label=关闭]').click();await page.locator('#mobile-tools button[aria-label="关闭"]').click();
  // Exercise the restored actions through the existing transport, against mocked API responses.
- await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+ await page.bringToFront();await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  for(const selector of ['.message.user','.message.assistant']){
-  const message=page.locator(selector).first();await message.getByRole('button',{name:'复制原文',exact:true}).click();
+  const message=page.locator(selector).first();await message.getByRole('button',{name:'复制原文',exact:true}).click();await message.getByRole('button',{name:'已复制',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),await message.locator('.text').textContent());
  }
  await page.evaluate(()=>{fixture.queue={fingerprint:'queue-v1',messages:[{id:'q1',text:'第一项',pausedReason:'等待恢复'},{id:'q2',text:'第二项'}]};Operations.render(fixture,selected,client,notice,true);});
@@ -96,7 +96,7 @@ const assert=require('node:assert/strict');
  await page.getByRole('button',{name:'返回会话',exact:true}).click();assert(await page.locator('.session').first().isVisible());
  const readBefore=writes.filter(w=>w.path==='/api/notifications/read').length;
  await page.evaluate(async()=>receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history:fixture,readSequence:3},()=>true));await page.waitForTimeout(100);assert.equal(writes.filter(w=>w.path==='/api/notifications/read').length,readBefore);
- await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();await page.screenshot({path:'.runtime/mobile-settings.png'});await compare('devices',[['.device-card','.device-card'],['.workspace-card-title','.workspace-card-title'],['.workspace-settings .setting','.workspace-settings .setting'],['.bottom-nav','.bottom-nav']]);
+ await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();await page.screenshot({path:'.runtime/mobile-settings.png'});await compare('devices',[['.device-card','.device-card']],0,2*toolRowHeight);await compare('devices',[['.workspace-card-title','.workspace-card-title'],['.bottom-nav','.bottom-nav']]);await compare('devices',[['.workspace-settings>div.group>.setting','.workspace-settings>div.group>.setting']],2*toolRowHeight);
  await page.getByRole('button',{name:'消息通知',exact:true}).click();await page.locator('#notification-preferences input').first().uncheck();await page.screenshot({path:'.runtime/mobile-notifications.png'});await page.locator('#notification-dialog button[aria-label="返回"]').click();
  await page.getByRole('button',{name:'切换工作区',exact:true}).click();await page.screenshot({path:'.runtime/mobile-workspaces.png'});await page.locator('#mobile-devices button[aria-label="关闭"]').click();
  await page.locator('.bottom-nav').getByRole('button',{name:'会话',exact:true}).click();await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().click();assert.equal(await page.locator('#prompt').inputValue(),'保留独立草稿');
@@ -109,7 +109,7 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>applyStatus({enabled:true,controllerId:'t2',remoteControl:false}));assert(await page.locator('#prompt').isDisabled());assert(await page.locator('#send').isDisabled());assert(await page.locator('#create').isDisabled());
  await page.setViewportSize({width:1440,height:1000});await page.waitForTimeout(100);assert(await page.locator('main>aside').isVisible());assert(await page.locator('.conversation').isVisible());assert(!(await page.locator('.bottom-nav').isVisible()));await page.screenshot({path:'.runtime/mobile-desktop-regression.png'});
  await page.setViewportSize({width:320,height:640});await page.waitForTimeout(100);await page.evaluate(()=>MobileUI.show('projects'));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.locator('#pairing').waitFor();await page.setViewportSize({width:390,height:844});await page.screenshot({path:'.runtime/mobile-login.png'});assert(!(await page.locator('.bottom-nav').isVisible()));await reference.evaluate(()=>{loggedIn=false;render()});await compare('login',[['.login-symbol','.login-symbol'],['#token','[name=token]'],['#pair','#login-form .primary']]);
+ await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.locator('#pairing').waitFor();await page.setViewportSize({width:390,height:844});await page.screenshot({path:'.runtime/mobile-login.png'});assert(!(await page.locator('.bottom-nav').isVisible()));await reference.evaluate(()=>{loggedIn=false;render()});await compare('login',[['.login-symbol','.login-symbol'],['#login-username','[name=token]']]);const loginFieldPitch=(await page.locator('#token').boundingBox()).y-(await page.locator('#login-username').boundingBox()).y;assert(loginFieldPitch>=44);await compare('login',[['#token','[name=token]'],['#pair','#login-form .primary']],loginFieldPitch);
  await page.setViewportSize({width:1280,height:900});await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html')+'?mobile=1');await page.waitForFunction(()=>document.body.classList.contains('mobile-ready'));assert.equal(await page.locator('#mobile-shell').evaluate(el=>el.getBoundingClientRect().width),430);
  await page.evaluate(()=>{fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'waiting'},controls:{settings:{},requests:[{id:'preview-question',fingerprint:'preview-fingerprint',action:'user-input',params:{questions:[{id:'q1',question:'移动预览问题'}]}}]},pendingRequests:[{id:'preview-question'}],queue:{messages:[]}};Operations.render(fixture,'t1',client,notice,true);});
  assert.equal(await page.locator('#requests textarea').count(),1);assert(!(await page.locator('#question-dialog').isVisible()));
@@ -129,10 +129,10 @@ const assert=require('node:assert/strict');
  await local.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();
  assert(!(await local.locator('.cloud-settings').isVisible()));assert(!(await local.locator('#bridge').isVisible()));assert.equal(await local.locator('.workspace-settings').getByText('本机设置',{exact:true}).count(),0);
  await local.screenshot({path:'.runtime/mobile-local-settings.png'});
- await local.setViewportSize({width:1440,height:1000});
- assert(await local.locator('body>.cloud-settings').isVisible());assert(await local.locator('body>header #bridge').isVisible());
- await local.locator('.cloud-settings>summary').click();assert(await local.getByRole('button',{name:'停止本地服务',exact:true}).isVisible());
- await local.setViewportSize({width:390,height:844});assert(!(await local.locator('.cloud-settings').isVisible()));
+ await local.setViewportSize({width:1440,height:1000});await local.locator('body>header #bridge').waitFor();
+ assert((await local.locator('body>header #bridge').textContent()).includes('CLI 或桌面端'));
+ assert.equal(await local.getByRole('button',{name:'停止本地服务',exact:true}).count(),0);
+ await local.setViewportSize({width:390,height:844});await local.locator('body>header #bridge').waitFor({state:'hidden'});assert(!(await local.locator('#bridge').isVisible()));
  await local.close();
  assert.deepEqual(errors,[]);console.log('Matched design geometry:',visualChecks.length);console.log('PASS design components: navigation, full screen create and inline edit, chat, popover, settings, requests, draft/read gates, desktop restoration, queue management, message clipboard, local settings placement and narrow/short viewports. API responses mocked.');await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

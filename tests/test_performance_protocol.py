@@ -100,25 +100,24 @@ class PerformanceProtocolTests(unittest.TestCase):
         update=encoder.encode(packet('2',values[:-1]+[{'id':'999','text':'changed'}]))
         self.assertLess(len(json.dumps(update)),500)
 
-    def test_preview_does_not_wait_for_native_full_history(self):
+    def test_persisted_history_switches_to_native_without_syncing_forever(self):
         import threading
         from types import SimpleNamespace
         from carryon.realtime import Subscription
         native=Mock();native.current.return_value=None
         bridge=SimpleNamespace(lock=threading.RLock(),status=lambda:{'enabled':True},require=lambda:(native,1),
             journal=SimpleNamespace(list=lambda limit=None:[]),
-            preview_history=Mock(return_value={'syncing':True,'timeline':[]}),history=Mock())
-        # An IPC mock has dynamic attributes; omit event adaptation for this fixture.
+            history=Mock(return_value={'source':'local-rollout','syncing':False,'timeline':[]}))
         del native.events
         owner=SimpleNamespace(bridge=bridge,sync_watches=lambda:None,unavailable={})
         subscription=Subscription(owner)
         subscription.selection.update(threadId='t',historyLimit=40)
         packet,*_=subscription.update()
-        self.assertTrue(packet['history']['syncing'])
-        self.assertEqual(packet['readSequence'],0)
-        bridge.history.assert_not_called()
+        self.assertFalse(packet['history']['syncing'])
+        self.assertTrue(subscription.persisted_history)
+        bridge.history.assert_called_once_with('t',limit=40)
         native.current.return_value={'id':'t'}
-        bridge.history.return_value={'timeline':[{'id':'live'}]}
+        bridge.history.return_value={'source':'desktop-snapshot','timeline':[{'id':'live'}]}
         packet,*_=subscription.update()
         self.assertEqual(packet['history']['timeline'],[{'id':'live'}])
-        bridge.history.assert_called_once_with('t',limit=40)
+        self.assertFalse(subscription.persisted_history)

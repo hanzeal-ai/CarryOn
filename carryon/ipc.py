@@ -127,12 +127,12 @@ class DesktopIPC:
         # Discovery for unloaded threads must not hold the full-history lock.
         with self.lock:
             state = self.current(thread_id)
-            if state is not None and thread_id in self.following:
+            if state is not None and not state.get('_metadataOnly') and thread_id in self.following:
                 return self.following[thread_id], state
         owner = self.owner(thread_id, timeout_ms=1500)
         with self._snapshot_lock(thread_id):
             state = self.current(thread_id)
-            if state is not None:
+            if state is not None and not state.get('_metadataOnly'):
                 return owner, state
             return self._snapshot(thread_id, owner)
 
