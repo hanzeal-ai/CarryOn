@@ -6,6 +6,8 @@
 
 用 Xcode 打开 `CarryOn.xcodeproj`，选择 `CarryOn` scheme。在 Signing & Capabilities 选择自己的开发团队，核对 Bundle Identifier（当前为 `com.hanzeal.carryon`），再选择已连接且开启开发者模式的 iPhone 运行。其他开发团队需使用自己账号下的 Bundle Identifier 和描述文件。
 
+Run 使用 Debug：默认不加载推送及 Associated Domains 签名权限，可使用免费 Personal Team 真机调试；仍需保留自动签名，并在设备上信任开发者。此配置不支持远程推送及关联域名密码共享。Archive 使用 Release：启用这两项权限，发布前需选择付费开发团队及匹配的描述文件。免费账号安装的开发版本通常有效期为 7 天，过期后需重新构建安装。
+
 2026-09-14，本机 Xcode 26.6、Swift 6.3.3 已完成 iPhone 16 Pro Max 的开发签名构建（1.0 build 2），并校验 GiphyUISDK 框架嵌入。真机安装结果与交互验收应分别记录，签名构建不代表完整端到端验收。
 
 ```sh

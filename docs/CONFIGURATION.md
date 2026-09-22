@@ -25,8 +25,8 @@ CLI 与桌面使用相同目录注册表和初始化引擎。配置及认证操�
 `carryon/product.json` is the shared cloud URL source. After changing its host, regenerate the checked-in signing file:
 
 ```sh
-python3 scripts/apple_association.py --entitlements iOS/CarryOn/CarryOn.entitlements --apns '$(CARRYON_APNS_ENVIRONMENT)'
+python3 scripts/apple_association.py --entitlements iOS/CarryOn/CarryOn.entitlements --apns '$(CARRYON_SIGNING_APNS_ENVIRONMENT)'
 python3 scripts/apple_association.py --aasa /tmp/apple-app-site-association --app-id TEAM_ID.BUNDLE_ID
 ```
 
-Xcode sets `CARRYON_APNS_ENVIRONMENT` to development for Debug and production for Release. `CARRYON_PUSH_ENTITLEMENTS` can override the signing file. Publish the generated association document on the configured HTTPS host; hosting and signed physical-device acceptance require separate verification. Generation is explicit, outside Xcode build phases, to avoid a signing dependency cycle.
+Debug defaults to no signing entitlements so a Personal Team can run the app; push notifications and associated-domain password sharing are unavailable in that build. With a paid team and matching provisioning profile, set `CARRYON_PUSH_ENTITLEMENTS=CarryOn/CarryOn.entitlements` to enable them. Release keeps this entitlement file enabled. Xcode sets `CARRYON_SIGNING_APNS_ENVIRONMENT` to development for Debug and production for Release; the separate runtime `CARRYON_APNS_ENVIRONMENT` remains sandbox/production for the gateway contract. Publish the generated association document on the configured HTTPS host; hosting and signed physical-device acceptance require separate verification. Generation is explicit, outside Xcode build phases, to avoid a signing dependency cycle.

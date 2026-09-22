@@ -11,19 +11,16 @@ struct RootView: View {
         @Bindable var model = model
         Group {
             if !model.restoringLogin && model.restorationError == nil && !model.authenticated { LoginView() }
-            else if model.authenticated && model.devices.isEmpty { WorkspaceConnectionHelp() }
+            else if !model.authenticated { StartupView() }
+            else if model.devices.isEmpty { WorkspaceConnectionHelp() }
             else {
               NavigationStack {
                 VStack(spacing: 0) {
                     Group {
-                        if !model.authenticated {
-                            StartupView()
-                        } else {
-                            switch tab {
-                            case 1: ActivityView()
-                            case 2: SettingsView()
-                            default: ProjectsView()
-                            }
+                        switch tab {
+                        case 1: ActivityView()
+                        case 2: SettingsView()
+                        default: ProjectsView()
                         }
                     }.id(model.selectedDevice)
                         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)

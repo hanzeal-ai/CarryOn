@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>$(CARRYON_APNS_ENVIRONMENT)</string>
+	<string>$(CARRYON_SIGNING_APNS_ENVIRONMENT)</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>webcredentials:carryon.hanzeal.com</string>

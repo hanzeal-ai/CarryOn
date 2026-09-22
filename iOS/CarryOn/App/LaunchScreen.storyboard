@@ -6,14 +6,19 @@
         <viewController id="launch-controller" sceneMemberID="viewController"><view key="view" contentMode="scaleToFill" id="launch-view">
             <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
             <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-            <subviews><imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="CarryOnLogo" translatesAutoresizingMaskIntoConstraints="NO" id="launch-logo">
-                <rect key="frame" x="160.5" y="390" width="72" height="72"/>
-                <constraints><constraint firstAttribute="width" constant="72" id="logo-width"/><constraint firstAttribute="height" constant="72" id="logo-height"/></constraints>
+            <subviews><imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="CarryOnLoginLogo" translatesAutoresizingMaskIntoConstraints="NO" id="launch-logo">
+                <rect key="frame" x="140.5" y="342" width="112" height="168"/>
+                <constraints><constraint firstAttribute="width" constant="112" id="logo-width"/><constraint firstAttribute="height" constant="168" id="logo-height"/></constraints>
+                <color key="tintColor" systemColor="labelColor"/>
             </imageView></subviews>
             <viewLayoutGuide key="safeArea" id="launch-safe"/>
-            <color key="backgroundColor" red="0.949" green="0.949" blue="0.969" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+            <color key="backgroundColor" systemColor="systemBackgroundColor"/>
             <constraints><constraint firstItem="launch-logo" firstAttribute="centerX" secondItem="launch-view" secondAttribute="centerX" id="logo-x"/><constraint firstItem="launch-logo" firstAttribute="centerY" secondItem="launch-view" secondAttribute="centerY" id="logo-y"/></constraints>
         </view></viewController><placeholder placeholderIdentifier="IBFirstResponder" id="launch-responder" sceneMemberID="firstResponder"/>
     </objects></scene></scenes>
-    <resources><image name="CarryOnLogo" width="72" height="72"/></resources>
+    <resources>
+        <image name="CarryOnLoginLogo" width="160" height="240"/>
+        <systemColor name="systemBackgroundColor"><color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/></systemColor>
+        <systemColor name="labelColor"><color white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/></systemColor>
+    </resources>
 </document>

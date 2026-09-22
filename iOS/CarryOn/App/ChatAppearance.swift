@@ -76,6 +76,7 @@ struct OutgoingMessageStatusView: View {
 
 struct CarryOnChatComposer<Accessories: View>: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
     @ScaledMetric(relativeTo: .body) private var lineHeight = 22
     var disabled = false
@@ -115,7 +116,9 @@ struct CarryOnChatComposer<Accessories: View>: View {
                     .opacity(actionDisabled ? 0.35 : 1)
                     .accessibilityLabel(buttonLabel)
             }
-        }.padding(.horizontal, 6).padding(.vertical, 4)
+        }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: text)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: action)
+            .padding(.horizontal, 6).padding(.vertical, 4)
             .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 24))
             .padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
     }

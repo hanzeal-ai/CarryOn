@@ -18,10 +18,10 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 Paper {
                     VStack(spacing: 12) {
-                        Image(systemName: "laptopcomputer").font(.system(size: 58, weight: .ultraLight)).foregroundStyle(Design.secondary).padding(.top, 8)
+                        Image(systemName: "laptopcomputer").font(.system(size: 40, weight: .ultraLight)).foregroundStyle(Design.secondary).padding(.top, 8)
                         HStack(spacing: 5) { Text(model.device?.title ?? "选择工作区").font(.system(size: 18, weight: .semibold)); Button { switcher = true } label: { Image(systemName: "arrow.left.arrow.right").frame(width: 44, height: 44) }.accessibilityLabel("切换工作区") }
                         Label(model.connectionLabel, systemImage: "circle.fill").font(.caption).foregroundStyle(model.connected ? Design.green : Design.secondary)
-                    }.padding(22).frame(maxWidth: .infinity)
+                    }.padding(12).frame(maxWidth: .infinity)
                     SettingRow(icon: "waveform.path", title: "远程待机", value: standby["supported"].bool == false ? "不支持" : standby["effective"].bool == true ? "已开启" : standby["enabled"].bool == false ? "未开启" : "状态未知")
                     Divider().padding(.leading, 60)
                     SettingRow(icon: "lock", title: "远程控制", value: model.connected ? (model.status["remoteControl"].bool == true ? "已允许" : "只读") : "状态未知")
@@ -35,28 +35,35 @@ struct SettingsView: View {
                 }.overlay(alignment: .topTrailing) {
                     CodexUsageView().id(model.scope).padding(10)
                 }
-                SectionCaption(title: "账户与配对")
                 Paper {
-                    Button("修改密码") { password = true }.frame(maxWidth: .infinity, minHeight: 48)
-                    Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", chevron: true, badgeCount: model.requests.count) }
-
-                }
-                SectionCaption(title: "会话")
-                Paper {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("显示不活跃会话", isOn: $showInactiveConversations)
-                        Text("开启后显示全部会话；未在桌面 Codex 加载的会话只能查看历史。")
-                            .font(.caption).foregroundStyle(Design.secondary)
-                    }.padding(16)
-                }
-                SectionCaption(title: "通知")
-                Paper { Button { notifications = true } label: { SettingRow(icon: "bell", title: "消息通知", chevron: true) } }
-                SectionCaption(title: "关于")
-                Paper {
-                    Button { logs = true } label: { SettingRow(icon: "doc.text", title: "运行日志", chevron: true) }
+                    NavigationLink {
+                        settingsPage("账户与配对") {
+                            Button { password = true } label: { SettingRow(icon: "lock", title: "修改密码", chevron: true) }
+                            Divider().padding(.leading, 60)
+                            Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", chevron: true, badgeCount: model.requests.count) }
+                        }
+                    } label: { SettingRow(icon: "person.crop.circle", title: "账户与配对", chevron: true, badgeCount: model.requests.count) }
                     Divider().padding(.leading, 60)
-                    Button { updates = true } label: { SettingRow(icon: "bubble", title: "CarryOn", value: model.appUpdater.currentVersion, chevron: true, imageName: "CarryOnLogo") }.accessibilityLabel("CarryOn " + model.appUpdater.currentVersion + "，检查更新")
-                }
+                    NavigationLink {
+                        settingsPage("偏好设置") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Toggle("显示不活跃会话", isOn: $showInactiveConversations)
+                                Text("开启后显示全部会话；未在桌面 Codex 加载的会话只能查看历史。")
+                                    .font(.caption).foregroundStyle(Design.secondary)
+                            }.padding(16)
+                            Divider().padding(.leading, 60)
+                            Button { notifications = true } label: { SettingRow(icon: "bell", title: "消息通知", chevron: true) }
+                        }
+                    } label: { SettingRow(icon: "slider.horizontal.3", title: "偏好设置", chevron: true) }
+                    Divider().padding(.leading, 60)
+                    NavigationLink {
+                        settingsPage("关于") {
+                            Button { logs = true } label: { SettingRow(icon: "doc.text", title: "运行日志", chevron: true) }
+                            Divider().padding(.leading, 60)
+                            Button { updates = true } label: { SettingRow(icon: "bubble", title: "CarryOn", value: model.appUpdater.currentVersion, chevron: true, imageName: "CarryOnLogo") }
+                        }
+                    } label: { SettingRow(icon: "info.circle", title: "关于", value: model.appUpdater.currentVersion, chevron: true) }
+                }.padding(.top, 16)
                 Button(role: .destructive) { logout = true } label: {
                     Text("退出登录").font(.system(size: 15))
                         .frame(maxWidth: .infinity, minHeight: 50)
@@ -64,7 +71,7 @@ struct SettingsView: View {
                 }.buttonStyle(.plain).foregroundStyle(.red)
                     .background(Design.surface, in: RoundedRectangle(cornerRadius: 16)).padding(.top, 22)
             }.padding(20)
-        }
+        }.scrollBounceBehavior(.basedOnSize)
         .task(id: model.scope) { do { _ = try await model.cachedDeviceRequest("/api/standby") } catch { model.report(error, operation: "读取待机状态", blocking: false) } }
         .sheet(isPresented: $switcher) { WorkspaceSwitcher() }
         .sheet(isPresented: $scanning) { WorkspaceBindingView() }
@@ -76,6 +83,11 @@ struct SettingsView: View {
         .confirmationDialog("退出登录？", isPresented: $logout, titleVisibility: .visible) { Button("退出登录", role: .destructive) { Task { await model.logout() } } }
 
     }
+    private func settingsPage<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        ScrollView { Paper(content: content).padding(20) }
+            .background(Design.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+    }
+
 }
 struct NotificationPreferencesView: View {
     @Environment(AppModel.self) private var model

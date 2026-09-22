@@ -2,7 +2,7 @@ import UserNotifications
 import OSLog
 
 @MainActor final class AppIconBadge {
-    private let center = UNUserNotificationCenter.current()
+    private lazy var center = UNUserNotificationCenter.current()
     private let logger = Logger(subsystem: "CarryOn", category: "AppIconBadge")
     private var count = 0
     private var mayRequestAuthorization = false

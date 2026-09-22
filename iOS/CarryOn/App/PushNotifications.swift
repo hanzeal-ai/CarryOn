@@ -6,7 +6,7 @@ import CarryOnCore
     @Published private(set) var token: String?
     @Published var target: PushTarget?
     @Published private(set) var registrationError: String?
-    let installationID: String = {
+    private(set) lazy var installationID: String = {
         if let id = UserDefaults.standard.string(forKey: "carryon.push.installation"), UUID(uuidString: id) != nil { return id }
         let id = UUID().uuidString.lowercased()
         UserDefaults.standard.set(id, forKey: "carryon.push.installation")

@@ -463,11 +463,17 @@ struct ConversationView: View {
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !bottomVisible {
-                Button(newMessages ? "有新消息 · 回到最新" : "回到最新") {
+                Button {
                     newMessages = false; navigationPinned = false; pendingNavigation = nil
                     model.activityScrollTarget = nil
                     restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
-                }.font(.caption).frame(maxWidth: .infinity, minHeight: 36).accessibilityIdentifier("conversation-latest")
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
+                        .frame(width: 44, height: 44).background(Design.surface, in: Circle())
+                        .overlay(Circle().stroke(Design.border, lineWidth: 1))
+                }.accessibilityLabel(newMessages ? "有新消息，回到最新" : "回到最新")
+                    .accessibilityIdentifier("conversation-latest")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             if !model.conversationReadOnly { ConversationActionBar(target: actionTarget) }
             if loadingImages || submitting { ProgressView().controlSize(.small) }
@@ -543,11 +549,14 @@ struct TimelineEntry: View {
                 let refs = item["artifacts"].array.filter { !nativePaths.contains($0["path"].text) && (user || $0["kind"].text == "image" || !ConversationPresentation.referencedArtifactIDs(item).contains($0["id"].text)) }
                 if user { MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: true) }
                 else { ForEach(refs.filter { $0["kind"].text == "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID, inlineImage: true) } }
-                MessageMarkdown(text: user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item), artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
-                    .padding(user ? 13 : 0).background(user ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 20))
-                    .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
-                    .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
-                    .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
+                let messageText = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
+                if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    MessageMarkdown(text: messageText, artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
+                        .padding(user ? 13 : 0).background(user ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 20))
+                        .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
+                        .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
+                        .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
+                }
                 if !contentContext.isReadOnly { ForEach(item["asyncQuestions"].array, id: \.stableID) { question in AsyncQuestionView(question: question, threadID: threadID) } }
                 ForEach(refs.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
             }.padding(.leading, user ? 32 : 0)

@@ -15,14 +15,14 @@ import CarryOnCore
     var error: String?
     var previewImage: UIImage?
     var runtimeLog = RuntimeLog()
-    let appUpdater = AppUpdateModel(platform: .iOS)
+    @ObservationIgnored lazy var appUpdater = AppUpdateModel(platform: .iOS)
     private var preparedStartup = false
     var devices: [Record] = []
     var selectedDevice = ""
     var status: JSONValue = .null
     var connected = false
     var reconnecting = false
-    let connectivity = ConnectivityMonitor()
+    @ObservationIgnored lazy var connectivity = ConnectivityMonitor()
     var historyUpdatedAt: [String: Date] = [:]
     private var notificationOpenToken: UUID?
     var selectedThread: Record?
@@ -77,16 +77,21 @@ import CarryOnCore
     private var selectionUpdate: Task<Void, Never>?
     private var directoryVersion = 0
     private var directoryUpdates: Task<Void, Never>?
-    private let pending = PendingWrites()
+    @ObservationIgnored private lazy var pending = PendingWrites()
     private let workspacePreferences = WorkspacePreferences()
     private let draftFile = LocalFiles.directory.appendingPathComponent("drafts-v1.json")
     private var draftsLoaded = false
     private var draftSave: Task<Void, Never>?
 
-    private func loadDrafts() {
+    private func loadDrafts() async {
+        let version = epoch
         draftsLoaded = false
         do {
-            let saved = try LocalFiles.read(DraftSnapshot.self, from: draftFile) ?? DraftSnapshot()
+            let file = draftFile
+            let saved = try await Task.detached(priority: .userInitiated) {
+                try LocalFiles.read(DraftSnapshot.self, from: file) ?? DraftSnapshot()
+            }.value
+            guard version == epoch, !Task.isCancelled else { return }
             drafts = saved.texts; attachments = saved.images; draftsLoaded = true
         } catch { report(APIError("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存"), operation: "读取草稿", blocking: false) }
     }
@@ -125,14 +130,17 @@ import CarryOnCore
                 displayCache.reset(); await displayCache.flush()
                 await restored.invalidate(); return
             }
-            let session = try await restored.request("session", timeout: 10)
+            // Prepare local display data while the server validates the saved session.
+            async let sessionRequest = restored.request("session", timeout: 10)
+            await restoreDisplayCache(server: address.base.absoluteString)
+            let session = try await sessionRequest
             guard version == epoch, requestedAddress == addressText, !Task.isCancelled else { await restored.invalidate(); return }
             guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
             devices = try values.map(Record.init); api = restored
             addressText = address.base.absoluteString
-            await restoreDisplayCache()
+            await loadDrafts()
             guard version == epoch, !Task.isCancelled else { return }
-            loadDrafts(); authenticated = true
+            authenticated = true
             switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
         } catch {
             await client?.invalidate()
@@ -202,7 +210,9 @@ import CarryOnCore
         UserDefaults.standard.set(addressText, forKey: "carryon.server")
         await restoreDisplayCache()
         guard version == epoch, !Task.isCancelled else { throw CancellationError() }
-        loadDrafts(); authenticated = true
+        await loadDrafts()
+        guard version == epoch, !Task.isCancelled else { throw CancellationError() }
+        authenticated = true
         switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
     }
 
@@ -471,10 +481,11 @@ import CarryOnCore
         guard version == epoch, id == selectedDevice, !Task.isCancelled else { throw CancellationError() }
         return value
     }
-    private func restoreDisplayCache() async {
+    private func restoreDisplayCache(server: String? = nil) async {
+        let server = server ?? addressText
         do {
-            guard let token = try KeychainSessionCredentials().load(server: addressText) else { return }
-            let owner = SHA256.hash(data: Data((addressText + "\n" + token).utf8)).map { String(format: "%02x", $0) }.joined()
+            guard let token = try KeychainSessionCredentials().load(server: server) else { return }
+            let owner = SHA256.hash(data: Data((server + "\n" + token).utf8)).map { String(format: "%02x", $0) }.joined()
             try await displayCache.restore(owner: owner)
         } catch { report(error, operation: "读取本地显示缓存", blocking: false) }
     }

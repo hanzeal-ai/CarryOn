@@ -175,8 +175,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CARRYON_APNS_ENVIRONMENT = sandbox;
-				CARRYON_PUSH_ENTITLEMENTS = "CarryOn/CarryOn.entitlements";
-                CARRYON_APNS_ENVIRONMENT = development;
+				CARRYON_PUSH_ENTITLEMENTS = "";
+                CARRYON_SIGNING_APNS_ENVIRONMENT = development;
                 CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
@@ -210,7 +210,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CARRYON_APNS_ENVIRONMENT = production;
 				CARRYON_PUSH_ENTITLEMENTS = "CarryOn/CarryOn.entitlements";
-                CARRYON_APNS_ENVIRONMENT = production;
+                CARRYON_SIGNING_APNS_ENVIRONMENT = production;
                 CODE_SIGN_ENTITLEMENTS = "$(CARRYON_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
