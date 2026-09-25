@@ -12,7 +12,7 @@ from .thread_status import project_status
 METHODS = {
     'interrupt': ('interrupt-turn', 4), 'steer': ('steer-turn', 1),
     'compact': ('compact-thread', 1), 'settings': ('update-thread-settings', 1),
-    'edit': ('edit-last-user-turn', 2), 'resume': ('edit-last-user-turn', 2), 'clear-queue': ('set-queued-follow-ups-state', 1),
+    'edit': ('edit-last-user-turn', 2), 'resume': ('start-turn', 2), 'clear-queue': ('set-queued-follow-ups-state', 1),
     'command-approval': ('command-approval-decision', 1),
     'file-approval': ('file-approval-decision', 1),
     'permissions-approval': ('permissions-request-approval-response', 1),
@@ -99,14 +99,20 @@ def build(action, data, state):
         if project_status(state)['state'] != 'idle':
             raise ValueError('此操作需要已确认空闲且没有待处理请求的会话')
         if action in ('edit', 'resume'):
-            if action == 'resume' and (c['lastTurnStatus'] != 'interrupted' or not turns(state)[-1].get('params', {}).get('input')):
-                raise ValueError('只有已暂停的最后一轮可以重新启动')
+            if action == 'resume' and (c['lastTurnStatus'] != 'interrupted' or not c['lastTurnId']):
+                raise ValueError('只有已暂停的最后一轮可以继续执行')
             if data.get('turnId') != c['lastTurnId'] or (action == 'edit' and not c['lastUserText']):
                 raise ValueError('最后一轮已改变或不支持文本编辑')
             if action == 'edit' and data.get('confirmed') is not True:
                 raise ValueError('编辑会替换最后一轮并重新执行，请确认')
-            params.update(turnId=c['lastTurnId'], message=c['lastUserText'] if action == 'resume' else text(data.get('prompt')),
-                          shouldSendPermissionOverrides=False)
+            if action == 'resume':
+                # Native startEmptyTurn continues the retained history with empty input.
+                # Editing would first revert/roll back the interrupted user turn.
+                params['turnStart'] = {'request': {'threadId': state['id'], 'input': []},
+                                       'context': {'inheritThreadSettings': True}}
+            else:
+                params.update(turnId=c['lastTurnId'], message=text(data.get('prompt')),
+                              shouldSendPermissionOverrides=False)
     else:
         request = next((r for r in state.get('requests', [])
                         if type(r.get('id')) is type(data.get('nativeRequestId'))

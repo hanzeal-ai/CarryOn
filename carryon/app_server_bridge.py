@@ -23,13 +23,27 @@ class AppServerCatalog(Catalog):
 
     def list(self, limit=100, offset=0, search=''):
         ipc, _ = self.bridge.require()
+        if limit <= 0:
+            return []
         result, cursor = [], None
+        needle = search.casefold()
+        seen_cursors = set()
         while True:
             page = ipc.rpc('thread/list', {'limit':100, 'cursor':cursor, 'archived':False})
-            result.extend(self.row(thread) for thread in page['data'] if not thread.get('parentThreadId'))
+            for thread in page['data']:
+                if thread.get('parentThreadId'):
+                    continue
+                row = self.row(thread)
+                if not needle or needle in (row['title']+' '+row['cwd']).casefold():
+                    result.append(row)
+            if len(result) >= offset + limit:
+                break
             cursor = page.get('nextCursor')
-            if not cursor: break
-        if search: result = [row for row in result if search.casefold() in (row['title']+' '+row['cwd']).casefold()]
+            if not cursor:
+                break
+            if cursor in seen_cursors:
+                raise ValueError('会话分页游标重复，请重试')
+            seen_cursors.add(cursor)
         return result[offset:offset+limit]
 
 
