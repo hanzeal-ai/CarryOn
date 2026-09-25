@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import CarryOnCore
 
 struct SettingsView: View {
@@ -26,15 +27,12 @@ struct SettingsView: View {
                     Divider().padding(.leading, 60)
                     SettingRow(icon: "lock", title: "远程控制", value: model.connected ? (model.status["remoteControl"].bool == true ? "已允许" : "只读") : "状态未知")
 
-                }.overlay(alignment: .topLeading) {
-                    Button { scanning = true } label: {
-                        Image(systemName: "qrcode.viewfinder")
-                            .font(.system(size: 22))
-                            .frame(width: 44, height: 44)
-                    }.buttonStyle(.plain).accessibilityLabel("扫一扫，绑定工作区").padding(10)
-                }.overlay(alignment: .topTrailing) {
-                    CodexUsageView().id(model.scope).padding(10)
+                    Divider().padding(.leading, 60)
+                    Button { scanning = true } label: { SettingRow(icon: "qrcode.viewfinder", title: "扫码绑定工作区", chevron: true) }
                 }
+                Paper {
+                    HStack { Text("Codex 剩余额度").font(.body); Spacer(); CodexUsageView().id(model.scope) }.padding(16)
+                }.padding(.top, 16)
                 Paper {
                     NavigationLink {
                         settingsPage("账户与配对") {
@@ -90,8 +88,12 @@ struct SettingsView: View {
 
 }
 struct NotificationPreferencesView: View {
+    @EnvironmentObject private var push: PushNotifications
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var pushStatus = "正在读取系统通知状态…"
+    @State private var systemStatus = ""
     @State private var values: [String: Bool] = [:]
     @State private var saving = false
     @State private var loading = true
@@ -113,9 +115,34 @@ struct NotificationPreferencesView: View {
                             }
                         }.disabled(saving)
                         Text("开启的消息类型会显示在动态中。关闭不会删除消息或未读标记。").font(.caption).foregroundStyle(Design.secondary)
-                        Text("系统通知还需云端 APNs 配置及 iOS 通知权限。").font(.caption).foregroundStyle(Design.secondary)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("系统通知").font(.headline)
+                            Text(systemStatus).font(.subheadline)
+                            Text(pushStatus).font(.caption).foregroundStyle(Design.secondary)
+                            Text(push.registrationError.map { "设备推送注册失败：" + $0 } ?? (push.token == nil ? "设备推送尚未完成注册" : "设备已取得推送令牌"))
+                                .font(.caption).foregroundStyle(push.registrationError == nil ? Design.secondary : .red)
+                            Button("前往系统通知设置") {
+                                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+                            }.frame(minHeight: 44)
+                        }
                     }
                 }.padding(20)
+            }.task(id: model.scope + String(scenePhase == .active)) {
+                guard scenePhase == .active else { return }
+                let scope = model.scope
+                let settings = await UNUserNotificationCenter.current().notificationSettings()
+                guard !Task.isCancelled, scope == model.scope else { return }
+                switch settings.authorizationStatus {
+                case .authorized: systemStatus = "手机通知权限已开启"
+                case .provisional, .ephemeral: systemStatus = "手机允许静默或临时通知"
+                case .denied: systemStatus = "手机通知权限已关闭"
+                default: systemStatus = "尚未授权手机通知"
+                }
+                do {
+                    let value = try await model.console("push")
+                    guard !Task.isCancelled, scope == model.scope else { return }
+                    pushStatus = value["enabled"].bool == true ? "服务端推送已开启，实际送达还取决于设备注册与通知设置。" : "服务端暂未开启系统推送，仍可在动态中查看消息。"
+                } catch { guard !Task.isCancelled, scope == model.scope else { return }; pushStatus = "暂时无法确认服务端推送状态，可稍后重新打开查看。" }
             }.background(Design.background).navigationTitle("消息通知").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

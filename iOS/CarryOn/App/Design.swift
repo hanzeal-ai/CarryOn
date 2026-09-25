@@ -121,16 +121,12 @@ struct ThreadRow: View {
                 HStack { Text(record.title).font(.body.weight(.medium)).lineLimit(2)
                     if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7).accessibilityLabel("未读") }
                 }
-                Text(projectName).font(.caption2).foregroundStyle(Design.secondary).lineLimit(1)
+                Text(projectName).font(.caption).foregroundStyle(Design.secondary).lineLimit(1)
                 Text(record.value["failed"].bool == true ? "执行失败" : record.value["status"]["label"].string ?? "状态未知")
-                    .font(.caption2).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
-                if case .number(let updated) = record.value["updated_at"] {
-                    Text("更新于 " + Date(timeIntervalSince1970: updated).formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2).foregroundStyle(Design.secondary)
-                }
-                if case .number(let completed) = record.value["completedAt"] {
-                    Text("完成于 " + Date(timeIntervalSince1970: completed).formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2).foregroundStyle(Design.secondary)
+                    .font(.caption).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
+                if case .number(let time) = (state == "idle" && record.value["completedAt"] != .null ? record.value["completedAt"] : record.value["updated_at"]) {
+                    Text(Date(timeIntervalSince1970: time), style: .relative)
+                        .font(.caption).foregroundStyle(Design.secondary)
                 }
             }
             Spacer(minLength: 0)

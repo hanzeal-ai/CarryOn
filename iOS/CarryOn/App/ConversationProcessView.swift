@@ -4,7 +4,7 @@ import CarryOnCore
 struct ConversationProcessView: View {
     @Environment(\.conversationDisclosureState) private var disclosure
     @State private var localExpanded = false
-    @State private var contentHeight: CGFloat = 1
+    @State private var showingAll = false
     let item: JSONValue
     let threadID: String
     private var key: String { threadID + "\n" + item.stableID }
@@ -28,18 +28,29 @@ struct ConversationProcessView: View {
                     if item["status"].text == "interrupted" { Text("已中断") }
                     if !entries.isEmpty { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 10)) }
                     Spacer(minLength: 0)
-                }.font(.system(size: 13)).foregroundStyle(Design.secondary)
-                    .frame(minHeight: 36).contentShape(Rectangle())
+                }.font(.subheadline).foregroundStyle(Design.secondary)
+                    .frame(minHeight: 44).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(entries.isEmpty).accessibilityValue(entries.isEmpty ? "" : expanded ? "已展开" : "已收起")
             if expanded && !entries.isEmpty {
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(entries, id: \.stableID) { entry in
-                            ProcessContentRow(item: entry, threadID: threadID, anchorID: item.stableID)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-                }.frame(height: min(contentHeight, 280)).padding(.top, 4)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(entries.prefix(5)), id: \.stableID) { entry in
+                        ProcessContentRow(item: entry, threadID: threadID, anchorID: item.stableID)
+                    }
+                    if entries.count > 5 {
+                        Button("查看完整过程（\(entries.count) 项）") { showingAll = true }.frame(minHeight: 44)
+                    }
+                }.padding(.top, 4)
+                .sheet(isPresented: $showingAll) {
+                    NavigationStack {
+                        ScrollView { LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(entries, id: \.stableID) { entry in
+                                ProcessContentRow(item: entry, threadID: threadID, anchorID: item.stableID)
+                            }
+                        }.padding(20) }
+                        .navigationTitle("执行过程").navigationBarTitleDisplayMode(.inline)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showingAll = false } } }
+                    }
+                }
             }
         }
     }

@@ -9,6 +9,7 @@ import AppKit
             await model.refresh()
             let view = NSHostingView(rootView: SettingsView(model: model))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 850), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            if ProcessInfo.processInfo.environment["CARRYON_PREVIEW_APPEARANCE"] == "dark" { window.appearance = NSAppearance(named: .darkAqua) }
             window.contentView = view
             window.makeKeyAndOrderFront(nil)
             try? await Task.sleep(nanoseconds: 1_000_000_000)

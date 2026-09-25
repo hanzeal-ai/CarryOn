@@ -20,7 +20,7 @@ struct DraftImageThumbnail: View {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 20)).symbolRenderingMode(.palette)
                             .foregroundStyle(.white, .black.opacity(0.65))
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)
                     }.buttonStyle(.plain).accessibilityLabel("删除此图片")
                 }
         }

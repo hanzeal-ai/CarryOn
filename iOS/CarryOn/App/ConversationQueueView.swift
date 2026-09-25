@@ -42,7 +42,7 @@ struct ConversationQueueView: View {
                                     editing = message; editText = message["text"].text; editFingerprint = queue["fingerprint"]; showingEditor = true
                                 }
                                 Button("删除", systemImage: "trash", role: .destructive) { submit("queue-delete", fields: ["messageId": message["id"]]) }
-                            } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36) }.accessibilityLabel("排队消息操作").disabled(!model.canPerform(target, action: "queue-edit"))
+                            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("排队消息操作").disabled(!model.canPerform(target, action: "queue-edit"))
                         }
                     }.disabled(!model.canPerform(target)).padding(.vertical, 4)
                 }.onMove { source, destination in

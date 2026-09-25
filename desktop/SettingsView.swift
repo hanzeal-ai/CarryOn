@@ -42,12 +42,12 @@ import AppKit
                         Text(model.message).font(.system(size: 12)).textSelection(.enabled).lineLimit(4)
                         Spacer()
                         Button { model.message = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
-                    }.foregroundStyle(model.messageIsError ? Color.red : DesktopDesign.secondary).padding(15).background(.white)
+                    }.foregroundStyle(model.messageIsError ? Color.red : DesktopDesign.secondary).padding(15).background(Color(nsColor: .controlBackgroundColor))
                 }
             }
         }
         .background(DesktopDesign.background).foregroundStyle(DesktopDesign.ink).tint(DesktopDesign.blue)
-        .frame(minWidth: 960, minHeight: 700).preferredColorScheme(.light)
+        .frame(minWidth: 960, minHeight: 700)
         .sheet(isPresented: $initializing, onDismiss: { recoveryBindingID = nil; nextBindingVerification = .distantPast; Task { await refreshSetup() } }) { InitializationView(model: model, bindingID: recoveryBindingID).id(model.directory) }
         .sheet(item: $membersBinding, onDismiss: { if recoveryBindingID != nil { initializing = true } }) { binding in
             WorkspaceMembersView(model: model, bindingID: binding.id, rebind: { recoveryBindingID = binding.id }).id(model.directory)
@@ -106,7 +106,7 @@ import AppKit
                                     HStack(spacing: 5) { Circle().fill(service.running ? DesktopDesign.green : DesktopDesign.secondary).frame(width: 5, height: 5); Text(service.label).font(.system(size: 10)).foregroundStyle(DesktopDesign.secondary) }
                                 }; Spacer(minLength: 0)
                             }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(service.directory == model.directory ? Color.white : Color.clear, in: RoundedRectangle(cornerRadius: 13))
+                                .background(service.directory == model.directory ? Color(nsColor: .controlBackgroundColor) : Color.clear, in: RoundedRectangle(cornerRadius: 13))
                                 .overlay(RoundedRectangle(cornerRadius: 13).stroke(service.directory == model.directory ? DesktopDesign.blue.opacity(0.15) : .clear, lineWidth: 1))
                         }.buttonStyle(.plain).disabled(model.busy)
                             .contextMenu {
@@ -136,7 +136,7 @@ import AppKit
     }
     private func tab(_ title: String, id: String) -> some View {
         Button { page = id } label: { Text(title).font(.system(size: 12, weight: page == id ? .semibold : .regular)).padding(.horizontal, 15).padding(.vertical, 8)
-            .foregroundStyle(page == id ? DesktopDesign.ink : DesktopDesign.secondary).background(page == id ? .white : .clear, in: Capsule()) }.buttonStyle(.plain)
+            .foregroundStyle(page == id ? DesktopDesign.ink : DesktopDesign.secondary).background(page == id ? Color(nsColor: .controlBackgroundColor) : .clear, in: Capsule()) }.buttonStyle(.plain)
     }
     private var overview: some View {
         VStack(spacing: 0) {

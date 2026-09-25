@@ -26,8 +26,21 @@ extension AppModel {
         guard let capability = WorkspaceCapability.operation(action) else { return false }
         return canPerform(target) && allows(capability)
     }
+    func interactionUnavailableReason(_ target: ConversationActionTarget, capability: WorkspaceCapability) -> String? {
+        if target.scope != scope { return "工作区已切换，请返回当前工作区后重试" }
+        if !authenticated { return "登录已失效，请重新登录" }
+        if !connected { return "工作区尚未连接，连接恢复后可操作" }
+        if status["enabled"].bool != true { return "Codex 尚未就绪，请在电脑端检查连接" }
+        if status["remoteControl"].bool != true { return "工作区为只读，请在电脑端开启远程控制" }
+        if !allows(capability) { return "当前账号没有此操作权限，请联系工作区管理员" }
+        let value = snapshot(for: target)
+        if value["access"]["canInteract"].bool == false { return "此会话为只读，可查看历史记录" }
+        if writing { return "正在提交操作，请稍候" }
+        if !canPerform(target) { return "会话尚未就绪，请等待同步后重试" }
+        return nil
+    }
     @discardableResult func perform(_ action: String, target: ConversationActionTarget, fields: [String: JSONValue] = [:]) async -> Bool {
-        guard canPerform(target, action: action) else { error = "工作区未授权此操作，或会话已切换、只读、尚未就绪"; return false }
+        guard canPerform(target, action: action) else { error = interactionUnavailableReason(target, capability: WorkspaceCapability.operation(action) ?? .view) ?? "当前操作不可用，请刷新会话后重试"; return false }
         let accepted = await write(path: target.path("operations"), target: target.threadID, body: target.body(fields.merging(["action": .string(action)]) { _, new in new }), awaitCompletion: true)
         if accepted && target.isActivity {
             do { try await loadActivity(target) } catch { report(error, operation: "刷新动态详情", blocking: false) }

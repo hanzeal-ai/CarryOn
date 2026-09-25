@@ -6,6 +6,7 @@ import CarryOnCore
 struct MessageMarkdown: View {
     @Environment(AppModel.self) private var model
     let text: String
+    @ScaledMetric(relativeTo: .body) private var bodySize = 17
     var artifacts: [JSONValue] = []
     var threadID: String = ""
     var resolveCreatedThreads = false
@@ -18,7 +19,7 @@ struct MessageMarkdown: View {
         Markdown(resolveCreatedThreads ? CreatedThreadReference.render(text, titles: threadTitles) : text)
             .markdownImageProvider(AttachmentImageProvider())
             .markdownInlineImageProvider(AttachmentInlineImageProvider())
-            .markdownTextStyle { FontSize(17); ForegroundColor(Design.ink) }
+            .markdownTextStyle { FontSize(bodySize); ForegroundColor(Design.ink) }
             .markdownTextStyle(\.link) { ForegroundColor(Design.link) }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 CodeBlockView(code: configuration.content, language: configuration.language)
@@ -67,12 +68,12 @@ struct CodeBlockView: View {
                 Text(label).font(.caption.monospaced()).foregroundStyle(Design.secondary)
                 Spacer()
                 Button { UIPasteboard.general.string = code } label: { Image(systemName: "doc.on.doc") }
-                    .accessibilityLabel("复制代码").frame(minWidth: 44, minHeight: 36)
+                    .accessibilityLabel("复制代码").frame(minWidth: 44, minHeight: 44)
             }.padding(.horizontal, 12)
             Divider()
             ScrollView(.horizontal) {
                 Text(highlighted ?? AttributedString(code))
-                    .font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                    .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true).padding(12)
             }
         }.background(Design.background, in: RoundedRectangle(cornerRadius: Design.controlCorner))
@@ -158,7 +159,8 @@ struct MessageTextSelectionView: View {
 /// TextKit handles long files without creating a SwiftUI view for every line.
 private struct SourceTextView: UIViewRepresentable {
     let text: AttributedString
-    var font: UIFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    var font: UIFont? = nil
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
         view.textColor = .label
@@ -172,7 +174,8 @@ private struct SourceTextView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let result = NSMutableAttributedString(text)
         let fullRange = NSRange(location: 0, length: result.length)
-        result.addAttribute(.font, value: font, range: fullRange)
+        let scaledFont = font ?? UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .monospacedSystemFont(ofSize: 13, weight: .regular))
+        result.addAttribute(.font, value: scaledFont, range: fullRange)
         result.enumerateAttribute(.foregroundColor, in: fullRange) { color, range, _ in
             if color == nil { result.addAttribute(.foregroundColor, value: UIColor.label, range: range) }
         }

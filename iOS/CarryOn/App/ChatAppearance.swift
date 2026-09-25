@@ -80,6 +80,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @Binding var text: String
     @ScaledMetric(relativeTo: .body) private var lineHeight = 22
     var disabled = false
+    var draftEditable = true
     var sendAllowed = true
     var stopAllowed = true
     var hasImages = false
@@ -92,20 +93,20 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @ViewBuilder var accessories: Accessories
     private var action: ComposerAction { .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
     private var actionDisabled: Bool { disabled || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
-    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "重新执行" : stopping ? "补充指令" : "发送" }
+    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "继续执行" : stopping ? "立即补充" : "发送" }
     var body: some View {
         ComposerLayout(lineHeight: lineHeight) {
-            HStack(spacing: -12) { accessories }
+            HStack(spacing: 0) { accessories }
                 .foregroundStyle(theme.colors.mainTint)
             TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
-                .font(.body).lineLimit(1...6).disabled(disabled || !sendAllowed)
+                .font(.body).lineLimit(1...6).disabled(!draftEditable || !sendAllowed)
                 .foregroundStyle(theme.colors.inputText)
             HStack(alignment: .center, spacing: 0) {
                 if action == .send, stopping, let queue {
                     Menu {
-                        Button("加入队列", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
+                        Button("当前执行结束后发送", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
                         if let stop { Button("停止当前执行", systemImage: "stop", action: stop).disabled(!stopAllowed) }
-                    } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.disabled(disabled).accessibilityLabel("发送方式")
+                    } label: { Label("发送方式", systemImage: "chevron.down").font(.caption).frame(minHeight: 44) }.disabled(disabled).accessibilityLabel("发送方式")
                 }
                 Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
                     Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")

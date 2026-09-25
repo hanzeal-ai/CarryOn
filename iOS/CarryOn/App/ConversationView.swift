@@ -94,13 +94,14 @@ struct ConversationView: View {
         statusMessage.createdAt = Date(timeIntervalSince1970: Double(rows.count))
         return rows.enumerated().map { index, item in
             let date = Date(timeIntervalSince1970: Double(index))
-            if var message = previous[item.stableID], message.customData["entry"] as? JSONValue == item {
+            if var message = previous[item.stableID], message.customData["entry"] as? JSONValue == item,
+               message.customData["canEdit"] as? Bool == TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) {
                 message.createdAt = date
                 return message
             }
             var message = ExyteChat.Message(id: item.stableID,
                 user: .init(id: "timeline", name: "", avatarURL: nil, type: .system),
-                createdAt: date, attributedText: AttributedString(item["text"].text), customData: ["entry": item])
+                createdAt: date, attributedText: AttributedString(item["text"].text), customData: ["entry": item, "canEdit": TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly)])
             message.triggerRedraw = UUID()
             return message
         } + [statusMessage]
@@ -132,6 +133,8 @@ struct ConversationView: View {
         }, messageMenuAction: { (action: CarryOnMessageAction, _, message) in
             guard let item = message.customData["entry"] as? JSONValue else { return }
             switch action {
+            case .edit:
+                if TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) { model.beginEditing(item) }
             case .copy: UIPasteboard.general.string = item["text"].text
             case .selectText:
                 let user = item["type"].text != "agentMessage"
@@ -161,7 +164,7 @@ struct ConversationView: View {
         .environment(\.conversationDisclosureState, disclosureState)
         .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))
     }
-    var body: some View {
+    private var conversationPresentation: some View {
         chatContent
         .navigationTitle(thread.title).navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(!model.threadParents.isEmpty)
@@ -227,6 +230,9 @@ struct ConversationView: View {
         .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
             EditMessageView(item: model.editingMessage, threadID: thread.id, scope: model.scope)
         }
+    }
+    var body: some View {
+        conversationPresentation
         .onChange(of: model.historyRevision, initial: true) { _, _ in
             if model.history["thread"]["id"].text == thread.id { readingState?.historyLimit = model.historyLimit }
             refreshMessages()
@@ -239,6 +245,7 @@ struct ConversationView: View {
         .onChange(of: model.visibleOutgoing) { _, _ in refreshMessages() }
         .onChange(of: model.historyFailure) { _, _ in refreshMessages() }
         .onChange(of: model.conversationReadOnly) { _, _ in refreshMessages() }
+        .onChange(of: model.canInteract(.edit)) { _, _ in refreshMessages() }
         .onChange(of: photos) { _, selection in Task { await loadPhotos(selection) } }
         .onDisappear { displayGeneration = UUID(); selectionGeneration = UUID(); loadingImages = false }
         .onAppear {
@@ -385,6 +392,7 @@ struct ConversationView: View {
         if !model.conversationReadOnly {
         CarryOnChatComposer(text: $model.draft,
             disabled: !model.canInteract || loadingImages || submitting,
+            draftEditable: !loadingImages && !submitting,
             sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.allows(.stop),
             hasImages: !images.isEmpty, stopping: model.state == "running",
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
@@ -468,14 +476,24 @@ struct ConversationView: View {
                     model.activityScrollTarget = nil
                     restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
                 } label: {
-                    Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
-                        .frame(width: 44, height: 44).background(Design.surface, in: Circle())
-                        .overlay(Circle().stroke(Design.border, lineWidth: 1))
+                    HStack(spacing: 6) {
+                        if newMessages { Text("有新消息").font(.subheadline) }
+                        Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
+                    }.padding(.horizontal, newMessages ? 14 : 0)
+                        .frame(minWidth: 44, minHeight: 44).background(Design.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Design.border, lineWidth: 1))
                 }.accessibilityLabel(newMessages ? "有新消息，回到最新" : "回到最新")
                     .accessibilityIdentifier("conversation-latest")
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            if !model.conversationReadOnly { ConversationActionBar(target: actionTarget) }
+            if !model.conversationReadOnly {
+                if !model.connected && model.allows(.send) {
+                    Text("可继续编辑草稿，连接恢复后可发送").font(.caption).foregroundStyle(Design.secondary)
+                } else if model.connected && !model.canInteract(.send), let reason = model.interactionUnavailableReason(actionTarget, capability: .send) {
+                    Text(reason).font(.caption).foregroundStyle(Design.secondary)
+                }
+                ConversationActionBar(target: actionTarget)
+            }
             if loadingImages || submitting { ProgressView().controlSize(.small) }
             if !model.conversationReadOnly && !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -529,8 +547,9 @@ struct TimelineEntry: View {
     @Environment(\.conversationContentContext) private var contentContext
     let item: JSONValue
     let threadID: String
-    private var canEdit: Bool {
-        supportsOperation("edit", in: model.history) && !contentContext.isReadOnly && model.canInteract(.edit) && model.selectedThread?.id == threadID &&
+    private var canEdit: Bool { Self.canEdit(item, threadID: threadID, model: model, readOnly: contentContext.isReadOnly) }
+    static func canEdit(_ item: JSONValue, threadID: String, model: AppModel, readOnly: Bool) -> Bool {
+        supportsOperation("edit", in: model.history) && !readOnly && model.canInteract(.edit) && model.selectedThread?.id == threadID &&
         model.state == "idle" && model.history["syncing"].bool != true &&
         item["type"].text == "userMessage" && item["turnId"] != .null &&
         item["turnId"] == model.history["controls"]["lastTurnId"] &&
@@ -943,13 +962,13 @@ private struct MessageThumbnails: View {
 }
 
 enum CarryOnMessageAction: MessageMenuAction {
-    case copy, selectText
-    func title() -> String { self == .copy ? "复制原文" : "选择文字" }
-    func icon() -> Image { Image(systemName: self == .copy ? "doc.on.doc" : "text.cursor") }
+    case copy, selectText, edit
+    func title() -> String { self == .copy ? "复制原文" : self == .edit ? "编辑消息" : "选择文字" }
+    func icon() -> Image { Image(systemName: self == .copy ? "doc.on.doc" : self == .edit ? "pencil" : "text.cursor") }
     static func menuItems(for message: ExyteChat.Message) -> [Self] {
         guard let item = message.customData["entry"] as? JSONValue,
               ["userMessage", "steeringUserMessage", "agentMessage"].contains(item["type"].text) else { return [] }
-        return [.selectText, .copy]
+        return message.customData["canEdit"] as? Bool == true ? [.selectText, .copy, .edit] : [.selectText, .copy]
     }
 }
 

@@ -20,8 +20,11 @@ struct WorkspaceSwitcher: View {
                             Image(systemName: "laptopcomputer")
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(device.title).foregroundStyle(Design.ink).lineLimit(1)
-                                Text(device.id == model.selectedDevice ? "当前使用" : device.value["online"].bool == true ? "在线" : "离线")
-                                    .font(.caption).foregroundStyle(device.id == model.selectedDevice ? Design.green : Design.secondary)
+                                HStack(spacing: 6) {
+                                    Text(device.value["online"].bool == true ? "在线" : device.value["online"].bool == false ? "离线" : "状态未知")
+                                        .foregroundStyle(device.value["online"].bool == true ? Design.green : Design.secondary)
+                                    if device.id == model.selectedDevice { Label("当前工作区", systemImage: "checkmark").foregroundStyle(Design.secondary) }
+                                }.font(.caption)
                             }
                             Spacer(minLength: 0)
                         }.frame(maxWidth: .infinity, minHeight: 70).contentShape(Rectangle())
@@ -74,7 +77,7 @@ struct WorkspaceConnectionHelp: View {
                     WorkspaceCopyBlock(text: "carryon init", label: "复制命令", monospaced: true)
                     Text("3. 扫描电脑显示的二维码，核对账号、工作区和权限后确认绑定。")
                     Button { scanning = true } label: { Label("扫码绑定工作区", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 48) }
-                        .foregroundStyle(.white).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
+                        .foregroundStyle(Design.onAccent).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
                     Divider()
                     Text("桌面端").font(.headline)
                     Text("打开 CarryOn 桌面端，生成工作区绑定二维码；也可指定你的账号发起申请，在下方确认。")

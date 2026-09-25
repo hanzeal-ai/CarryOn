@@ -8,7 +8,7 @@ import CarryOnCore
     @Environment(\.scenePhase) private var phase
     var body: some Scene {
         WindowGroup {
-            RootView().environment(model).tint(Design.ink)
+            RootView().environment(model).environmentObject(push).tint(Design.ink)
                 .task { await model.restoreLogin() }
                 .task(id: model.scope + String(model.authenticated) + (push.token ?? "") + String(phase == .active)) {
                     if phase == .active { await push.synchronize(model: model) }

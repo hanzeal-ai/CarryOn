@@ -1,16 +1,16 @@
 import SwiftUI
 
 enum DesktopDesign {
-    static let background = Color(red: 0.949, green: 0.949, blue: 0.969)
-    static let ink = Color(red: 0.11, green: 0.11, blue: 0.12)
-    static let secondary = Color(red: 0.43, green: 0.43, blue: 0.45)
-    static let blue = Color(red: 0, green: 0.40, blue: 0.875)
+    static let background = Color(nsColor: .windowBackgroundColor)
+    static let ink = Color.primary
+    static let secondary = Color.secondary
+    static let blue = Color.primary
     static let green = Color(red: 0.145, green: 0.518, blue: 0.255)
-    static let line = Color.black.opacity(0.055)
+    static let line = Color.primary.opacity(0.10)
 }
 struct Paper<Content: View>: View {
     @ViewBuilder var content: Content
-    var body: some View { VStack(spacing: 0) { content }.frame(maxWidth: .infinity).background(.white, in: RoundedRectangle(cornerRadius: 19)) }
+    var body: some View { VStack(spacing: 0) { content }.frame(maxWidth: .infinity).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 19)) }
 }
 struct SectionCaption: View {
     let title: String
@@ -19,7 +19,7 @@ struct SectionCaption: View {
 struct SymbolTile: View {
     let name: String
     var color = DesktopDesign.secondary
-    var body: some View { Image(systemName: name).font(.system(size: 17)).foregroundStyle(color).frame(width: 36, height: 36).background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10)) }
+    var body: some View { Image(systemName: name).font(.system(size: 17)).foregroundStyle(color).frame(width: 36, height: 36).background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 12)) }
 }
 struct SettingRow<Accessory: View>: View {
     let icon: String
@@ -50,13 +50,13 @@ struct StatePill: View {
 struct AccentButton: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-            .padding(.horizontal, 17).frame(height: 36).background(isEnabled ? DesktopDesign.blue.opacity(configuration.isPressed ? 0.7 : 1) : DesktopDesign.secondary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        configuration.label.font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(nsColor: .windowBackgroundColor))
+            .padding(.horizontal, 17).frame(height: 36).background(isEnabled ? DesktopDesign.blue.opacity(configuration.isPressed ? 0.7 : 1) : DesktopDesign.secondary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 struct QuietButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 12, weight: .medium)).foregroundStyle(DesktopDesign.blue)
-            .padding(.horizontal, 12).frame(height: 32).background(DesktopDesign.blue.opacity(configuration.isPressed ? 0.13 : 0.06), in: RoundedRectangle(cornerRadius: 9))
+            .padding(.horizontal, 12).frame(height: 32).background(DesktopDesign.blue.opacity(configuration.isPressed ? 0.13 : 0.06), in: RoundedRectangle(cornerRadius: 12))
     }
 }
