@@ -462,6 +462,37 @@ class AvailableConversationTests(unittest.TestCase):
     tearDown=WorkspaceTests.tearDown
     observe=WorkspaceTests.observe
 
+    def test_empty_independent_workspace_recent_group_remains_searchable(self):
+        self.bridge.catalog.independent=True
+        self.workspace.rows={}
+        page=self.workspace.dispatch('local','GET','/api/projects',None,{'search':['最近']})[1]
+        self.assertEqual(page['total'],1)
+        self.assertEqual(page['projects'][0]['rootPaths'],[])
+        self.assertEqual(page['projects'][0]['total'],0)
+
+    def test_native_projects_remain_separate_with_search_details_and_events(self):
+        second_root='33333333-3333-4333-8333-333333333333'
+        self.workspace.rows[second_root]={'id':second_root,'title':'API','cwd':'/project/api'}
+        for tid, native_id, name in [(T,'bundle','产品矩阵'),(second_root,'bundle','产品矩阵'),(U,'single','单目录项目')]:
+            self.workspace.rows[tid].update(nativeProjectId=native_id, projectName=name,
+                projectRoot='/project/web', projectRoots=['/project/web','/project/api'] if native_id == 'bundle' else ['/project/web'])
+            self.observe(tid)
+            self.observe(tid,status='completed')
+        def page(path, query=None):
+            return self.workspace.dispatch('local','GET',path,None,query or {})[1]
+        projects=page('/api/projects')['projects']
+        self.assertEqual({p['name'] for p in projects},{'产品矩阵','单目录项目'})
+        selected=page('/api/projects',{'search':['/project/api']})['projects']
+        self.assertEqual([p['name'] for p in selected],['产品矩阵'])
+        pid=selected[0]['id']
+        self.assertEqual(page('/api/projects',{'search':['产品矩阵']})['projects'][0]['id'],pid)
+        self.assertEqual(selected[0]['total'],2)
+        self.assertEqual({t['id'] for t in page('/api/projects/'+pid+'/threads')['threads']},{T,second_root})
+        self.assertEqual(next(e for e in self.workspace.events('local')['events'] if e['threadId']==T)['projectId'],pid)
+        for tid in (T,second_root):
+            self.workspace.rows[tid].update(projectRoot='/project/api', projectName='已改名',projectRoots=['/project/api','/project/web'])
+        self.assertEqual(page('/api/projects',{'search':['已改名']})['projects'][0]['id'],pid)
+
     def test_available_filter_counts_projects_and_paginates_after_filtering(self):
         self.observe(T,status='completed')
         query={'availableOnly':['true'],'limit':['1']}

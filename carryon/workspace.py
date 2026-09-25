@@ -12,9 +12,17 @@ from .thread_status import project_status
 KINDS=('message','done','failed','approval')
 
 
-def project_identity(cwd, projectless=False):
+def project_identity(cwd, projectless=False, *, native_id=None):
     path=str(Path(cwd).expanduser().absolute()) if cwd and not projectless else ''
+    if native_id and not projectless:
+        return hashlib.sha256(('native-project:'+native_id).encode()).hexdigest(),Path(path).name if path else native_id
     return hashlib.sha256(path.encode()).hexdigest(),Path(path).name if path else '最近'
+
+
+def row_project_identity(row):
+    pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),
+                              row.get('projectless',False), native_id=row.get('nativeProjectId'))
+    return pid, (row.get('projectName') or name) if not row.get('projectless') else name
 
 
 class Workspace:
@@ -170,7 +178,7 @@ class Workspace:
         for record in records:
             body=json.loads(record[1]);tid=body['threadId']
             if tid in rows:
-                pid,_=project_identity(rows[tid].get('projectRoot', rows[tid].get('projectKey', rows[tid].get('cwd'))),rows[tid].get('projectless',False))
+                pid,_=row_project_identity(rows[tid])
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
@@ -199,7 +207,7 @@ class Workspace:
             # Never preserve cached running/idle after a connection reset or unload.
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
-            pid,name=project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))),row.get('projectless',False))
+            pid,name=row_project_identity(row)
             thread={**row,'projectId':pid,'projectName':name,'status':status,'available':available,'actionable':actionable,'failed':known.get('failed',False),
                     'unread':tid in unread,'readSequence':sequences.get(tid,0),
                     'activityRetained':tid in retained,'activityRead':tid not in unread,
@@ -211,12 +219,13 @@ class Workspace:
             if completed is not None:thread['completedAt']=completed
             threads.append(thread)
             group=groups.setdefault(pid,{'id':pid,'name':name,'cwd':'' if row.get('projectless') else row.get('projectRoot',row.get('cwd','')),'total':0,'waiting':0,'running':0,'unread':0,'unknown':0})
+            group['rootPaths']=row.get('projectRoots',[]) if not row.get('projectless') else []
             project_activity[pid]=max(project_activity.get(pid,0),row.get('updated_at') or 0)
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
         if getattr(self.bridge.catalog, 'independent', False):
             pid, name = project_identity(None)
-            groups.setdefault(pid, {'id':pid, 'name':name, 'cwd':'', 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})['canCreate'] = getattr(ipc, 'account_ready', False)
+            groups.setdefault(pid, {'id':pid, 'name':name, 'cwd':'', 'rootPaths':[], 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})['canCreate'] = getattr(ipc, 'account_ready', False)
             project_activity.setdefault(pid, 0)
         return sorted(groups.values(),key=lambda g:(-project_activity[g['id']],g['name'],g['id'])),threads
 
@@ -265,7 +274,7 @@ class Workspace:
         groups,threads=self.projection(reader,activity_owner,available_only=True) if available_only else (self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader))
         search=query.get('search',[''])[0].casefold()
         if path=='/api/projects':
-            groups=[g for g in groups if search in (g['name']+' '+g['cwd']).casefold()]
+            groups=[g for g in groups if search in (' '.join([g['name'],g['cwd'],*g['rootPaths']])).casefold()]
             return 200,{'projects':groups[offset:offset+limit],'total':len(groups),'nextOffset':offset+limit}
         if path=='/api/activity':
             include_read=query.get('includeRead',['false'])[0]=='true'

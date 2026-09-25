@@ -4,7 +4,7 @@
 
 ## 数据与交互
 
-- 项目归属先读取 Codex 原生项目 ID，再读取无项目标记、桌面项目分配和已保存的项目根目录；不能仅因会话有 cwd 就创建项目。无项目会话合并为“最近”，保留各会话实际 cwd；其分组 ID 为 SHA-256 空字符串。已有项目仍按完整 cwd 的 SHA-256 在设备范围内分组，同名目录不合并。统计读取完整目录索引，不以当前分页计算总数。未加载的原生状态明确计入 unknown。
+- 项目归属先读取 Codex 原生项目 ID，再读取无项目标记、桌面项目分配和已保存的项目根目录；不能仅因会话有 cwd 就创建项目。无项目会话合并为“最近”，保留各会话实际 cwd；其分组 ID 为 SHA-256 空字符串。已确认归属的项目按 `SHA-256("native-project:" + 原生项目 ID)` 在设备范围内分组，显示原生项目名并保留全部 rootPaths；不同项目共享目录也不合并，项目改名及根目录重排不改变分组 ID。无明确归属时，目录仅在唯一对应某个已保存项目时映射到该项目；无法唯一对应的目录保留路径分组，不猜测原生归属。旧客户端缓存的目录 ID 仅在唯一对应某个原生项目时允许创建会话，否则拒绝；该兼容入口限于旧缓存创建请求，列表始终返回新 ID。统计读取完整目录索引，不以当前分页计算总数。未加载的原生状态明确计入 unknown。
 - 为指定项目创建任务时，控制会话优先选择“最近”无项目分组，再查其他项目，各组按最近更新时间排序。未加载会话通过 Codex 桌面链接打开并读取实时状态（可能切换桌面当前会话），仅明确空闲且无待处理审批、输入或未确认请求时借用。每组有独立的查找时间预算，最近分组不可用不会阻止检查其他分组；底层读取仍受 IPC 超时限制。新任务的目标项目独立校验，不改变借用会话的项目归属；结果仍核对原生工具返回和目标项目。
 - 动态按当前 reader 的四类通知偏好展示有未读通知的会话，同一会话去重；新消息、任务完成、执行失败、需要确认任一开启类别命中即可进入动态。读后移出，但开启通知的待确认或失败状态仍保留。未读按会话统计；阅读不会解决原生审批或输入请求。
 - 后台采集独立于网页在线状态。message、done、failed 来自原生完整轮次，approval 来自原生待确认请求；不将 token patch 或 Journal 完成当作新消息。首次历史终态建立基线，已有待确认请求仍可通知。持久 eventId 去重跨重连与重启生效。
@@ -19,7 +19,7 @@
 
 | 方法与路径 | 契约 |
 |---|---|
-| GET /api/projects | limit/offset/search；projects、total、nextOffset；项目含 id/name/cwd/total/waiting/running/unread/unknown |
+| GET /api/projects | limit/offset/search；projects、total、nextOffset；项目含 id/name/cwd/rootPaths/total/waiting/running/unread/unknown；search 匹配原生名称和全部根目录 |
 | GET /api/workspace/threads | 全部会话分页；按原生目录 updated_at 倒序、id 倒序打破同时间排序，支持 limit/offset/search/filter，含实时 status、未读与总数 |
 | GET /api/projects/{id}/threads | 项目会话分页；filter=all/waiting/running/unread，支持 search |
 | GET /api/activity | 按通知偏好筛选的未读通知及待处理会话分页，不是通知事件流水 |
