@@ -27,7 +27,7 @@ class AccountSettingsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.directory = Path(self.temp.name)
-        self.config = {'publicUrl': 'http://127.0.0.1', 'consoleToken': 't'*40,
+        self.config = {'publicUrl': 'http://127.0.0.1', 'accountSetup': True,
                        'devices': {'mac': {'deviceToken': 'd'*40, 'apiToken': 'a'*40}}}
         self.start()
 
@@ -181,7 +181,7 @@ class AccountSettingsTests(unittest.TestCase):
         body = {'setupToken': token, 'username': 'admin', 'password': PASSWORD}
         real_request = request
         with patch('carryon.account_client.request', side_effect=lambda url, action, data=None: real_request(url, action, data, dev_local=True)), \
-             patch('carryon.cli.running', side_effect=AssertionError('local service not required')), \
+             patch('carryon.services.running', side_effect=AssertionError('local service not required')), \
              patch('sys.stdin', io.StringIO(json.dumps(body))), patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(main(['cloud', 'account', 'setup', '--url', self.url, '--input-json']), 0)
             self.assertNotIn(PASSWORD, output.getvalue()); self.assertNotIn(token, output.getvalue())

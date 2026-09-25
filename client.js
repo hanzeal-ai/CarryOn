@@ -39,11 +39,6 @@ class HistoryWire {
         if(!Array.isArray(timeline)||!Number.isInteger(start)||!Number.isInteger(count)||start<0||count<0||start+count>timeline.length||!Array.isArray(items)||!fields||typeof fields.historyRevision!=='string'||!Array.isArray(removed)||removed.some(k=>typeof k!=='string'||['timeline','historyRevision'].includes(k)))throw Error('历史增量格式无效');
         const retained={...previous};for(const key of removed)delete retained[key];
         result[field]={...retained,...fields,timeline:[...timeline.slice(0,start),...items,...timeline.slice(start+count)]};
-        if(delta.messages!==undefined){
-          const m=delta.messages,old=previous.messages;
-          if(!Array.isArray(old)||!m||!Number.isInteger(m.start)||!Number.isInteger(m.delete)||m.start<0||m.delete<0||m.start+m.delete>old.length||!Array.isArray(m.items))throw Error('历史增量格式无效');
-          result[field].messages=[...old.slice(0,m.start),...m.items,...old.slice(m.start+m.delete)];
-        }
         delete result[field+'Delta'];
       }
       if(result[field])next[field]=result[field];else delete next[field];

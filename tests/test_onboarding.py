@@ -230,7 +230,7 @@ class InitializationTests(unittest.TestCase):
             root = Path(temp); directory = root/'workspace'
             invitation = {'id':'a'*32, 'secret':'b'*43, 'url':'https://example.test/#carryon-bind='+'a'*32+'.'+'c'*43, 'expiresAt':time.time()+300}
             result = {'state':'bound','deviceId':'mac','token':'t'*43,'account':{'id':'alice','username':'Alice'}}
-            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.cli.start') as start:
+            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.services.start') as start:
                 state = exchange(directory, {'action':'prepare','url':'https://example.test','autoStart':False,'control':False})
                 self.assertEqual(state['state'], 'waiting')
                 self.assertNotIn('secret', state)

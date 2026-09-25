@@ -18,24 +18,18 @@ class PushService:
         path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
         self.db=sqlite3.connect(path,check_same_thread=False);os.chmod(path,0o600)
         self.db.row_factory=sqlite3.Row
+        for table, required in (('installations', {'revision','authority'}), ('registration_versions', {'authority'})):
+            columns = {r[1] for r in self.db.execute('PRAGMA table_info('+table+')')}
+            if columns and not required <= columns:
+                self.db.close()
+                raise ValueError('通知数据库不是当前结构，请使用新的数据目录')
         self.db.execute('''CREATE TABLE IF NOT EXISTS installations(
             id TEXT PRIMARY KEY, token TEXT NOT NULL, environment TEXT NOT NULL, device TEXT NOT NULL,
             session TEXT NOT NULL, generation TEXT NOT NULL, cursor INTEGER, badge INTEGER,
             updated REAL NOT NULL, retry_at REAL NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
-            error TEXT)''');self.db.commit()
-        with self.lock:
-            if 'revision' not in {r[1] for r in self.db.execute('PRAGMA table_info(installations)')}:
-                self.db.execute('ALTER TABLE installations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
-            if 'authority' not in {r[1] for r in self.db.execute('PRAGMA table_info(installations)')}:
-                self.db.execute("ALTER TABLE installations ADD COLUMN authority TEXT NOT NULL DEFAULT ''")
-            self.db.execute('CREATE TABLE IF NOT EXISTS registration_versions(authority TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(authority,id))')
-            if 'authority' not in {r[1] for r in self.db.execute('PRAGMA table_info(registration_versions)')}:
-                self.db.execute('BEGIN')
-                self.db.execute('ALTER TABLE registration_versions RENAME TO registration_versions_legacy')
-                self.db.execute('CREATE TABLE registration_versions(authority TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(authority,id))')
-                self.db.execute("INSERT INTO registration_versions SELECT '',id,revision FROM registration_versions_legacy")
-                self.db.execute('DROP TABLE registration_versions_legacy')
-            self.db.commit()
+            error TEXT, revision INTEGER NOT NULL DEFAULT 0, authority TEXT NOT NULL DEFAULT '')''')
+        self.db.execute('CREATE TABLE IF NOT EXISTS registration_versions(authority TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(authority,id))')
+        self.db.commit()
         self.worker=threading.Thread(target=self.run,daemon=True,name='apns-notifications');self.worker.start()
 
     def register(self,data,session):

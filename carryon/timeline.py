@@ -186,3 +186,20 @@ def project_timeline(turns, state, turn_cache=None, offset=0):
                             for r in state.get("requests", []) if isinstance(r, dict)],
         "coverage": {"unsupportedTypes": sorted(unsupported), "reasoning":"display-summary-only",
                      "attachments":"references-only", "refresh":"websocket-events"}}
+
+
+def pending_questions(native_turns):
+    """Reuse the public question projection for actionable workspace notifications."""
+    entries = []
+    for turn in native_turns:
+        entries.append({'type': 'turn', 'turnId': turn.get('turnId'), 'status': turn.get('status')})
+        for index, item in enumerate(turn.get('items', [])):
+            if item.get('type') in ('userMessage', 'steeringUserMessage') or (
+                item.get('type') == 'agentMessage' and item.get('delivery') == 'async'
+            ):
+                entries.append(project_item(item, turn, index))
+    from .questions import project_questions
+    project_questions(entries)
+    return [dict(question, turnId=item['turnId'], itemId=item.get('nativeId'))
+            for item in entries for question in item.get('asyncQuestions', [])
+            if question['active'] and question['answer'] is None]

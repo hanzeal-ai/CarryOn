@@ -38,8 +38,7 @@ def granted(server, key, device):
     record = server.config['devices'].get(device)
     if record is None:
         return []
-    # Existing single-owner registrations remain visible only to their original owner.
-    members = record.get('members', {'owner': list(CAPABILITIES)})
+    members = record.get('members', {})
     return members.get(identity, [])
 
 

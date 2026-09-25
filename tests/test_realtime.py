@@ -85,11 +85,11 @@ class FakeBridge:
     def require(self): return self.ipc, 1
     def check_generation(self, ipc, generation):
         if not self.enabled: raise ValueError('disabled')
-    def history(self, tid): return {'thread':{'id':tid},'messages':[{'text':self.text}]}
+    def history(self, tid): return {'thread':{'id':tid},'timeline':[{'text':self.text}]}
     def side_chats(self, tid):
         return {'chats':[{'id':THREAD,'parentId':tid,'title':'side','state':'running','label':'执行中'}], 'scanning':False}
     def side_history(self, parent, tid):
-        return {'parentId':parent,'thread':{'id':tid},'messages':[{'text':'side '+self.text}]}
+        return {'parentId':parent,'thread':{'id':tid},'timeline':[{'text':'side '+self.text}]}
 
 
 class WSTests(unittest.TestCase):
@@ -141,9 +141,9 @@ class WSTests(unittest.TestCase):
         self.until(c,lambda d:d['type']=='update')
         self.send(c,{'type':'subscribe','threadId':THREAD,'subscription':'one'})
         first=self.until(c,lambda d:d.get('subscription')=='one')
-        self.assertEqual(first['history']['messages'][0]['text'],'a')
+        self.assertEqual(first['history']['timeline'][0]['text'],'a')
         start=time.monotonic();self.server.bridge.text='streamed';self.server.bridge.notify()
-        update=self.until(c,lambda d:d.get('history',{}).get('messages')==[{'text':'streamed'}])
+        update=self.until(c,lambda d:d.get('history',{}).get('timeline')==[{'text':'streamed'}])
         self.assertLess(time.monotonic()-start,1)
         self.send(c,{'type':'subscribe','threadId':None,'subscription':'two'})
         self.assertNotIn('history',self.until(c,lambda d:d.get('subscription')=='two'))
@@ -185,10 +185,10 @@ class WSTests(unittest.TestCase):
         c,h=self.connect();self.send(c,{'type':'auth','token':self.server.token})
         self.send(c,{'type':'subscribe','threadId':THREAD,'includeSideChats':True,'sideThreadId':THREAD,'subscription':'side'})
         packet=self.until(c,lambda d:d.get('subscription')=='side')
-        self.assertEqual(packet['history']['messages'][0]['text'],'a')
-        self.assertEqual(packet['sideHistory']['messages'][0]['text'],'side a')
+        self.assertEqual(packet['history']['timeline'][0]['text'],'a')
+        self.assertEqual(packet['sideHistory']['timeline'][0]['text'],'side a')
         self.server.bridge.text='updated';self.server.bridge.notify()
-        update=self.until(c,lambda d:d.get('sideHistory',{}).get('messages')==[{'text':'side updated'}])
+        update=self.until(c,lambda d:d.get('sideHistory',{}).get('timeline')==[{'text':'side updated'}])
         self.assertEqual(update['sideThreadId'],THREAD)
         self.send(c,{'type':'subscribe','threadId':THREAD,'subscription':'closed'})
         packet=self.until(c,lambda d:d.get('subscription')=='closed')

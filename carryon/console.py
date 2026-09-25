@@ -383,7 +383,7 @@ class ConsoleHandler(Handler):
                     raise PermissionError('设备未授权')
                 require(self.server, key, parts[3])
                 if len(parts)==4 and method=='DELETE':
-                    if self.server.auth.identity(key) != self.server.config['devices'][parts[3]].get('ownerUserId', 'owner'):
+                    if self.server.auth.identity(key) != self.server.config['devices'][parts[3]].get('ownerUserId'):
                         raise PermissionError('请在电脑端管理工作区授权')
                     self.server.revoke_device(parts[3]);self.reply(200,{'removed':True,'notice':'设备凭证已撤销；在途请求可能已执行，请在本机核对，勿自动重发'});return
                 if len(parts)==5 and parts[4]=='ws' and method=='GET':
@@ -464,7 +464,7 @@ def main():
         if not config.get('publicUrl'):
             if not args.public_url:parser.error('首次初始化需要 --public-url')
             config['publicUrl']=public_url(args.public_url)
-        if not any(k in config for k in ('account','consoleToken','accountSetup')):
+        if not any(k in config for k in ('account','accountSetup')):
             config['accountSetup']=True
             save_json(args.config,config)
         directory=args.state_dir or args.config.parent/'console-state'
@@ -475,13 +475,12 @@ def main():
     if args.action=='configure':
         if not args.public_url:parser.error('需要 --public-url')
         config['publicUrl']=public_url(args.public_url)
-        if args.username or not any(k in config for k in ('account','consoleToken')):
+        if args.username or not any(k in config for k in ('account',)):
             import getpass
             username=args.username or input('管理员账号：').strip()
             password=getpass.getpass('密码（至少 12 位）：')
             if password!=getpass.getpass('再次输入密码：'):raise ValueError('两次密码不一致')
             config['account']=password_record(username,password)
-            config.pop('consoleToken',None)
         metadata=args.config.stat() if args.config.exists() else None
         if metadata and os.geteuid() not in (0,metadata.st_uid):raise ValueError('请以配置文件所有者身份运行 configure')
         save_json(args.config,config)

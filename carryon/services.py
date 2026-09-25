@@ -3,10 +3,13 @@ import concurrent.futures
 import fcntl
 import json
 import os
-import re
 import subprocess
+import sys
+import time
+import urllib.request
+import webbrowser
 from pathlib import Path
-from .paths import private_dir, save_json, state_dir, workspace_codex_home, workspace_backend
+from .paths import private_dir, save_json, state_dir, default_codex_home, command
 
 
 def catalog_directory():
@@ -39,7 +42,7 @@ def register(directory, *, name=None, port=None, codex_home=None, backend=None):
         if port is not None:entry['port']=port
         if codex_home is not None:entry['codexHome']=str(Path(codex_home).expanduser().resolve())
         if backend is not None:
-            if backend not in ('ipc','app-server'): raise ValueError('工作区后端无效')
+            if backend not in ('desktop-ipc','app-server'): raise ValueError('工作区后端无效')
             entry['backend']=backend
         if 'backend' not in entry: entry['backend'] = workspace_backend(directory)
         if entry['backend'] == 'app-server':
@@ -56,7 +59,6 @@ def register(directory, *, name=None, port=None, codex_home=None, backend=None):
 
 def remove(directory):
     """Remove a catalog registration, retaining service files and Codex data."""
-    from .cli import running
     directory = str(Path(directory).expanduser().resolve())
     root = private_dir(catalog_directory())
     workspace = private_dir(Path(directory))
@@ -75,24 +77,7 @@ def remove(directory):
     return {'removed': True, 'directory': directory}
 
 
-def process_directories():
-    """Backfill older running releases, without recursively searching user files."""
-    try:
-        output=subprocess.check_output(['ps','-U',str(os.getuid()),'-o','command='],text=True,timeout=3)
-    except (OSError,subprocess.SubprocessError):return set()
-    found=set()
-    for line in output.splitlines():
-        if not re.search(r'(?:^|/|\s)(?:carryon|carryon-service)(?:\s+serve|\.server\s)',line):continue
-        match=re.search(r'--state-dir\s+(.+?)(?=\s+--(?:port|codex-home)(?:\s|=)|$)',line)
-        if match:
-            value=match[1].strip()
-            if len(value)>=2 and value[0]==value[-1] and value[0] in ('"',"'"):value=value[1:-1]
-            found.add(str(Path(value).expanduser().resolve()))
-    return found
-
-
 def inspect(entry):
-    from .cli import running
     directory=Path(entry['directory'])
     info=running(directory)
     if info:
@@ -104,11 +89,11 @@ def inspect(entry):
 
 def list_services(current=None):
     known=records()
-    candidates=process_directories()|{str(state_dir().resolve())}
+    candidates={str(state_dir().resolve())}
     if current is not None:candidates.add(str(Path(current).resolve()))
     extra={path:{'directory':path,'name':'默认工作区' if Path(path)==Path.home()/'Library/Application Support/CarryOn' else Path(path).name}
            for path in candidates if path not in known}
-    # Authenticate every candidate before treating a discovered process as a service.
+    # Authenticate registered and explicitly selected service directories.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         rows=list(pool.map(inspect,[entry for entry in known.values() if not entry.get('removed')]+list(extra.values())))
     result=[]
@@ -117,3 +102,84 @@ def list_services(current=None):
             register(row['directory'],name=row['name'],port=row['port'],codex_home=row['codexHome'])
         if row['directory'] in known or row['running'] or row['directory']==str(Path(current or state_dir()).resolve()):result.append(row)
     return {'services':sorted(result,key=lambda row:(not row['running'],row['name'],row['directory']))}
+
+
+def workspace_backend(directory):
+    directory = Path(directory).expanduser().resolve()
+    saved = records().get(str(directory), {}).get('backend')
+    if saved == 'desktop-ipc': return 'desktop-ipc'
+    if saved == 'app-server': return saved
+    return 'desktop-ipc' if directory == state_dir().resolve() else 'app-server'
+
+
+def workspace_codex_home(directory, configured=None):
+    """Resolve workspace storage while keeping independent Codex homes isolated."""
+    directory = Path(directory).expanduser().resolve()
+    home = Path(configured).expanduser().resolve() if configured else None
+    if workspace_backend(directory) == 'desktop-ipc':
+        return home or default_codex_home()
+    shared = {default_codex_home(), (Path.home() / '.codex').resolve()}
+    result = (directory / 'codex-home').resolve() if home is None or home in shared else home
+    if result in shared: raise ValueError('独立工作区目录不能链接到默认 Codex 目录')
+    return result
+
+
+
+def call(directory, path, body=None, timeout=5):
+    info = json.loads((directory/'service.json').read_text())
+    port = info['port']
+    if type(port) is not int or not 1 <= port <= 65535: raise ValueError('服务端口记录无效')
+    token = (directory/'token').read_text().strip()
+    request = urllib.request.Request(f'http://127.0.0.1:{port}/api'+path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={'Authorization':'Bearer '+token, 'Content-Type':'application/json'})
+    # Never pass pairing credentials through a system HTTP proxy.
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def running(directory):
+    try:
+        expected = json.loads((directory/'service.json').read_text())
+        actual = call(directory, '/service')
+        return actual if actual.get('instanceId') == expected.get('instanceId') else None
+    except (OSError, ValueError, KeyError): return None
+
+
+def open_console(directory, info):
+    token = (directory/'token').read_text().strip()
+    url = f"http://127.0.0.1:{info['port']}/example.html#token={token}"
+    if not webbrowser.open(url):
+        print('无法自动打开浏览器，请在本机打开：'+url)
+
+
+def start(args):
+    directory = private_dir(args.state_dir)
+    args.codex_home = workspace_codex_home(directory, args.codex_home)
+    import fcntl
+    with (directory/'launcher.lock').open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        info = running(directory)
+        if info is None:
+            with (directory/'server.log').open('ab') as log:
+                env = dict(os.environ)
+                if not getattr(sys, 'frozen', False):
+                    env['PYTHONPATH'] = str(Path(__file__).resolve().parent.parent)
+                process = subprocess.Popen(command()+['serve','--state-dir',str(directory),
+                    '--port',str(args.port),'--codex-home',str(args.codex_home)],
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                    cwd=str(directory), env=env)
+            deadline = time.monotonic()+20
+            while time.monotonic()<deadline:
+                info = running(directory)
+                if info: break
+                if process.poll() is not None: break
+                time.sleep(.15)
+            if not info:
+                raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
+        bridge = call(directory, '/bridge', {'enabled': True}, timeout=20)
+    print(f"CarryOn {info['version']} 本地服务已启动：http://127.0.0.1:{info['port']}/")
+    print('工作区 app-server 已启动，尚未完成 Codex 登录。' if bridge.get('accountReady') is False else
+          'Codex 已连接' if bridge.get('enabled') else bridge.get('connectionError') or '正在等待 Codex 连接。')
+    if not args.no_open: open_console(directory, info)
+    return 0

@@ -85,7 +85,8 @@ def main():
                 a.close();a.connect();assert a.connected and b.connected
                 print(json.dumps({'passed':True,'checks':['distinct processes','exclusive home lock','first turn','streamed response','catalog isolation','cross-home read refused','stop isolation','restart restores history','crash reconnect']},ensure_ascii=False))
             finally:a.close();b.close()
-            from carryon.cli import main as cli, call
+            from carryon.cli import main as cli
+            from carryon.services import call
             homes=[root/'service a',root/'service b']
             try:
                 for home in homes:

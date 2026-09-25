@@ -47,10 +47,6 @@ def reconcile(directory, state, data):
         result = request(url, 'manage', {'action':'list','deviceId':config['deviceId'],'token':config['token']})
         if not isinstance(result.get('members'), list): raise ValueError('绑定验证响应无效')
     except InvalidDeviceCredentials:
-        if target == 'legacy':
-            # Migrate through the existing manager so recovery keeps the same identity.
-            manager = CloudManager(None, directory)
-            target = next(iter(manager.connections))
         replacement = {'id':target,'fingerprint':CloudManager.fingerprint(config)}
         recovered = {k:v for k,v in state.items() if k not in ('deviceId','account')}
         if state.get('replacement') != replacement: recovered.pop('requestId', None)

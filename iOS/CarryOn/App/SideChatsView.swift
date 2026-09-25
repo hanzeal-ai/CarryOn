@@ -74,7 +74,7 @@ private struct SideChatConversation: View {
     @State private var bottomVisible = true
     @State private var renderRevision = 0
     private var target: ConversationActionTarget { .init(scope: model.scope, threadID: chat.id, parentID: parentID) }
-    private var images: Binding<[String]> { Binding(get: { model.attachments[draftKey] ?? [] }, set: { model.attachments[draftKey] = $0 }) }
+    private var images: Binding<[String]> { Binding(get: { model.draftStore.images[draftKey] ?? [] }, set: { model.draftStore.images[draftKey] = $0 }) }
     private var draftKey: String { model.scope + "\nside:" + parentID + ":" + chat.id }
     private var writable: Bool { model.canPerform(target) && !submitting }
     var body: some View {
@@ -85,7 +85,7 @@ private struct SideChatConversation: View {
                     .padding(.horizontal, 16).padding(.vertical, 8)
             }
         }, inputViewBuilder: { _ in
-            CarryOnChatComposer(text: Binding(get: { model.drafts[draftKey] ?? "" }, set: { model.drafts[draftKey] = $0 }),
+            CarryOnChatComposer(text: Binding(get: { model.draftStore.texts[draftKey] ?? "" }, set: { model.draftStore.texts[draftKey] = $0 }),
                 disabled: !writable, sendAllowed: model.allows(.send), stopAllowed: model.allows(.stop), hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
                 resuming: history["status"]["state"].text == "idle" && history["controls"]["lastTurnStatus"].text == "interrupted",
                 send: { Task { await send() } }, queue: { Task { await send(queued: true) } },
@@ -144,7 +144,7 @@ private struct SideChatConversation: View {
     }
     private func send(stopping: Bool = false, queued: Bool = false) async {
         guard writable, model.allows(stopping ? .stop : .send) else { return }
-        let scope = model.scope, key = draftKey, text = model.drafts[draftKey] ?? ""
+        let scope = model.scope, key = draftKey, text = model.draftStore.texts[draftKey] ?? ""
         let sentImages = images.wrappedValue
         guard stopping || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !sentImages.isEmpty else { return }
         submitting = true; defer { submitting = false }
@@ -159,8 +159,8 @@ private struct SideChatConversation: View {
         }
         guard scope == model.scope, model.selectedThread?.id == parentID else { return }
         if ok {
-            if !stopping && model.drafts[key] == text { model.drafts[key] = "" }
-            if !stopping && model.attachments[key] == sentImages { model.attachments[key] = [] }
+            if !stopping && model.draftStore.texts[key] == text { model.draftStore.texts[key] = "" }
+            if !stopping && model.draftStore.images[key] == sentImages { model.draftStore.images[key] = [] }
             failure = nil
         }
         else { failure = model.error }

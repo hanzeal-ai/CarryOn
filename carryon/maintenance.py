@@ -161,7 +161,7 @@ def replace_link(link, target):
 
 def service_snapshots():
     from .services import list_services
-    from .cli import call
+    from .services import call
     snapshots=[]
     for row in list_services()['services']:
         if not row['running']:continue
@@ -177,7 +177,7 @@ def service_snapshots():
 
 
 def stop_service(row, expected):
-    from .cli import call, running
+    from .services import call, running
     directory=Path(row['directory']);info=running(directory)
     if not info:return
     if info['instanceId']!=expected:raise ValueError('后台实例已改变：'+str(directory))
@@ -193,7 +193,7 @@ def stop_service(row, expected):
 
 
 def start_service(row, executable, expected_version=None):
-    from .cli import call, running
+    from .services import call, running
     directory=Path(row['directory'])
     if running(directory):raise ValueError('已有其他后台启动：'+str(directory))
     with (directory/'server.log').open('ab') as log:
@@ -229,7 +229,7 @@ def start_service(row, executable, expected_version=None):
 
 
 def activate(target, link, previous, release, rows):
-    from .cli import running
+    from .services import running
     touched=[];started={};switched=False
     try:
         for row in rows:

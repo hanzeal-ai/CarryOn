@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from carryon.paths import workspace_backend, workspace_codex_home
+from carryon.services import workspace_backend, workspace_codex_home
 from carryon.services import register, records
 from carryon.workspace_seed import seed
 from carryon.app_server import AppServer

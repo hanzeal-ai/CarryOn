@@ -14,30 +14,6 @@ def default_codex_home():
     return Path(os.environ.get("CODEX_HOME") or Path.home()/".codex").expanduser().resolve()
 
 
-def workspace_backend(directory):
-    from .services import records
-    directory = Path(directory).expanduser().resolve()
-    saved = records().get(str(directory), {}).get('backend')
-    if saved in ('ipc', 'desktop-ipc'): return 'desktop-ipc'
-    if saved == 'app-server': return saved
-    return 'desktop-ipc' if directory == state_dir().resolve() else 'app-server'
-
-
-def workspace_codex_home(directory, configured=None):
-    """Old shared-home registrations become isolated on the next service start.
-
-    No history or credentials are copied, moved, or deleted.
-    """
-    directory = Path(directory).expanduser().resolve()
-    home = Path(configured).expanduser().resolve() if configured else None
-    if workspace_backend(directory) == 'desktop-ipc':
-        return home or default_codex_home()
-    shared = {default_codex_home(), (Path.home() / '.codex').resolve()}
-    result = (directory / 'codex-home').resolve() if home is None or home in shared else home
-    if result in shared: raise ValueError('独立工作区目录不能链接到默认 Codex 目录')
-    return result
-
-
 def assets():
     packaged = Path(__file__).parent / 'web'
     return packaged if packaged.is_dir() else Path(__file__).resolve().parent.parent

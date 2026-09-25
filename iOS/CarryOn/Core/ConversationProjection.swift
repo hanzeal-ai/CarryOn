@@ -67,13 +67,6 @@ public struct HistoryWireProjection {
                 for key in removed { fields.removeValue(forKey: key.text) }
                 fields.merge(updates) { _, new in new }
                 fields["timeline"] = .array(Array(timeline.prefix(start)) + items + Array(timeline.dropFirst(start + count)))
-                if delta["messages"] != .null {
-                    let splice = delta["messages"], old = previous["messages"].array
-                    guard case .array = previous["messages"], let start = splice["start"].int, let count = splice["delete"].int,
-                          start >= 0, count >= 0, start <= old.count, count <= old.count - start,
-                          case .array(let items) = splice["items"] else { throw APIError("历史增量格式无效") }
-                    fields["messages"] = .array(Array(old.prefix(start)) + items + Array(old.dropFirst(start + count)))
-                }
                 result[field] = .object(fields); result.removeValue(forKey: field + "Delta")
             }
             next[field] = result[field]

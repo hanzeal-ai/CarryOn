@@ -20,7 +20,7 @@ class ConsoleSocketTests(test_console.ConsoleTests):
 
     def connect_device(self):
         self.login()
-        self.connector.configure(self.device_config())
+        self.configure_device(self.device_config())
         self.bridge.enable()
         self.wait_for(lambda: self.connector.status()['connected'])
 
@@ -227,7 +227,7 @@ class ConsoleSocketTests(test_console.ConsoleTests):
         self.assertIn('historyDelta',delta)
         changed=decoder.decode(delta)
         self.assertEqual(changed['history']['timeline'][-1]['text'],'new streamed answer')
-        self.assertEqual(changed['history']['messages'][-1]['text'],'new streamed answer')
+        self.assertEqual(changed['history']['timeline'][-1]['text'],'new streamed answer')
         ws.send({'type':'subscribe','subscription':'earlier','threadId':T,'historyProtocol':1,'historyLimit':80})
         while True:
             packet=receive()

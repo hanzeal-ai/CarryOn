@@ -14,7 +14,7 @@ class CloudManager:
 
     @staticmethod
     def saved_bindings(directory):
-        """One read-only boundary for current bindings and persisted v1 configurations."""
+        """Read and validate current cloud bindings."""
         path = Path(directory)/'cloud.json'
         data = json.loads(path.read_text()) if path.exists() else {'version':2, 'bindings':{}}
         if not isinstance(data, dict):raise ValueError('云端配置版本无效')
@@ -23,9 +23,6 @@ class CloudManager:
             for key in configs:
                 if not isinstance(key, str) or len(key) != 32 or any(c not in '0123456789abcdef' for c in key):
                     raise ValueError('绑定 ID 无效')
-        elif 'version' not in data:
-            CloudConnector.validate(data)
-            configs = {'legacy':data} if data.get('enabled') else {}
         else:
             raise ValueError('云端配置版本无效')
         for config in configs.values():CloudConnector.validate(config)
@@ -33,25 +30,15 @@ class CloudManager:
 
     @staticmethod
     def saved_status(directory):
-        bindings = [{'id':key, **CloudConnector(None, directory, config=config, binding_id=key).status()}
+        bindings = [{'id':key, **CloudConnector(None, config=config, binding_id=key).status()}
                     for key, config in CloudManager.saved_bindings(directory).items()]
         return {'enabled':any(c['enabled'] for c in bindings), 'connected':False, 'bindings':bindings}
 
     def __init__(self,bridge,directory):
         self.bridge=bridge;self.directory=Path(directory);self.path=self.directory/'cloud.json'
         self.lock=threading.RLock();self.connections={}
-        data=json.loads(self.path.read_text()) if self.path.exists() else {'version':2,'bindings':{}}
-        if 'version' not in data:
-            self.validate(data)
-            # Preserve an explicit rollback copy before the first format migration.
-            backup=self.directory/'cloud-v1-backup.json'
-            if not backup.exists():save_json(backup,data)
-            data={'version':2,'bindings':{secrets.token_hex(16):data} if data.get('enabled') else {}}
-            save_json(self.path,data)
-        if data.get('version')!=2 or not isinstance(data.get('bindings'),dict):raise ValueError('云端配置版本无效')
-        for key,config in data['bindings'].items():
-            if not isinstance(key,str) or len(key)!=32 or any(c not in '0123456789abcdef' for c in key):raise ValueError('绑定 ID 无效')
-            self.connections[key]=CloudConnector(bridge,directory,config=config,binding_id=key)
+        for key,config in self.saved_bindings(directory).items():
+            self.connections[key]=CloudConnector(bridge,config=config,binding_id=key)
 
     @staticmethod
     def canonical_url(value):
@@ -107,7 +94,7 @@ class CloudManager:
                     return self.status()
                 if self.fingerprint(previous.config) != replacement.get('fingerprint'):
                     raise ValueError('原绑定已改变，请重新检查绑定状态')
-                connection = CloudConnector(self.bridge,self.directory,config=config,binding_id=key)
+                connection = CloudConnector(self.bridge,config=config,binding_id=key)
                 if self.bridge is not None: previous.stop()
                 self.connections[key] = connection
                 try: self._save()
@@ -119,7 +106,7 @@ class CloudManager:
                 return self.status()
             self.check_available(data['url'])
             key=secrets.token_hex(16)
-            connection=CloudConnector(self.bridge,self.directory,config=data,binding_id=key)
+            connection=CloudConnector(self.bridge,config=data,binding_id=key)
             self.connections[key]=connection
             try:self._save()
             except BaseException:self.connections.pop(key);raise

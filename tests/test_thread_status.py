@@ -1,5 +1,6 @@
 import unittest
-from carryon.bridge import idle_snapshot, BridgeError
+from carryon.thread_status import idle_snapshot
+from carryon.errors import BridgeError
 from carryon.thread_status import project_status
 
 

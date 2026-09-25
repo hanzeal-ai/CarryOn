@@ -156,7 +156,8 @@ def run(port, codex_home, directory):
     from .cloud_manager import CloudManager
     import fcntl
     import uuid
-    from .paths import private_dir, workspace_codex_home, workspace_backend
+    from .paths import private_dir
+    from .services import workspace_codex_home, workspace_backend
     codex_home = workspace_codex_home(directory, codex_home)
     os.umask(0o077)
     private_dir(directory)

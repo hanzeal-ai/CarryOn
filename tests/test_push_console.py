@@ -44,7 +44,7 @@ class PushConsoleTests(test_console.ConsoleTests):
         self.connector.binding_id='push-test'
         workspace=Workspace(self.bridge);self.bridge.workspace=workspace;workspace.catalog_refresh()
         self.login()
-        self.connector.configure(self.device_config());self.bridge.enable()
+        self.configure_device(self.device_config());self.bridge.enable()
         deadline=time.monotonic()+4
         while not self.connector.status()['connected'] and time.monotonic()<deadline:time.sleep(.02)
         self.assertTrue(self.connector.status()['connected'])

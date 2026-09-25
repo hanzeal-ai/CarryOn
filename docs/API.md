@@ -14,7 +14,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 | POST | `/bridge` | `{"enabled":true}` 或 `false` | 同 status |
 | GET | `/threads` | query：`search`、`limit` 1–100、`offset` ≥0 | `{threads:[{id,title,cwd,updated_at,created_at,history_mode}],nextOffset}` |
 | POST | `/controller` | `{"threadId":"UUID"}` | 同 status，需目标已加载且空闲 |
-| GET | `/threads/{id}/history` | `limit`：1–4000，默认 40 | `{thread,messages,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
+| GET | `/threads/{id}/history` | `limit`：1–4000，默认 40 | `{thread,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
 | POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案","projectId":"项目列表返回的ID"}` | HTTP 202 + Job；自动选择项目内可用空闲会话 |
 | POST | `/threads/{id}/messages` | `{"requestId":"唯一ID","prompt":"后续任务"}` | HTTP 202 + Job |
 | GET | `/jobs` | 无 | `{jobs:[Job,...]}`，最近 100 个 |
@@ -29,7 +29,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 {"id":"消息ID","role":"assistant","text":"你好","phase":"final_answer","turnId":"轮次ID","textTruncated":false}
 ```
 
-`phase`、`time`、`turnId` 可缺省；`source` 为 `desktop-snapshot` 或 `local-rollout`。`messages` 保留旧版兼容字段，仍最多 200 条、每条 24,000 字符，`messagesTruncated` 表示条数裁切；所有当前页面使用 `timeline`；本地历史预览和原生客户端未加载时的历史也由服务端输出相同投影。
+`phase`、`time`、`turnId` 可缺省；`source` 为 `desktop-snapshot` 或 `local-rollout`。所有客户端使用 `timeline`；本地历史预览和原生客户端未加载时的历史也由服务端输出相同投影。
 
 ### 原生时间线扩展
 

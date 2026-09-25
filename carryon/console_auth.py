@@ -36,10 +36,9 @@ class ConsoleAuth:
             try:
                 if len(bytes.fromhex(a['salt'])) != 16 or len(bytes.fromhex(a['hash'])) != 64:raise ValueError()
             except ValueError:raise ValueError('账号密码哈希无效') from None
-        elif not config.get('accountSetup') and (not isinstance(config.get('consoleToken'), str) or len(config['consoleToken']) < 32):
+        elif not config.get('accountSetup'):
             raise ValueError('请先 configure --username 设置账号密码')
-        self.legacy = config.get('consoleToken', '') if self.account is None else ''
-        authority = self.account or self.legacy
+        authority = self.account
         if config.get('accountGeneration'):authority={'credential':authority,'generation':config['accountGeneration']}
         self.fingerprint = hashlib.sha256(json.dumps(authority, sort_keys=True).encode()).hexdigest()
         self.path = Path(state_dir)/'sessions.json' if state_dir is not None else None
@@ -144,15 +143,10 @@ class ConsoleAuth:
                     if hmac.compare_digest(digest, bytes.fromhex(record['hash'])):
                         return identity
                     raise PermissionError('账号或密码错误')
-        if self.account is None:
-            token = data.get('token')
-            valid = bool(self.legacy) and isinstance(token, str) and hmac.compare_digest(token.encode(), self.legacy.encode())
-        else:
-            username, password = data.get('username'), data.get('password')
-            valid = False
-            if isinstance(username, str) and isinstance(password, str) and len(username) <= 100 and len(password) <= 256:
-                digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(self.account['salt']), n=16384, r=8, p=1)
-                valid = hmac.compare_digest(digest, bytes.fromhex(self.account['hash'])) & hmac.compare_digest(username.strip().encode(), self.account['username'].encode())
+        valid = False
+        if self.account is not None and isinstance(username, str) and isinstance(password, str) and len(username) <= 100 and len(password) <= 256:
+            digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(self.account['salt']), n=16384, r=8, p=1)
+            valid = hmac.compare_digest(digest, bytes.fromhex(self.account['hash'])) & hmac.compare_digest(username.strip().encode(), self.account['username'].encode())
         if not valid:raise PermissionError('账号或密码错误' if self.account else '控制台登录凭证无效')
         return 'owner'
 

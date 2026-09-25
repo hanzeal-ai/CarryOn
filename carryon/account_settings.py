@@ -16,7 +16,7 @@ SETUP_SECONDS = 600
 
 
 def authority(config):
-    return {key: config[key] for key in ('account', 'consoleToken', 'accountSetup') if key in config}
+    return {key: config[key] for key in ('account', 'accountSetup') if key in config}
 
 
 class AccountSettings:
@@ -66,7 +66,6 @@ class AccountSettings:
         if record.get('generation'):config['accountGeneration']=record['generation']
         if 'account' in record:
             config['account'] = record['account']
-            config.pop('consoleToken', None)
         return config
 
     def save(self, record):

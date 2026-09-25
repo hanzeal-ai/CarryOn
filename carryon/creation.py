@@ -9,7 +9,8 @@ from pathlib import Path
 from .contracts import digest
 from .errors import BridgeError
 from .ipc import IPCError
-from .workspace import project_identity, row_project_identity
+from .thread_status import idle_snapshot
+from .workspace import project_identity
 
 
 def is_git_repository(root):
@@ -36,13 +37,6 @@ def resolve_project(catalog, project_id):
         roots = project.get('rootPaths', [])
         if roots and project_identity(roots[0], native_id=native_id)[0] == project_id:
             matches.append({'id': native_id, 'cwd': str(Path(roots[0]).expanduser().absolute()), 'groupId': project_id})
-            continue
-        # Previously released clients can hold directory IDs in their display cache.
-        # Accept them only when they still identify exactly one native project.
-        for root in project.get('rootPaths', []):
-            if project_identity(root)[0] == project_id:
-                matches.append({'id': native_id, 'cwd': str(Path(root).expanduser().absolute()), 'groupId': project_id})
-                break
     if len(matches) != 1:
         raise BridgeError('此项目的 Codex 归属无法确认，请在桌面端重新选择项目', 409)
     project = matches[0]
@@ -51,11 +45,7 @@ def resolve_project(catalog, project_id):
 
 
 def belongs(row, project):
-    if row.get('projectless'):
-        return False
-    if row.get('nativeProjectId'):
-        return row['nativeProjectId'] == project['id']
-    return row_project_identity(row)[0] == project['groupId']
+    return not row.get('projectless') and row.get('nativeProjectId') == project['id']
 
 
 def validate_controller(catalog, thread_id, project):
@@ -84,7 +74,6 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
     # Catalog order is newest first; prefer the projectless Recent group.
     candidates.sort(key=lambda row: (not row.get('projectless', False), -row.get('updated_at', 0)))
     group, deadline = None, 0
-    from .bridge import idle_snapshot
     for row in candidates:
         recent = bool(row.get('projectless', False))
         if recent != group:

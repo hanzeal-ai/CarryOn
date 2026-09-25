@@ -57,7 +57,7 @@ class SideChatTests(unittest.TestCase):
         result=self.bridge.side_chats(PARENT)
         self.assertEqual(result['chats'][0]['state'],'running')
         self.assertEqual(result['chats'][0]['parentId'],PARENT)
-        self.assertEqual(self.bridge.side_history(PARENT,CHILD)['messages'][0]['text'],'Live side text')
+        self.assertEqual(self.bridge.side_history(PARENT,CHILD)['timeline'][1]['text'],'Live side text')
         self.assertEqual(self.bridge.side_chats(OTHER)['chats'],[])
     def test_binding_is_not_proof_of_side_chat(self):
         self.bridge.ipc.state['sideConversation']=False;self.discover()

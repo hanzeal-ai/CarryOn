@@ -1,3 +1,4 @@
+from carryon.console_auth import password_record
 """Many-to-many binding using isolated HTTP/WS consoles and a fake native IPC."""
 import http.client
 import json
@@ -32,7 +33,7 @@ class MultiCloudTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.servers=[];self.managers=[];self.bridges=[];self.journals=[]
         for index in range(2):
-            server=ConsoleServer(('127.0.0.1',0),{'publicUrl':'http://127.0.0.1','consoleToken':'c'*40,'devices':{}},self.root/f'console-{index}')
+            server=ConsoleServer(('127.0.0.1',0),{'publicUrl':'http://127.0.0.1','account':password_record('test-owner','c'*40),'devices':{}},self.root/f'console-{index}')
             server.origin=server.public_url=f'http://127.0.0.1:{server.server_port}'
             worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
             self.servers.append((server,worker))
@@ -63,7 +64,7 @@ class MultiCloudTests(unittest.TestCase):
         status=response.status;result=json.loads(response.read());conn.close();return status,result
 
     def login(self,index):
-        self.assertEqual(self.call(index,'POST','/console/login',{'token':'c'*40})[0],200)
+        self.assertEqual(self.call(index,'POST','/console/login',{'username':'test-owner','password':'c'*40})[0],200)
 
     def bind(self,local,console,control=False):
         self.login(console)
@@ -142,16 +143,15 @@ class MultiCloudTests(unittest.TestCase):
 
     def test_confirmed_binding_survives_registry_restart(self):
         device,_=self.bind(0,0)
-        server=ConsoleServer(('127.0.0.1',0),{'publicUrl':'http://127.0.0.1','consoleToken':'c'*40,'devices':{}},self.root/'console-0')
+        server=ConsoleServer(('127.0.0.1',0),{'publicUrl':'http://127.0.0.1','account':password_record('test-owner','c'*40),'devices':{}},self.root/'console-0')
         try:self.assertIn(device,server.config['devices'])
         finally:server.server_close()
 
-    def test_legacy_migration_duplicate_and_targeted_changes(self):
+    def test_current_bindings_duplicate_and_targeted_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             config={'enabled':True,'url':'wss://one.test/device','deviceId':'old','token':'x'*40,'control':True}
-            path=Path(directory)/'cloud.json';save_json(path,config)
+            path=Path(directory)/'cloud.json';save_json(path,{'version':2,'bindings':{'a'*32:config}})
             manager=CloudManager(Mock(),directory)
-            self.assertEqual(json.loads((Path(directory)/'cloud-v1-backup.json').read_text()),config)
             first=manager.status()['bindings'][0]['id']
             self.assertEqual(manager.connections[first].config,config)
             with self.assertRaises(ValueError):manager.configure(config)

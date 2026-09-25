@@ -132,12 +132,12 @@ class AccountTests(unittest.TestCase):
         data=json.loads(path.read_text());data['sessions']={key:time.time()-1 for key in data['sessions']};path.write_text(json.dumps(data))
         self.start();self.assertEqual(self.request('session',cookie=cookie)[0],401)
 
-    def test_configure_migrates_existing_owner_without_changing_devices(self):
+    def test_configure_sets_owner_without_changing_devices(self):
         from unittest.mock import patch
         from carryon.console import main
         config=Path(self.temp.name)/'gateway.json'
         devices={'mac':{'deviceToken':'d'*40,'apiToken':'a'*40}}
-        config.write_text(json.dumps({'consoleToken':'x'*40,'devices':devices}))
+        config.write_text(json.dumps({'accountSetup':True,'devices':devices}))
         argv=['carryon-console','configure','--config',str(config),'--public-url','https://console.test','--username','admin']
         with patch('sys.argv',argv), patch('getpass.getpass',return_value='a long password 123'), patch('builtins.print'):
             main()

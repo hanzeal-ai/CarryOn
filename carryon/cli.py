@@ -8,72 +8,12 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
-import webbrowser
 from pathlib import Path
 
 from . import __version__
-from .paths import default_codex_home, state_dir, private_dir, command, workspace_codex_home, workspace_backend
-
-
-def call(directory, path, body=None, timeout=5):
-    info = json.loads((directory/'service.json').read_text())
-    port = info['port']
-    if type(port) is not int or not 1 <= port <= 65535: raise ValueError('服务端口记录无效')
-    token = (directory/'token').read_text().strip()
-    request = urllib.request.Request(f'http://127.0.0.1:{port}/api'+path,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={'Authorization':'Bearer '+token, 'Content-Type':'application/json'})
-    # Never pass pairing credentials through a system HTTP proxy.
-    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
-        return json.load(response)
-
-
-def running(directory):
-    try:
-        expected = json.loads((directory/'service.json').read_text())
-        actual = call(directory, '/service')
-        return actual if actual.get('instanceId') == expected.get('instanceId') else None
-    except (OSError, ValueError, KeyError): return None
-
-
-def open_console(directory, info):
-    token = (directory/'token').read_text().strip()
-    url = f"http://127.0.0.1:{info['port']}/example.html#token={token}"
-    if not webbrowser.open(url):
-        print('无法自动打开浏览器，请在本机打开：'+url)
-
-
-def start(args):
-    directory = private_dir(args.state_dir)
-    args.codex_home = workspace_codex_home(directory, args.codex_home)
-    import fcntl
-    with (directory/'launcher.lock').open('a+') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        info = running(directory)
-        if info is None:
-            with (directory/'server.log').open('ab') as log:
-                env = dict(os.environ)
-                if not getattr(sys, 'frozen', False):
-                    env['PYTHONPATH'] = str(Path(__file__).resolve().parent.parent)
-                process = subprocess.Popen(command()+['serve','--state-dir',str(directory),
-                    '--port',str(args.port),'--codex-home',str(args.codex_home)],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-                    cwd=str(directory), env=env)
-            deadline = time.monotonic()+20
-            while time.monotonic()<deadline:
-                info = running(directory)
-                if info: break
-                if process.poll() is not None: break
-                time.sleep(.15)
-            if not info:
-                raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
-        bridge = call(directory, '/bridge', {'enabled': True}, timeout=20)
-    print(f"CarryOn {info['version']} 本地服务已启动：http://127.0.0.1:{info['port']}/")
-    print('工作区 app-server 已启动，尚未完成 Codex 登录。' if bridge.get('accountReady') is False else
-          'Codex 已连接' if bridge.get('enabled') else bridge.get('connectionError') or '正在等待 Codex 连接。')
-    if not args.no_open: open_console(directory, info)
-    return 0
+from .paths import default_codex_home, state_dir, private_dir
+from . import services
+from .services import workspace_codex_home, workspace_backend
 
 
 def doctor(args):
@@ -85,13 +25,13 @@ def doctor(args):
     result = {'version':__version__, 'platform':sys.platform, 'supportedPlatform':sys.platform=='darwin',
         'codexHome':str(args.codex_home), 'backend':workspace_backend(args.state_dir), 'ipcSocketAvailable':ipc,
         'databaseAvailable':any(args.codex_home.glob('state_*.sqlite')),
-        'stateDirectory':str(args.state_dir), 'service':running(args.state_dir),
+        'stateDirectory':str(args.state_dir), 'service':services.running(args.state_dir),
         'testedDesktopVersion':'26.901.51231'}
     if result['backend'] == 'app-server':
         from .usage import executable
         try: result['codexExecutable'] = executable()
         except Exception as exc: result['error'] = str(exc)
-        bridge = call(args.state_dir, '/status') if result['service'] else {}
+        bridge = services.call(args.state_dir, '/status') if result['service'] else {}
         result['appServerConnected'] = bridge.get('enabled', False)
         result['accountReady'] = bridge.get('accountReady', False)
         ready = bool(result.get('codexExecutable') and result['appServerConnected'] and result['accountReady'])
@@ -185,7 +125,7 @@ def main(argv=None):
                     from .onboarding import command as initialize
                     return initialize(SimpleNamespace(state_dir=Path(result['directory']), input_json=False, url=None, permissions=None))
             elif args.action in ('auth-start','auth-status'):
-                result=call(args.state_dir, '/codex-account', {} if args.action == 'auth-start' else None, timeout=25)
+                result=services.call(args.state_dir, '/codex-account', {} if args.action == 'auth-start' else None, timeout=25)
             elif args.action=='login':
                 from .services import records
                 from .usage import executable
@@ -198,7 +138,7 @@ def main(argv=None):
         if args.command in ('update','uninstall'):
             from .maintenance import update, uninstall
             return update(args.package,args.check) if args.command=='update' else uninstall()
-        if args.command == 'start': return start(args)
+        if args.command == 'start': return services.start(args)
         if args.command == 'serve':
             from .server import run
             run(args.port,args.codex_home,args.state_dir); return 0
@@ -213,42 +153,42 @@ def main(argv=None):
             if not args.account_action or not args.url:raise ValueError('使用 carryon cloud account status|setup|change --url HTTPS地址')
             from .account_client import command as account_command
             return account_command(args)
-        info = running(args.state_dir)
+        info = services.running(args.state_dir)
         if not info and args.command == 'cloud' and args.action == 'status':
             from .cloud_manager import CloudManager
             print(json.dumps(CloudManager.saved_status(args.state_dir), ensure_ascii=False, indent=2)); return 0
         if args.command == 'status':
             print(json.dumps({'running':bool(info),'service':info,
-                'bridge':call(args.state_dir,'/status') if info else None},ensure_ascii=False,indent=2));return 0 if info else 1
+                'bridge':services.call(args.state_dir,'/status') if info else None},ensure_ascii=False,indent=2));return 0 if info else 1
         if not info: raise ValueError('服务未运行，请先执行 carryon start')
         if args.command=='notifications':
             updates={kind:getattr(args,kind) for kind in ('message','done','failed','approval') if getattr(args,kind) is not None}
             if args.action=='set' and not updates:raise ValueError('至少指定一个通知开关，例如 --message 或 --no-message')
-            result=call(args.state_dir,'/notifications/preferences')
-            if args.action=='set':result=call(args.state_dir,'/notifications/preferences',{**result['preferences'],**updates})
+            result=services.call(args.state_dir,'/notifications/preferences')
+            if args.action=='set':result=services.call(args.state_dir,'/notifications/preferences',{**result['preferences'],**updates})
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command in ('bridge','standby','controller'):
             if args.command=='controller':
                 if args.action=='set' and not args.thread_id:raise ValueError('需要 --thread-id 指定控制会话')
-                result=call(args.state_dir,'/controller',{'threadId':args.thread_id}) if args.action=='set' else call(args.state_dir,'/status')
+                result=services.call(args.state_dir,'/controller',{'threadId':args.thread_id}) if args.action=='set' else services.call(args.state_dir,'/status')
             else:
                 path='/bridge' if args.command=='bridge' else '/service/standby'
-                if args.action=='status':result=call(args.state_dir,'/status' if args.command=='bridge' else path)
-                else:result=call(args.state_dir,path,{'enabled':args.action=='on'},timeout=20)
+                if args.action=='status':result=services.call(args.state_dir,'/status' if args.command=='bridge' else path)
+                else:result=services.call(args.state_dir,path,{'enabled':args.action=='on'},timeout=20)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
-        if args.command == 'open': open_console(args.state_dir,info);return 0
+        if args.command == 'open': services.open_console(args.state_dir,info);return 0
         if args.command == 'stop':
-            call(args.state_dir,'/service/stop',{})
+            services.call(args.state_dir,'/service/stop',{})
             deadline=time.monotonic()+10
-            while running(args.state_dir) and time.monotonic()<deadline:time.sleep(.1)
-            if running(args.state_dir):raise ValueError('服务尚未退出，请稍后检查状态')
+            while services.running(args.state_dir) and time.monotonic()<deadline:time.sleep(.1)
+            if services.running(args.state_dir):raise ValueError('服务尚未退出，请稍后检查状态')
             print('CarryOn 已停止；Codex 已接收的任务不会被撤销。');return 0
         if args.command == 'cloud':
-            if args.action=='status': result=call(args.state_dir,'/cloud')
+            if args.action=='status': result=services.call(args.state_dir,'/cloud')
             elif args.action=='control':
                 if not (args.allow_control or args.read_only):raise ValueError('需要 --allow-control 或 --read-only 明确设置权限')
-                result=call(args.state_dir,'/cloud/control',{'id':args.binding_id,'control':args.allow_control},timeout=20)
-            elif args.action=='disconnect':result=call(args.state_dir,'/cloud',{'enabled':False,'id':args.binding_id})
+                result=services.call(args.state_dir,'/cloud/control',{'id':args.binding_id,'control':args.allow_control},timeout=20)
+            elif args.action=='disconnect':result=services.call(args.state_dir,'/cloud',{'enabled':False,'id':args.binding_id})
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except urllib.error.HTTPError as exc:
         try: message=json.load(exc).get('error','请求失败')

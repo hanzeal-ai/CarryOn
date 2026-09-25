@@ -61,8 +61,6 @@ import CarryOnCore
     }
     var workspaceRevision = 0
     var requests: [Record] = []
-    var drafts: [String: String] = [:] { didSet { scheduleDraftSave() } }
-    var attachments: [String: [String]] = [:] { didSet { scheduleDraftSave() } }
     var foreground = true
     var writing = false
     var notice: String?
@@ -79,36 +77,10 @@ import CarryOnCore
     private var directoryUpdates: Task<Void, Never>?
     @ObservationIgnored private lazy var pending = PendingWrites()
     private let workspacePreferences = WorkspacePreferences()
-    private let draftFile = LocalFiles.directory.appendingPathComponent("drafts-v1.json")
-    private var draftsLoaded = false
-    private var draftSave: Task<Void, Never>?
+    @ObservationIgnored lazy var draftStore = DraftStore { [weak self] message, operation in
+        self?.report(APIError(message), operation: operation, blocking: false)
+    }
 
-    private func loadDrafts() async {
-        let version = epoch
-        draftsLoaded = false
-        do {
-            let file = draftFile
-            let saved = try await Task.detached(priority: .userInitiated) {
-                try LocalFiles.read(DraftSnapshot.self, from: file) ?? DraftSnapshot()
-            }.value
-            guard version == epoch, !Task.isCancelled else { return }
-            drafts = saved.texts; attachments = saved.images; draftsLoaded = true
-        } catch { report(APIError("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存"), operation: "读取草稿", blocking: false) }
-    }
-    private func scheduleDraftSave() {
-        guard draftsLoaded else { return }
-        draftSave?.cancel()
-        draftSave = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            self?.saveDrafts()
-        }
-    }
-    func saveDrafts() {
-        draftSave?.cancel(); draftSave = nil
-        guard draftsLoaded else { return }
-        do { try LocalFiles.write(DraftSnapshot(texts: drafts, images: attachments), to: draftFile) }
-        catch { report(APIError("草稿未能保存到本机，当前内容仍保留在页面中"), operation: "保存草稿", blocking: false) }
-    }
     func restoreLogin() async {
         guard !authenticated, !busy else { return }
         restoringLogin = true; restorationError = nil; busy = true
@@ -138,7 +110,7 @@ import CarryOnCore
             guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
             devices = try values.map(Record.init); api = restored
             addressText = address.base.absoluteString
-            await loadDrafts()
+            await draftStore.load()
             guard version == epoch, !Task.isCancelled else { return }
             authenticated = true
             switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
@@ -175,12 +147,12 @@ import CarryOnCore
         return status["remoteControl"].bool == true ? "在线" : "在线 · 只读"
     }
     var draft: String {
-        get { drafts[scope + "\n" + (selectedThread?.id ?? "new")] ?? "" }
-        set { drafts[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+        get { draftStore.texts[scope + "\n" + (selectedThread?.id ?? "new")] ?? "" }
+        set { draftStore.texts[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
     var draftImages: [String] {
-        get { attachments[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
-        set { attachments[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+        get { draftStore.images[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.images[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
 
     func login(register: Bool = false, inviteCode: String = "") async {
@@ -210,7 +182,7 @@ import CarryOnCore
         UserDefaults.standard.set(addressText, forKey: "carryon.server")
         await restoreDisplayCache()
         guard version == epoch, !Task.isCancelled else { throw CancellationError() }
-        await loadDrafts()
+        await draftStore.load()
         guard version == epoch, !Task.isCancelled else { throw CancellationError() }
         authenticated = true
         switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
@@ -259,13 +231,13 @@ import CarryOnCore
         if alert { error = failure.localizedDescription }
     }
     private func resetSession() {
-        saveDrafts(); draftsLoaded = false
+        draftStore.reset()
         conversationPrefetcher.stop()
         epoch = UUID(); updates?.cancel(); updates = nil; selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); directoryUpdates = nil
         let previous = api; api = nil
         Task { await previous?.invalidate() }
         authenticated = false; restorationError = nil; restoringLogin = false; connected = false; reconnecting = false; status = .null; history = .null; historyFailure = nil
-        devices = []; selectedDevice = ""; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; drafts = [:]; attachments = [:]; displayCache.reset(); outgoing = [:]; credential = ""
+        devices = []; selectedDevice = ""; selectedThread = nil; sideThreadID = nil; sideHistory = .null; sideHistoryFailure = nil; selectedProject = nil; activityCount = nil; otherActivityCount = 0; requests = []; displayCache.reset(); outgoing = [:]; credential = ""
     }
     func logout() async {
         guard let api else { return }
@@ -288,7 +260,7 @@ import CarryOnCore
         }
     }
     func switchDevice(_ id: String) {
-        saveDrafts()
+        draftStore.save()
         workspacePreferences.selectDevice(id, server: addressText)
         conversationPrefetcher.stop()
         epoch = UUID(); updates?.cancel(); updates = nil; selectionUpdate?.cancel(); liveStream?.close(); liveStream = nil; directoryUpdates?.cancel(); directoryUpdates = nil
@@ -438,7 +410,7 @@ import CarryOnCore
         if !active {
             beginBackgroundSync()
             liveStream?.setForeground(backgroundSyncTask != .invalid)
-            saveDrafts(); readReceipts.reset(); conversationPrefetcher.stop()
+            draftStore.save(); readReceipts.reset(); conversationPrefetcher.stop()
             Task { await displayCache.flush() }
             directoryUpdates?.cancel(); directoryUpdates = nil
             return
@@ -831,10 +803,10 @@ import CarryOnCore
             return true
         }
         if success {
-            var current = ConversationDraft(text: drafts[capturedKey] ?? "", images: attachments[capturedKey] ?? [])
+            var current = ConversationDraft(text: draftStore.texts[capturedKey] ?? "", images: draftStore.images[capturedKey] ?? [])
             current.didSubmit(sent)
-            drafts[capturedKey] = current.text; attachments[capturedKey] = current.images
-            saveDrafts()
+            draftStore.texts[capturedKey] = current.text; draftStore.images[capturedKey] = current.images
+            draftStore.save()
         }
         return success
     }

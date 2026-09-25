@@ -100,10 +100,10 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_check_does_not_install_or_require_a_running_service(self):
         with patch.object(m,'latest',return_value=('99.0.0','bundle',{})),patch.object(m,'install') as install, \
-                patch('carryon.cli.running') as running,redirect_stdout(io.StringIO()):
+                patch('carryon.services.running') as running,redirect_stdout(io.StringIO()):
             self.assertEqual(main(['update','--check']),0)
             install.assert_not_called();running.assert_not_called()
-        with patch.object(m,'uninstall',return_value=0),patch('carryon.cli.running') as running:
+        with patch.object(m,'uninstall',return_value=0),patch('carryon.services.running') as running:
             self.assertEqual(main(['uninstall']),0);running.assert_not_called()
 
     def test_latest_requires_official_matching_assets(self):
@@ -141,7 +141,7 @@ class MaintenanceTests(unittest.TestCase):
     def test_failed_restart_rolls_back_entry_and_both_original_services(self):
         rows=self.rows();target=self.root/'new'
         with patch.object(m,'stop_service') as stop,patch.object(m,'start_service',side_effect=['new-id',ValueError('failed'),'old-two','old-one']) as start, \
-                patch('carryon.cli.running',return_value=None):
+                patch('carryon.services.running',return_value=None):
             with self.assertRaisesRegex(ValueError,'已恢复原入口'):m.activate(target,self.link,str(self.binary),'0.3.0',rows)
         self.assertEqual(self.link.resolve(),self.binary)
         self.assertEqual(start.call_args_list[-1].args,(rows[0],str(self.binary),'0.2.0'))
@@ -150,14 +150,14 @@ class MaintenanceTests(unittest.TestCase):
     def test_rollback_failure_is_reported(self):
         rows=self.rows()[:1]
         with patch.object(m,'stop_service'),patch.object(m,'start_service',side_effect=ValueError('failed')), \
-                patch('carryon.cli.running',return_value=None):
+                patch('carryon.services.running',return_value=None):
             with self.assertRaisesRegex(ValueError,'恢复未完成'):m.activate(self.root/'new',self.link,str(self.binary),'0.3.0',rows)
         self.assertEqual(self.link.resolve(),self.binary)
 
     def test_snapshot_does_not_include_stopped_services(self):
         rows=self.rows()
         with patch('carryon.services.list_services',return_value={'services':[{**rows[0],'running':True},{**rows[1],'running':False}]}), \
-                patch('carryon.cli.call',return_value=rows[0]['status']), \
+                patch('carryon.services.call',return_value=rows[0]['status']), \
                 patch.object(m.subprocess,'check_output',return_value=str(self.binary)+'\n'):
             self.assertEqual(len(m.service_snapshots()),1)
 
@@ -171,7 +171,7 @@ class MaintenanceTests(unittest.TestCase):
     def test_start_preserves_disabled_bridge_and_original_arguments(self):
         row=self.rows()[1];Path(row['directory']).mkdir()
         info={'pid':42,'instanceId':'new','version':'0.3.0'}
-        with patch('carryon.cli.running',side_effect=[None,info]),patch('carryon.cli.call',return_value=row['status']) as call, \
+        with patch('carryon.services.running',side_effect=[None,info]),patch('carryon.services.call',return_value=row['status']) as call, \
                 patch.object(m.subprocess,'Popen') as popen:
             popen.return_value.pid=42
             self.assertEqual(m.start_service(row,self.binary,'0.3.0'),'new')
@@ -182,14 +182,14 @@ class MaintenanceTests(unittest.TestCase):
     def test_stop_failure_keeps_entry_and_running_service(self):
         row=self.rows()[0]
         with patch.object(m,'stop_service',side_effect=ValueError('stop failed')),patch.object(m,'start_service') as start, \
-                patch('carryon.cli.running',return_value=row['service']):
+                patch('carryon.services.running',return_value=row['service']):
             with self.assertRaisesRegex(ValueError,'stop failed'):m.activate(self.root/'new',self.link,str(self.binary),'0.3.0',[row])
         self.assertEqual(self.link.resolve(),self.binary);start.assert_not_called()
 
     def test_start_restores_controller_before_disabling_bridge(self):
         row=self.rows()[1];row['status']['controllerId']='thread-123';Path(row['directory']).mkdir()
-        with patch('carryon.cli.running',side_effect=[None,{'pid':42,'instanceId':'new','version':'0.3.0'}]), \
-                patch('carryon.cli.call',return_value=row['status']) as call,patch.object(m.subprocess,'Popen') as popen:
+        with patch('carryon.services.running',side_effect=[None,{'pid':42,'instanceId':'new','version':'0.3.0'}]), \
+                patch('carryon.services.call',return_value=row['status']) as call,patch.object(m.subprocess,'Popen') as popen:
             popen.return_value.pid=42;m.start_service(row,self.binary,'0.3.0')
         self.assertEqual([(c.args[1],c.args[2]) for c in call.call_args_list[:-1]],
             [('/bridge',{'enabled':True}),('/controller',{'threadId':'thread-123'}),('/bridge',{'enabled':False})])

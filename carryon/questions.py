@@ -51,20 +51,3 @@ def project_questions(entries):
                               'options': [o for o in options if isinstance(o, str)] if isinstance(options, list) else [],
                               'answer': answers.get(identifier), 'active': active.get(item['turnId'], False)})
         item['asyncQuestions'] = projected
-
-
-def pending_questions(native_turns):
-    """Reuse the public question projection for actionable workspace notifications."""
-    from .timeline import project_item
-    entries = []
-    for turn in native_turns:
-        entries.append({'type': 'turn', 'turnId': turn.get('turnId'), 'status': turn.get('status')})
-        for index, item in enumerate(turn.get('items', [])):
-            if item.get('type') in ('userMessage', 'steeringUserMessage') or (
-                item.get('type') == 'agentMessage' and item.get('delivery') == 'async'
-            ):
-                entries.append(project_item(item, turn, index))
-    project_questions(entries)
-    return [dict(question, turnId=item['turnId'], itemId=item.get('nativeId'))
-            for item in entries for question in item.get('asyncQuestions', [])
-            if question['active'] and question['answer'] is None]

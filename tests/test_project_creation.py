@@ -49,14 +49,13 @@ class ProjectCreationTests(unittest.TestCase):
         project=resolve_project(self.bridge.catalog,pid)
         self.assertEqual(project,{'id':'bundle','cwd':'/project','groupId':pid,'isGitRepository':True})
         self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},project))
+        self.assertFalse(belongs({'cwd':'/project','projectRoot':'/project'},project))
         self.assertFalse(belongs({'nativeProjectId':'other','cwd':'/project'},project))
         self.assertFalse(belongs({'nativeProjectId':'bundle','projectless':True},project))
         with self.assertRaises(BridgeError):resolve_project(self.bridge.catalog,project_identity('/project')[0])
-        legacy=resolve_project(self.bridge.catalog,project_identity('/second')[0])
-        self.assertEqual(legacy['id'],'bundle')
-        self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},legacy))
+        with self.assertRaises(BridgeError):resolve_project(self.bridge.catalog,project_identity('/second')[0])
         self.state.write_text(json.dumps({'local-projects':{'bundle':{'rootPaths':['/second','/second']}}}))
-        self.assertEqual(resolve_project(self.bridge.catalog,project_identity('/second')[0])['id'],'bundle')
+        self.assertEqual(resolve_project(self.bridge.catalog,project_identity('/second',native_id='bundle')[0])['id'],'bundle')
 
     def setUp(self):
         git_state = patch('carryon.creation.is_git_repository', return_value=True)
@@ -64,7 +63,7 @@ class ProjectCreationTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.home=Path(self.temp.name)
         self.state=self.home/'.codex-global-state.json'
         self.state.write_text(json.dumps({'local-projects':{'native-project':{'rootPaths':['/project']}}}))
-        self.project=project_identity('/project')[0]
+        self.project=project_identity('/project',native_id='native-project')[0]
         self.journal=Journal(self.home/'jobs.sqlite')
         self.bridge=Bridge('fake',ProjectCatalog(self.home),self.journal,Native);self.bridge.enable()
     def tearDown(self):self.bridge.disable();self.journal.conn.close();self.temp.cleanup()
@@ -133,7 +132,7 @@ class ProjectCreationTests(unittest.TestCase):
              'target':{'type':'project','projectId':'wrong','environment':{'type':'worktree'}}},
              'result':{'content':[{'type':'text','text':json.dumps({'hostId':'local','threadId':CHILD})}]}}
         self.bridge.turn_evidence=lambda *args:{'status':'completed','createCalls':[call]}
-        self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/worktree','projectRoot':'/project'})
+        self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/worktree','projectRoot':'/project','nativeProjectId':'native-project'})
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
         call['arguments']['target']['projectId']='native-project'
         call['arguments']['target']['environment'] = {'type': 'local'}

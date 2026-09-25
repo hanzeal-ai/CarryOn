@@ -20,7 +20,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.env = patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(self.root/'registry')})
         self.env.start()
-        self.running = patch('carryon.cli.running', return_value=None)
+        self.running = patch('carryon.services.running', return_value=None)
         self.running.start()
 
     def tearDown(self):
@@ -114,8 +114,8 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_single_cloud_configuration_has_one_read_boundary(self):
         old = {'enabled':True, 'url':'wss://old.test/device', 'deviceId':'mac', 'token':'t'*43, 'control':False}
-        path = self.root/'cloud.json'; path.write_text(json.dumps(old)); before = path.read_bytes()
-        self.assertEqual(CloudManager.saved_status(self.root)['bindings'][0]['id'], 'legacy')
+        path = self.root/'cloud.json'; path.write_text(json.dumps({'version':2,'bindings':{'a'*32:old}})); before = path.read_bytes()
+        self.assertEqual(CloudManager.saved_status(self.root)['bindings'][0]['id'], 'a'*32)
         self.assertEqual(binding(self.root), ('https://old.test', {'deviceId':'mac','token':'t'*43}))
         self.assertEqual(path.read_bytes(), before)
         path.write_text(json.dumps({'version':3,'enabled':False}))

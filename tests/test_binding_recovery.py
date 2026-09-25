@@ -18,7 +18,7 @@ class RecoveryTests(unittest.TestCase):
         (self.root/'cloud.json').write_text(json.dumps({'version':2,'bindings':{'a'*32:self.old,'b'*32:self.other}}))
         (self.root/'onboarding.json').write_text(json.dumps({'state':'bound','url':'https://example.test','autoStart':False}))
         self.env = patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(self.root/'registry')}); self.env.start()
-        self.running = patch('carryon.cli.running',return_value=None); self.running.start()
+        self.running = patch('carryon.services.running',return_value=None); self.running.start()
 
     def tearDown(self):
         self.running.stop(); self.env.stop(); self.temp.cleanup()
@@ -114,7 +114,7 @@ class RecoveryTests(unittest.TestCase):
         def call(directory,path,body,timeout):
             self.assertEqual(path,'/cloud')
             return manager.configure(body)
-        with patch('carryon.cli.running',return_value={'port':1234}), patch('carryon.cli.call',side_effect=call), patch('carryon.cloud.CloudConnector.start'), patch('carryon.cloud.CloudConnector.stop'):
+        with patch('carryon.services.running',return_value={'port':1234}), patch('carryon.services.call',side_effect=call), patch('carryon.cloud.CloudConnector.start'), patch('carryon.cloud.CloudConnector.stop'):
             install_binding(self.root,updated,replacement)
         self.assertEqual(manager.connections['a'*32].config['deviceId'],'new')
         self.assertEqual(manager.connections['b'*32].config,self.other)
@@ -142,7 +142,7 @@ class RecoveryFlowTests(unittest.TestCase):
             if status==403 and value.get('error')=='设备凭证无效':raise InvalidDeviceCredentials(value['error'])
             if status!=200:raise ValueError(value)
             return value
-        with patch.dict('os.environ',{'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.cli.running',return_value=None), patch('carryon.onboarding.request',side_effect=rpc):
+        with patch.dict('os.environ',{'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.services.running',return_value=None), patch('carryon.onboarding.request',side_effect=rpc):
             self.assertEqual(exchange(root,{'action':'status'})['state'],'configured')
             initial=(root/'cloud.json').read_bytes()
             prepared=exchange(root,{'action':'prepare','url':'https://example.test','autoStart':False})

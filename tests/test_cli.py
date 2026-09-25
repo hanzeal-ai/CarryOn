@@ -53,25 +53,25 @@ class CLITests(unittest.TestCase):
                (['controller','set','--thread-id','thread-id'],'/controller',{'threadId':'thread-id'})]
         with tempfile.TemporaryDirectory() as temp:
             for arguments,path,body in cases:
-                with self.subTest(arguments=arguments), patch('carryon.cli.running',return_value={'port':1234}), \
-                        patch('carryon.cli.call',return_value={}) as call, redirect_stdout(io.StringIO()):
+                with self.subTest(arguments=arguments), patch('carryon.services.running',return_value={'port':1234}), \
+                        patch('carryon.services.call',return_value={}) as call, redirect_stdout(io.StringIO()):
                     self.assertEqual(main(arguments+['--state-dir',temp]),0)
                     self.assertEqual(call.call_args.args,(Path(temp).resolve(),path,body))
             for arguments in [['cloud','control'],['controller','set']]:
-                with patch('carryon.cli.running',return_value={'port':1234}), patch('carryon.cli.call') as call, redirect_stderr(io.StringIO()):
+                with patch('carryon.services.running',return_value={'port':1234}), patch('carryon.services.call') as call, redirect_stderr(io.StringIO()):
                     self.assertEqual(main(arguments+['--state-dir',temp]),1);call.assert_not_called()
 
     def test_settings_status_is_read_only(self):
         for arguments,path in [(['bridge','status'],'/status'),(['standby','status'],'/service/standby'),
                                (['controller','status'],'/status')]:
-            with self.subTest(arguments=arguments), patch('carryon.cli.running',return_value={'port':1234}), \
-                    patch('carryon.cli.call',return_value={}) as call, redirect_stdout(io.StringIO()):
+            with self.subTest(arguments=arguments), patch('carryon.services.running',return_value={'port':1234}), \
+                    patch('carryon.services.call',return_value={}) as call, redirect_stdout(io.StringIO()):
                 self.assertEqual(main(arguments),0)
                 self.assertEqual(call.call_args.args[1:],(path,))
 
     def test_notification_change_preserves_other_preferences(self):
         prefs={'message':True,'done':False,'failed':True,'approval':True}
-        with patch('carryon.cli.running',return_value={'port':1234}), \
-                patch('carryon.cli.call',side_effect=[{'preferences':prefs},{}]) as call, redirect_stdout(io.StringIO()):
+        with patch('carryon.services.running',return_value={'port':1234}), \
+                patch('carryon.services.call',side_effect=[{'preferences':prefs},{}]) as call, redirect_stdout(io.StringIO()):
             self.assertEqual(main(['notifications','set','--no-message']),0)
             self.assertEqual(call.call_args.args[1:],('/notifications/preferences',{**prefs,'message':False}))

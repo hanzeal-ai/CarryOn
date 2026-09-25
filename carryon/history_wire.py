@@ -31,11 +31,9 @@ class HistoryWire:
             result.pop(field)
             result[field + 'Delta'] = {
                 'base': previous['historyRevision'],
-                'fields': {k: v for k, v in history.items() if k != 'timeline' and (k != 'messages' or not isinstance(previous.get('messages'), list) or not isinstance(history.get('messages'), list)) and (k == 'historyRevision' or k not in previous or previous[k] != v)},
+                'fields': {k: v for k, v in history.items() if k != 'timeline' and (k == 'historyRevision' or k not in previous or previous[k] != v)},
                 'remove': [k for k in previous if k not in history and k != 'timeline'],
                 **splice}
-            if isinstance(previous.get('messages'), list) and isinstance(history.get('messages'), list):
-                result[field + 'Delta']['messages'] = list_splice(previous['messages'], history['messages'])
         return result
 
     def decode(self, packet):
@@ -60,8 +58,6 @@ class HistoryWire:
                     any(not isinstance(k, str) or k in ('timeline', 'historyRevision') for k in removed)):
                     raise ValueError('Invalid history splice')
                 result[field] = {**{k: v for k, v in previous.items() if k not in removed}, **fields, 'timeline': timeline[:start] + items + timeline[start+count:]}
-                if 'messages' in delta:
-                    result[field]['messages'] = apply_splice(previous.get('messages'), delta['messages'])
                 result.pop(field + 'Delta')
             if field in result:
                 next_histories[field] = result[field]
@@ -80,13 +76,3 @@ def list_splice(before, after):
         end += 1
     return {'start': start, 'delete': len(before)-start-end,
             'items': after[start:len(after)-end if end else len(after)]}
-
-
-def apply_splice(before, splice):
-    if not isinstance(before, list) or not isinstance(splice, dict):
-        raise ValueError('Invalid history splice')
-    start, count, items = splice.get('start'), splice.get('delete'), splice.get('items')
-    if (type(start) is not int or type(count) is not int or start < 0 or count < 0 or
-        start + count > len(before) or not isinstance(items, list)):
-        raise ValueError('Invalid history splice')
-    return before[:start] + items + before[start+count:]

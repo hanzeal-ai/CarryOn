@@ -1,3 +1,5 @@
+from carryon.workspace_access import CAPABILITIES
+from carryon.console_auth import password_record
 import http.client
 import json
 import tempfile
@@ -15,15 +17,19 @@ from test_cloud import Catalog, IPC, T
 class ConsoleTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
-        self.config={'publicUrl':'http://127.0.0.1','consoleToken':'c'*40,'devices':{
-            'my-mac':{'deviceToken':'d'*40,'apiToken':'a'*40},
-            'other':{'deviceToken':'e'*40,'apiToken':'b'*40}}}
+        self.config={'publicUrl':'http://127.0.0.1','account':password_record('test-owner','c'*40),'devices':{
+            'my-mac':{'deviceToken':'d'*40,'apiToken':'a'*40,'members':{'owner':list(CAPABILITIES)},'ownerUserId':'owner'},
+            'other':{'deviceToken':'e'*40,'apiToken':'b'*40,'members':{'owner':list(CAPABILITIES)},'ownerUserId':'owner'}}}
         self.server=ConsoleServer(('127.0.0.1',0),self.config)
         self.url=f'http://127.0.0.1:{self.server.server_port}'
         self.server.origin=self.url;self.server.public_url=self.url
         self.worker=threading.Thread(target=self.server.serve_forever,daemon=True);self.worker.start()
         self.cookie='';self.journal=Journal(self.root/'journal.sqlite')
-        self.bridge=Bridge('fake',Catalog(),self.journal,IPC);self.connector=CloudConnector(self.bridge,self.root)
+        self.bridge=Bridge('fake',Catalog(),self.journal,IPC);self.connector=CloudConnector(self.bridge,config={'enabled':False},binding_id=None)
+    def configure_device(self, config):
+        self.connector.stop()
+        self.connector=CloudConnector(self.bridge,config=config,binding_id=self.connector.binding_id)
+        self.connector.start()
     def device_config(self):
         return {'enabled':True,'url':self.url.replace('http:','ws:')+'/device','deviceId':'my-mac',
                 'token':self.config['devices']['my-mac']['deviceToken'],'control':False,'devLocal':True}
@@ -43,11 +49,11 @@ class ConsoleTests(unittest.TestCase):
         result=(r.status,json.loads(raw) if r.getheader('Content-Type','').startswith('application/json') else raw,cookie)
         c.close();return result
     def login(self):
-        status,body,cookie=self.call('POST','/console/login',{'token':'c'*40})
+        status,body,cookie=self.call('POST','/console/login',{'username':'test-owner','password':'c'*40})
         self.assertEqual(status,200);self.assertIn('HttpOnly',cookie);self.assertIn('SameSite=Strict',cookie)
     def test_console_auth_origin_logout_and_secret_boundary(self):
         self.assertEqual(self.call('GET','/console/session')[0],401)
-        self.assertEqual(self.call('POST','/console/login',{'token':'c'*40},False)[0],403)
+        self.assertEqual(self.call('POST','/console/login',{'username':'test-owner','password':'c'*40},False)[0],403)
         self.assertEqual(self.call('POST','/console/login',{'token':'a'*40})[0],403)
         self.login();result=self.call('GET','/console/session')
         self.assertEqual(result[0],200)
@@ -58,7 +64,7 @@ class ConsoleTests(unittest.TestCase):
         self.cookie=old;self.assertEqual(self.call('GET','/console/session')[0],401)
     def test_end_to_end_read_only(self):
         self.login();config=self.device_config()
-        self.assertFalse(config['control']);self.connector.configure(config);self.bridge.enable()
+        self.assertFalse(config['control']);self.configure_device(config);self.bridge.enable()
         end=time.monotonic()+4
         while not self.connector.status()['connected'] and time.monotonic()<end:time.sleep(.02)
         self.assertTrue(self.connector.status()['connected'])
@@ -91,7 +97,7 @@ class ConsoleTests(unittest.TestCase):
     def test_proxy_prefix_assets_and_secure_cookie(self):
         self.server.public_url='https://console.test/carryon'
         self.server.origin='https://console.test';self.server.prefix='/carryon'
-        result=self.call('POST','/console/login',{'token':'c'*40},'https://console.test')
+        result=self.call('POST','/console/login',{'username':'test-owner','password':'c'*40},'https://console.test')
         self.assertEqual(result[0],200)
         self.assertIn('; Secure',result[2]);self.assertIn('Path=/carryon/console/',result[2])
         page=self.call('GET','/example.html',origin=False)[1]

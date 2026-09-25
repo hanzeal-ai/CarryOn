@@ -9,16 +9,8 @@ from .errors import BridgeError
 from .catalog import valid_id
 from .ipc import DesktopIPC, IPCError
 from .timeline import project_timeline
-from .thread_status import project_status
+from .thread_status import project_status, idle_snapshot
 from concurrent.futures import ThreadPoolExecutor
-
-
-def idle_snapshot(state):
-    status = project_status(state)['state']
-    if status == 'waiting':
-        raise BridgeError("会话有待处理的审批或输入，请先在 Codex App 处理")
-    if status != 'idle':
-        raise BridgeError("会话不是已确认的空闲状态，请等待任务结束或在 Codex App 查看")
 
 
 def snapshot_history(state, turn_cache=None, limit=None):
@@ -42,32 +34,15 @@ def snapshot_history(state, turn_cache=None, limit=None):
     offset = max(0, total - limit) if limit else 0
     earlier_duration = sum(t.get("durationMs", 0) for t in turns[:offset] if isinstance(t.get("durationMs", 0), (int, float)))
     turns = turns[offset:]
-    messages, statuses = [], {}
-    for index, turn in enumerate(turns, offset):
+    statuses = {}
+    for turn in turns:
         turn_id = turn.get("turnId")
-        params = turn.get("params", {})
-        user_text = "\n".join(i.get("text", "") for i in params.get("input", []) if i.get("type") == "text")
-        # Agent-created tasks carry the first prompt as a native tool output.
-        tool_output = params.get("toolOutput")
-        if not user_text and isinstance(tool_output, dict):
-            output = tool_output.get("output", "")
-            if isinstance(output, str):
-                user_text = output
-                delegated = re.search(r"<input>\s*([\s\S]*?)\s*</input>", output)
-                if output.startswith("<codex_delegation>") and delegated:
-                    user_text = delegated[1]
-        if user_text:
-            messages.append({"id": f"{turn_id or index}:user", "role": "user", "text": user_text[:24000],
-                             "textTruncated": len(user_text) > 24000, "turnId": turn_id})
         final = ""
         for item in turn.get("items", []):
             if item.get("type") == "agentMessage" and item.get("phase") != "analysis":
                 text = item.get("text", "")
                 if item.get("phase") != "commentary":
                     final = text
-                messages.append({"id": item.get("id", f"{turn_id}:{len(messages)}"), "role": "assistant",
-                                 "phase": item.get("phase"), "text": text[:24000],
-                                 "textTruncated": len(text) > 24000, "turnId": turn_id})
         if turn_id:
             statuses[turn_id] = {"status": turn.get("status", "unknown"), "text": final,
                 "createCalls": [i for i in turn.get("items", []) if i.get("type") == "mcpToolCall"
@@ -76,8 +51,8 @@ def snapshot_history(state, turn_cache=None, limit=None):
             **({"historyWindow": {"limit": limit, "total": total, "hasMore": offset > 0}, "earlierDurationMs": earlier_duration} if limit else {}),
             "status": project_status(state),
             "thread": {"id": state["id"], "title": state.get("title", ""), "cwd": state.get("cwd", "")},
-            "messages": messages[-200:], "turns": statuses,
-            "truncated": not complete, "messagesTruncated": len(messages) > 200,
+            "turns": statuses,
+            "truncated": not complete,
             "source": "desktop-snapshot"}
 
 

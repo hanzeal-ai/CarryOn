@@ -168,7 +168,3 @@ class RolloutIndex:
             if len(json.dumps(state, ensure_ascii=False).encode()) <= 2 * 1024 * 1024:
                 self.cached = (limit, state)
             return state
-
-
-def read_state(row, home, limit=None):
-    return RolloutIndex(row, home).snapshot(limit)

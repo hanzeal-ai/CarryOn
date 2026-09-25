@@ -87,7 +87,7 @@ class Workspace:
         terminal=last.get('status');status=project_status(state)
         failed=status['state']=='error' or terminal=='failed' and status['state']=='idle'
         requests=controls(state)['requests']
-        from .questions import pending_questions
+        from .timeline import pending_questions
         questions=pending_questions(native_turns)
         # Only complete turns produce message/terminal events: streaming patches never spam notifications.
         candidates={}

@@ -6,30 +6,23 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from .api import dispatch
 from .cloud_wire import connect, close, endpoint
 from .errors import BridgeError
 from .ipc import IPCError
-from .paths import save_json
 
 PROTOCOL='carryon/1'
 ID=re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 
 
 class CloudConnector:
-    def __init__(self,bridge,directory, *, config=None, binding_id=None):
-        self.bridge=bridge;self.path=Path(directory)/'cloud.json';self.binding_id=binding_id
+    def __init__(self,bridge, *, config, binding_id):
+        self.bridge=bridge;self.binding_id=binding_id
         self.lock=threading.RLock();self.config={};self.worker=None;self.ws=None
-        self.configure_lock=threading.Lock()
         self.request_capacity=threading.BoundedSemaphore(4)
         self.cancel=threading.Event();self.connected=False;self.error=None
-        if config is not None:
-            self.config=dict(config);self.validate(self.config)
-        elif self.path.exists():
-            self.config=json.loads(self.path.read_text())
-            self.validate(self.config)
+        self.config=dict(config);self.validate(self.config)
 
     @staticmethod
     def validate(data):
@@ -46,27 +39,6 @@ class CloudConnector:
             return {'enabled':self.config.get('enabled',False),'connected':self.connected,
                 'url':self.config.get('url'),'deviceId':self.config.get('deviceId'),
                 'control':self.config.get('control',False),'error':self.error,'protocol':PROTOCOL}
-
-    def configure(self,data):
-        with self.configure_lock:
-            return self._configure(data)
-
-    def set_control(self, control):
-        if type(control) is not bool:raise ValueError('control 必须为布尔值')
-        with self.configure_lock:
-            with self.lock:
-                if not self.config.get('enabled'):raise ValueError('请先连接云端')
-                config={**self.config,'control':control}
-            return self._configure(config)
-
-    def _configure(self,data):
-        self.validate(data)
-        self.stop()
-        with self.lock:
-            self.config={k:data[k] for k in ('enabled','url','deviceId','token','control','devLocal') if k in data}
-            if self.binding_id is None:save_json(self.path,self.config)
-            self.error=None
-        self.start();return self.status()
 
     def start(self):
         with self.lock:

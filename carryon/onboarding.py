@@ -55,7 +55,7 @@ def request(url, action, body):
 
 
 def install_binding(directory, config, replacement=None):
-    from .cli import running, call
+    from .services import running, call
     from .cloud_manager import CloudManager
     from .cloud import CloudConnector
     CloudConnector.validate(config)
@@ -78,7 +78,7 @@ def install_binding(directory, config, replacement=None):
 
 def exchange(directory, data):
     from .services import register, records
-    from .cli import running, call, start
+    from .services import running, call, start
     if not isinstance(data, dict): raise ValueError('初始化输入无效')
     if data.get('useDefaultCloud') is True:
         data = {**data, 'url':cloud_url()}
@@ -200,7 +200,7 @@ def exchange(directory, data):
 
 
 def exchange_ready(directory, state, action):
-    from .cli import running, call, start
+    from .services import running, call, start
     from .services import records
     import sys
     saved = records().get(str(directory), {})
@@ -214,7 +214,7 @@ def exchange_ready(directory, state, action):
     cloud = call(directory, '/cloud') if info else {}
     return {k:v for k,v in {**state, 'url':state.get('url', cloud_url()), 'pending':None,
             'environment': {'supportedPlatform':sys.platform == 'darwin', 'codexHome':str(codex),
-                            'ipcAvailable':(codex/'ipc/ipc.sock').exists(), 'databaseAvailable':any(codex.glob('state_*.sqlite')), 'backend':saved.get('backend','ipc')},
+                            'ipcAvailable':(codex/'ipc/ipc.sock').exists(), 'databaseAvailable':any(codex.glob('state_*.sqlite')), 'backend':saved.get('backend','desktop-ipc')},
             'confirmedAccount':state.get('pending', {}).get('confirmed', {}).get('account'),
             'bindingMode':state.get('pending', {}).get('mode', 'scan'),
             'qrURL':None if state.get('pending', {}).get('confirmed') or state.get('pending', {}).get('mode') == 'target' else state.get('pending', {}).get('url'), 'running':bool(info),

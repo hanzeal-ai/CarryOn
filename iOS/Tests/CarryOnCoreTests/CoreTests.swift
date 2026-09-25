@@ -120,16 +120,14 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
 @Test func historyWireAppliesSpliceAndRejectsMissingBase() throws {
     var wire = HistoryWireProjection()
     let initial: JSONValue = .object(["subscription": .string("a"), "threadId": .string("t"), "history": .object([
-        "historyRevision": .string("1"), "timeline": .array([.object(["id": .string("a"), "text": .string("old")])]), "messages": .array([.string("old")]), "obsolete": .bool(true)])])
+        "historyRevision": .string("1"), "timeline": .array([.object(["id": .string("a"), "text": .string("old")])]), "obsolete": .bool(true)])])
     _ = try wire.decode(initial)
     let update: JSONValue = .object(["subscription": .string("a"), "threadId": .string("t"), "historyDelta": .object([
-        "messages": .object(["start": .number(0), "delete": .number(1), "items": .array([.string("new")])]),
         "base": .string("1"), "fields": .object(["historyRevision": .string("2")]), "remove": .array([.string("obsolete")]),
         "start": .number(0), "delete": .number(1), "items": .array([.object(["id": .string("a"), "text": .string("new")])])])])
     let result = try wire.decode(update)
     #expect(result["history"]["timeline"].array.first?["text"].text == "new")
     #expect(result["history"]["obsolete"] == .null)
-    #expect(result["history"]["messages"].array == [.string("new")])
     #expect(throws: APIError.self) { _ = try wire.decode(update) }
     var fresh = HistoryWireProjection()
     #expect(throws: APIError.self) { _ = try fresh.decode(update) }
@@ -221,4 +219,23 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     #expect(try ConsoleAddress(ConsoleAddress.defaultURL).initializationCommand == "carryon init")
     #expect(try ConsoleAddress("https://self-hosted.test/prefix").initializationCommand == "carryon init --url 'https://self-hosted.test/prefix/'")
     #expect(try ConsoleAddress("https://self-hosted.test/team's").initializationCommand == "carryon init --url 'https://self-hosted.test/team'\\''s/'")
+}
+
+@Test @MainActor func draftStoreResetPreservesSavedDraftsAndReloads() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("drafts.json")
+    let store = DraftStore(file: file) { _, _ in Issue.record("Draft persistence failed") }
+    await store.load()
+    store.texts["server\nthread"] = "Pending edit"
+    store.images["server\nthread"] = ["attachment"]
+    store.reset()
+    #expect(store.texts.isEmpty)
+    #expect(store.images.isEmpty)
+    store.save()
+    let saved = try LocalFiles.read(DraftSnapshot.self, from: file)
+    #expect(saved?.texts["server\nthread"] == "Pending edit")
+    await store.load()
+    #expect(store.texts["server\nthread"] == "Pending edit")
+    #expect(store.images["server\nthread"] == ["attachment"])
 }

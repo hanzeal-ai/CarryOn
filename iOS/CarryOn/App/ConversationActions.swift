@@ -13,9 +13,9 @@ struct NewConversationView: View {
     @State private var project = ""
     @State private var selecting = false
     private var directCreation: Bool { model.status["supportsDirectCreation"].bool == true }
-    private var text: String { model.drafts[model.scope + "\nnew"] ?? "" }
+    private var text: String { model.draftStore.texts[model.scope + "\nnew"] ?? "" }
     private var draftBinding: Binding<String> {
-        Binding(get: { text }, set: { model.drafts[model.scope + "\nnew"] = $0 })
+        Binding(get: { text }, set: { model.draftStore.texts[model.scope + "\nnew"] = $0 })
     }
     @State private var failure: String?
     @State private var loading = false
@@ -79,7 +79,7 @@ struct NewConversationView: View {
         var fields: [String: JSONValue] = ["prompt": .string(sent)]
         if !directCreation { fields["projectId"] = .string(project) }
         if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields)) {
-            if model.drafts[draftKey] == sent { model.drafts[draftKey] = ""; model.saveDrafts() }
+            if model.draftStore.texts[draftKey] == sent { model.draftStore.texts[draftKey] = ""; model.draftStore.save() }
             dismiss()
         }
     }

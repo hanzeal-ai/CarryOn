@@ -7,8 +7,8 @@ from .services import catalog_directory, records, register
 
 
 def backend(directory):
-    value = records().get(str(Path(directory).resolve()), {}).get('backend', 'ipc')
-    return 'ipc' if value == 'desktop-ipc' else value
+    value = records().get(str(Path(directory).resolve()), {}).get('backend', 'desktop-ipc')
+    return value
 
 
 def initialize(directory):
@@ -21,11 +21,11 @@ def initialize(directory):
             if existing[str(directory)].get('removed'):
                 raise ValueError('工作区已删除，请显式重新注册后再启动')
             return existing[str(directory)]
-        ipc = next((row for row in existing.values() if not row.get('removed') and row.get('backend','ipc') in ('ipc','desktop-ipc')), None)
+        ipc = next((row for row in existing.values() if not row.get('removed') and row.get('backend','desktop-ipc') == 'desktop-ipc'), None)
         if ipc:
             raise ValueError('本机已有 Codex App 工作区：'+ipc['directory']+'；请使用新建工作区创建独立环境')
         private_dir(directory)
-        return register(directory, name='本机 Codex', port=0, codex_home=default_codex_home(), backend='ipc')
+        return register(directory, name='本机 Codex', port=0, codex_home=default_codex_home(), backend='desktop-ipc')
 
 
 def create(name='新工作区'):

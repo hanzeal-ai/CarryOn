@@ -45,7 +45,7 @@ struct ServiceRecord: Identifiable, Equatable {
         state = value["state"] as? String ?? "unavailable"
         port = value["port"] as? Int ?? 0
         codexHome = value["codexHome"] as? String ?? defaultCodexHome()
-        backend = value["backend"] as? String ?? "ipc"
+        backend = value["backend"] as? String ?? "desktop-ipc"
     }
 }
 

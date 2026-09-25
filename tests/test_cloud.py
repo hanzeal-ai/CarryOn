@@ -44,7 +44,7 @@ class CloudTests(unittest.TestCase):
             'device-a':{'deviceToken':'d'*40,'apiToken':'a'*40},
             'device-b':{'deviceToken':'e'*40,'apiToken':'b'*40}}})
         self.worker=threading.Thread(target=self.gateway.serve_forever,daemon=True);self.worker.start()
-        self.connector=CloudConnector(self.bridge,self.path)
+        self.connector=CloudConnector(self.bridge,config={'enabled':False},binding_id=None)
         self.config={'enabled':True,'deviceId':'device-a','token':'d'*40,
             'url':f'ws://127.0.0.1:{self.gateway.server_port}/device','devLocal':True,'control':False}
     def tearDown(self):
@@ -59,8 +59,12 @@ class CloudTests(unittest.TestCase):
             if predicate():return
             time.sleep(.01)
         self.fail('timed out')
+    def configure_connector(self, config):
+        self.connector.stop()
+        self.connector = CloudConnector(self.bridge, config=config, binding_id=self.connector.binding_id)
+        self.connector.start()
     def connect(self,control=False):
-        self.connector.configure({**self.config,'control':control})
+        CloudTests.configure_connector(self,{**self.config,'control':control})
         self.wait(lambda:self.connector.status()['connected'])
     def call(self,method,suffix,body=None,token='a'*40,device='device-a'):
         c=http.client.HTTPConnection('127.0.0.1',self.gateway.server_port,timeout=4)
@@ -106,7 +110,7 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(result['body']['threadStatuses'][T]['state'],'idle')
         self.assertEqual(self.call('DELETE','/streams/'+sid)[0],200)
         self.assertEqual(self.call('GET','/streams/'+sid)[0],404)
-        self.connector.configure({'enabled':False})
+        self.configure_connector({'enabled':False})
         self.wait(lambda:'device-a' not in self.gateway.devices)
         self.assertEqual(self.request('GET','/api/threads')[0],503)
     def test_bad_subscription_does_not_drop_authenticated_device(self):
@@ -118,10 +122,12 @@ class CloudTests(unittest.TestCase):
             with self.assertRaises(ValueError):endpoint(url,True)
         endpoint('wss://cloud.test/device')
         with self.assertRaises(ValueError):endpoint('ws://127.0.0.1/device')
-        self.connector.configure(self.config)
+        from carryon.cloud_manager import CloudManager
+        manager=CloudManager(self.bridge,self.path)
+        manager.configure(self.config,start=False)
         self.assertEqual((self.path/'cloud.json').stat().st_mode&0o777,0o600)
     def test_invalid_device_credential_returns_no_data(self):
-        self.connector.configure({**self.config,'token':'wrong'*8})
+        self.configure_connector({**self.config,'token':'wrong'*8})
         self.wait(lambda:self.connector.status()['error'] is not None)
         self.assertFalse(self.connector.status()['connected'])
         self.assertEqual(self.call('GET','')[1]['online'],False)

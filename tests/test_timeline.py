@@ -66,7 +66,7 @@ class TimelineTests(unittest.TestCase):
     def test_more_than_200_native_events_are_retained(self):
         result=self.history([{'type':'agentMessage','id':str(i),'text':str(i)} for i in range(250)])
         self.assertEqual(len(result['timeline']),251)
-        self.assertTrue(result['messagesTruncated'])
+        self.assertNotIn('messages',result)
         self.assertFalse(result['truncated'])
 
     def test_runtime_change_present_without_new_messages(self):

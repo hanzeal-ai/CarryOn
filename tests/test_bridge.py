@@ -150,7 +150,7 @@ class BridgeTests(unittest.TestCase):
         state = {"id": THREAD, "turnHistory": {"kind":"canonical", "history": {
             "isComplete": True, "entitiesByKey":{"k":turn}, "islands":[{"entries":[{"value":"k"}]}]}}}
         result = snapshot_history(state)
-        self.assertEqual([m["text"] for m in result["messages"]], ["hello", "你好"])
+        self.assertEqual([m["text"] for m in result["timeline"] if m["type"] in ("userMessage", "agentMessage")], ["hello", "你好"])
         self.assertEqual(result["turns"]["t"]["text"], "你好")
 
     def test_acknowledgement_survives_inflight_reconciliation(self):

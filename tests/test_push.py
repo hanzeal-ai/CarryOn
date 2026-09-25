@@ -29,7 +29,7 @@ class Device:
 class PushTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.sender=Sender();self.device=Device()
-        self.server=SimpleNamespace(auth=SimpleNamespace(fingerprint='authority-a'),lock=threading.RLock(),auth_lock=threading.RLock(),sessions={k:time.monotonic()+3600 for k in ('session','new-session','s')},public_url='https://example.com',config={'devices':{'mac':{}}},devices={'mac':self.device})
+        self.server=SimpleNamespace(auth=SimpleNamespace(fingerprint='authority-a'),lock=threading.RLock(),auth_lock=threading.RLock(),sessions={k:time.monotonic()+3600 for k in ('session','new-session','s')},public_url='https://example.com',config={'devices':{'mac':{'members':{'owner':['view']},'ownerUserId':'owner'}}},devices={'mac':self.device})
         self.push=PushService(self.server,Path(self.temp.name)/'push.sqlite',self.sender)
         self.push.stop.set();self.push.worker.join();self.push.stop.clear()  # deterministic tick
         self.registration={'installationId':INSTALL,'token':'ab'*32,'environment':'sandbox','deviceId':'mac','revision':1}
@@ -99,22 +99,21 @@ class PushTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'数量'):
             self.push.register({**self.registration,'installationId':new_id,'revision':4},'session')
 
-    def test_legacy_schema_preserves_cursor_but_requires_reauthorization(self):
-        self.register();self.push.close()
+    def test_old_schema_is_rejected_without_rewriting_file(self):
         import sqlite3
-        with sqlite3.connect(Path(self.temp.name)/'push.sqlite') as db:
-            db.execute('ALTER TABLE installations DROP COLUMN authority')
-            db.execute('ALTER TABLE registration_versions RENAME TO versions_current')
-            db.execute('CREATE TABLE registration_versions(id TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
-            db.execute('INSERT INTO registration_versions SELECT id,revision FROM versions_current')
-            db.execute('DROP TABLE versions_current')
-        self.push=PushService(self.server,Path(self.temp.name)/'push.sqlite',self.sender)
-        self.push.stop.set();self.push.worker.join();self.push.stop.clear()
-        self.event();self.push.tick()
-        self.assertEqual(self.sender.sent,[])
-        row=self.push.db.execute('SELECT * FROM installations').fetchone()
-        self.assertEqual(row['authority'],'');self.assertEqual(row['cursor'],0)
-        self.assertEqual(self.push.db.execute('SELECT revision FROM registration_versions').fetchone()[0],1)
+        path=Path(self.temp.name)/'old.sqlite'
+        with sqlite3.connect(path) as db:
+            db.execute('CREATE TABLE installations(id TEXT PRIMARY KEY)')
+        before=path.read_bytes()
+        with self.assertRaisesRegex(ValueError,'不是当前结构'):
+            PushService(self.server,path,self.sender)
+        self.assertEqual(path.read_bytes(),before)
+
+    def test_missing_members_does_not_grant_owner_access(self):
+        from carryon.console_auth import ConsoleAuth, password_record
+        self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)
+        self.server.config['devices']['mac'].pop('members')
+        with self.assertRaises(PermissionError):self.register()
 
     def test_cursor_survives_restart_and_no_phone_stream_is_needed(self):
         self.register();self.push.tick();self.event();self.push.tick()

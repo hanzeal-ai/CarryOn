@@ -169,11 +169,10 @@ test('display cache honors recency, byte budget and oversized entries',()=>{
 test('history deltas reconstruct ordered state and gaps reject before rendering',()=>{
   const context=vm.createContext({});
   vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../client.js'),'utf8')+'\nglobalThis.wire=new HistoryWire();',context);
-  const base={type:'update',subscription:'a',threadId:'t',history:{historyRevision:'1',timeline:[{id:'a',text:'old'},{id:'b'}],messages:['old'],obsolete:true}};
+  const base={type:'update',subscription:'a',threadId:'t',history:{historyRevision:'1',timeline:[{id:'a',text:'old'},{id:'b'}],obsolete:true}};
   context.wire.decode(base);
-  const next=context.wire.decode({type:'update',subscription:'a',threadId:'t',historyDelta:{base:'1',fields:{historyRevision:'2'},remove:['obsolete'],start:0,delete:1,items:[{id:'a',text:'new'}],messages:{start:0,delete:1,items:['new']}}});
+  const next=context.wire.decode({type:'update',subscription:'a',threadId:'t',historyDelta:{base:'1',fields:{historyRevision:'2'},remove:['obsolete'],start:0,delete:1,items:[{id:'a',text:'new'}]}});
   assert.equal(next.history.timeline[0].text,'new');assert.equal(next.history.timeline[1].id,'b');
-  assert.equal(next.history.obsolete,undefined);assert.equal(next.history.messages[0],'new');
   assert.throws(()=>context.wire.decode({subscription:'a',threadId:'t',historyDelta:{base:'wrong'}}),/版本缺口/);
   assert.throws(()=>context.wire.decode({subscription:'b',threadId:'t',historyDelta:{base:'2'}}),/版本缺口/);
 });

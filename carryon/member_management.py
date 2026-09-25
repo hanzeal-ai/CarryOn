@@ -17,7 +17,7 @@ def manage(server, data):
     with server.auth_lock, server.binding_invites.lock, server.lock:
         device, record = device_record(server, data)
         action = data.get('action')
-        members = record.get('members', {'owner':list(CAPABILITIES)})
+        members = record.get('members', {})
         if action == 'list':
             return {'members':[{'account':server.auth.profile(identity), 'permissions':value} for identity,value in members.items()]}
         if action == 'invite':
