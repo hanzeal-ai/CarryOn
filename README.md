@@ -15,6 +15,7 @@ Switch devices. Carry on.
 - [GitHub Actions 与阿里云部署](deployment/README.md)：隔离网关、部署开关和回滚。
 - [App 检查更新](docs/APP_UPDATES.md)：iOS 与 Mac 的更新入口、发布清单和渠道配置。
 - [品牌与升级说明](docs/BRANDING.md)：CarryOn 命名及升级步骤。
+- [按场景开始使用](docs/QUICKSTART.md)：安装、连接、首次成功与排错。
 - [安装与首次使用](docs/INSTALL.md)：应用、CLI、Python 包、升级、旧数据目录与排错。
 - [接入自定义云端控制台](docs/CLOUD.md)：出站 WSS、参考网关、设备凭证、后端示例和协议。
 - [本地 HTTP / WebSocket API](docs/API.md)：已有能力、请求状态与幂等契约。

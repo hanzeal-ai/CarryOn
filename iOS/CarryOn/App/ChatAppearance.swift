@@ -92,7 +92,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @ViewBuilder var accessories: Accessories
     private var action: ComposerAction { .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
     private var actionDisabled: Bool { disabled || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
-    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "重新执行" : stopping ? "补充指令" : "发送" }
+    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "继续执行" : stopping ? "补充指令" : "发送" }
     var body: some View {
         ComposerLayout(lineHeight: lineHeight) {
             HStack(spacing: -12) { accessories }

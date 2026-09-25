@@ -52,10 +52,11 @@ class ContractTests(unittest.TestCase):
         s['turns'][0]['params']['input'] += [{'type': 'localImage', 'path': '/tmp/image.png'}, {'type': 'text', 'text': 'file context'}]
         original = copy.deepcopy(s)
         method, version, params = build('resume', {'turnId': 'turn-1', 'prompt': 'untrusted replacement'}, s)
-        self.assertEqual(method, 'thread-follower-edit-last-user-turn')
+        self.assertEqual(method, 'thread-follower-start-turn')
         self.assertEqual(version, 2)
-        self.assertEqual(params['message'], 'original')
-        self.assertFalse(params['shouldSendPermissionOverrides'])
+        self.assertEqual(params, {'conversationId': T, 'turnStart': {
+            'request': {'threadId': T, 'input': []},
+            'context': {'inheritThreadSettings': True}}})
         self.assertEqual(s, original)
         for status in ('completed', 'inProgress', 'failed'):
             s['turns'][0]['status'] = status
@@ -64,6 +65,20 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError): build('resume', {'turnId': 'old'}, s)
         s['requests'] = [{'id': 1}]
         with self.assertRaises(ValueError): build('resume', {'turnId': 'turn-1'}, s)
+
+    def test_resume_supports_repeated_empty_continuations_and_canonical_history(self):
+        s = state()
+        paused = {'turnId': 'turn-2', 'status': 'interrupted', 'params': {'input': []}}
+        s['turnHistory'] = {'kind': 'canonical', 'history': {
+            'entitiesByKey': {'previous': s['turns'][0], 'paused': paused},
+            'islands': [{'entries': [{'value': 'previous'}, {'value': 'paused'}]}]}}
+        original = copy.deepcopy(s)
+        self.assertEqual(build('resume', {'turnId': 'turn-2'}, s)[2]['turnStart']['request']['input'], [])
+        self.assertEqual(s, original)
+        with self.assertRaises(ValueError): build('resume', {'turnId': 'turn-1'}, s)
+        for runtime in ('active', 'unknown'):
+            s['threadRuntimeStatus']['type'] = runtime
+            with self.assertRaises(ValueError): build('resume', {'turnId': 'turn-2'}, s)
 
     def test_settings_validate_native_fields_and_reject_unknown_parameters(self):
         for value in ({'unknownField': True}, {'model': []}, {'effort': ''}, {'sandboxPolicy': {'type':'evil'}}):
@@ -167,6 +182,60 @@ class DeliveryTests(unittest.TestCase):
         self.bridge.ipc.error = IPCError('no-handler-for-request')
         submit(self.bridge, T, {'action': 'compact', 'requestId': 'operation-1'})
         self.assertEqual(self.wait()['state'], 'failed')
+
+    def test_resume_dispatch_retains_both_messages_and_partial_work_once(self):
+        ipc = self.bridge.ipc
+        ipc.state['turns'].append({'turnId': 'turn-2', 'status': 'interrupted',
+            'params': {'input': [{'type': 'text', 'text': 'current task'},
+                                 {'type': 'localImage', 'path': '/tmp/current.png'}]},
+            'items': [{'type': 'agentMessage', 'text': 'partial work'}]})
+        original = copy.deepcopy(ipc.state['turns'])
+
+        def request(method, params, version, owner, guard):
+            def write():
+                ipc.calls.append((method, params, version, owner))
+                self.assertEqual((method, version), ('thread-follower-start-turn', 2))
+                self.assertEqual(params['turnStart']['request'], {'threadId': T, 'input': []})
+                ipc.state['turns'].append({'turnId': 'turn-3', 'status': 'inProgress',
+                                          'params': params['turnStart']['request']})
+                ipc.state['threadRuntimeStatus'] = {'type': 'active'}
+            guard(write)
+            return {'result': {'result': {'turn': {'id': 'turn-3'}}}}
+
+        ipc.request = request
+        data = {'action': 'resume', 'requestId': 'operation-1', 'turnId': 'turn-2'}
+        submit(self.bridge, T, data)
+        self.assertEqual(self.wait()['state'], 'completed')
+        submit(self.bridge, T, data)
+        self.assertEqual(len(ipc.calls), 1)
+        self.assertEqual(ipc.state['turns'][:2], original)
+        self.assertEqual(ipc.state['turns'][-1]['turnId'], 'turn-3')
+
+    def test_resume_rechecks_latest_turn_before_dispatch(self):
+        ipc = self.bridge.ipc
+        ipc.state['turns'][0]['status'] = 'interrupted'
+        request = ipc.request
+
+        def change_before_guard(*args):
+            ipc.state['turns'].append({'turnId': 'turn-2', 'status': 'interrupted',
+                                      'params': {'input': []}})
+            return request(*args)
+
+        ipc.request = change_before_guard
+        submit(self.bridge, T, {'action': 'resume', 'requestId': 'operation-1', 'turnId': 'turn-1'})
+        self.assertEqual(self.wait()['state'], 'failed')
+        self.assertEqual(ipc.calls, [])
+
+    def test_resume_timeout_blocks_another_resume(self):
+        ipc = self.bridge.ipc
+        ipc.state['turns'][0]['status'] = 'interrupted'
+        ipc.error = IPCError('timeout', uncertain=True)
+        data = {'action': 'resume', 'requestId': 'operation-1', 'turnId': 'turn-1'}
+        submit(self.bridge, T, data)
+        self.assertEqual(self.wait()['state'], 'uncertain')
+        with self.assertRaises(BridgeError):
+            submit(self.bridge, T, {**data, 'requestId': 'operation-2'})
+        self.assertEqual(len(ipc.calls), 1)
 
 
 if __name__ == '__main__': unittest.main()
