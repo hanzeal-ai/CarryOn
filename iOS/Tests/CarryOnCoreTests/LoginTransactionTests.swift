@@ -36,7 +36,7 @@ private final class LoginTransactionProtocol: URLProtocol, @unchecked Sendable {
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
             headerFields: authentication ? ["Set-Cookie": "carryon-console=new-session; Path=/console/; Secure; HttpOnly"] : [:])!
         let directory: JSONValue = host.hasPrefix("malformed-") ? .array([.object([:])]) : .array([])
-        let result: JSONValue = .object(["authenticated": .bool(authentication), "devices": directory])
+        let result: JSONValue = .object(["authenticated": .bool(authentication), "devices": directory, "account": .object(["id": .string("owner")])])
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! result.encoded())
         client?.urlProtocolDidFinishLoading(self)
@@ -84,7 +84,7 @@ private func loginClient(_ prefix: String, vault: LoginVault) throws -> ConsoleA
     let address = await api.address
     _ = try await api.request("login", body: .object([:]))
     #expect(try vault.load(server: address.base.absoluteString) == nil)
-    #expect(try await api.completeLogin().isEmpty)
+    #expect(try await api.completeLogin().devices.isEmpty)
     #expect(try vault.load(server: address.base.absoluteString) == "new-session")
     try await api.cancelLogin()
     #expect(try vault.load(server: address.base.absoluteString) == nil)

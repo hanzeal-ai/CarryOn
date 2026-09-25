@@ -18,14 +18,14 @@ class PushService:
         path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
         self.db=sqlite3.connect(path,check_same_thread=False);os.chmod(path,0o600)
         self.db.row_factory=sqlite3.Row
-        for table, required in (('installations', {'revision','authority'}), ('registration_versions', {'authority'})):
+        for table, required in (('installations', {'revision','authority','owner'}), ('registration_versions', {'authority'})):
             columns = {r[1] for r in self.db.execute('PRAGMA table_info('+table+')')}
             if columns and not required <= columns:
                 self.db.close()
                 raise ValueError('通知数据库不是当前结构，请使用新的数据目录')
         self.db.execute('''CREATE TABLE IF NOT EXISTS installations(
             id TEXT PRIMARY KEY, token TEXT NOT NULL, environment TEXT NOT NULL, device TEXT NOT NULL,
-            session TEXT NOT NULL, generation TEXT NOT NULL, cursor INTEGER, badge INTEGER,
+            session TEXT NOT NULL, owner TEXT NOT NULL, generation TEXT NOT NULL, cursor INTEGER, badge INTEGER,
             updated REAL NOT NULL, retry_at REAL NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
             error TEXT, revision INTEGER NOT NULL DEFAULT 0, authority TEXT NOT NULL DEFAULT '')''')
         self.db.execute('CREATE TABLE IF NOT EXISTS registration_versions(authority TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(authority,id))')
@@ -46,10 +46,7 @@ class PushService:
         with self.server.auth_lock,self.server.lock,self.lock:
             if self.server.sessions.get(session,0)<=time.monotonic():raise PermissionError('登录已过期，请重新登录')
             if not isinstance(device,str) or device not in self.server.config['devices']:raise PermissionError('设备未授权')
-            if hasattr(self.server.auth, 'identity'):
-                previous_owner = self.db.execute('SELECT session FROM installations WHERE id=? OR (token=? AND environment=?)',(ident,token,environment)).fetchall()
-                if any(self.server.auth.identity(row['session']) != self.server.auth.identity(session) for row in previous_owner):
-                    raise PermissionError('通知安装不属于当前账号')
+            self.require_owner(session, ident, token, environment)
             known=self.db.execute('SELECT revision FROM registration_versions WHERE authority=? AND id=?',(self.server.auth.fingerprint,ident)).fetchone()
             if known and revision<=known[0]:return {'registered':False,'superseded':True}
             self.db.execute('INSERT OR REPLACE INTO registration_versions VALUES(?,?,?)',(self.server.auth.fingerprint,ident,revision));self.db.commit()
@@ -65,6 +62,10 @@ class PushService:
         with self.server.auth_lock,self.server.lock,self.lock:
             if self.server.sessions.get(session,0)<=time.monotonic():raise PermissionError('登录已过期，请重新登录')
             if device not in self.server.config['devices']:raise PermissionError('设备已撤销')
+            if hasattr(self.server.auth, 'identity'):
+                from .workspace_access import require
+                require(self.server, session, device)
+            self.require_owner(session, ident, token, environment)
             if self.db.execute('SELECT revision FROM registration_versions WHERE authority=? AND id=?',(self.server.auth.fingerprint,ident)).fetchone()[0]!=revision:
                 return {'registered':False,'superseded':True}
             previous=self.db.execute('SELECT * FROM installations WHERE id=?',(ident,)).fetchone()
@@ -77,10 +78,18 @@ class PushService:
                                 (token,environment,session,uuid.uuid4().hex,time.time(),revision,ident))
             else:
                 self.db.execute('DELETE FROM installations WHERE token=? AND environment=?',(token,environment))
-                self.db.execute('INSERT OR REPLACE INTO installations(id,token,environment,device,session,generation,updated,cursor,revision,authority) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                                (ident,token,environment,device,session,uuid.uuid4().hex,time.time(),baseline,revision,self.server.auth.fingerprint))
+                self.db.execute('INSERT OR REPLACE INTO installations(id,token,environment,device,session,owner,generation,updated,cursor,revision,authority) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                                (ident,token,environment,device,session,self.server.auth.identity(session) if hasattr(self.server.auth, 'identity') else 'owner',uuid.uuid4().hex,time.time(),baseline,revision,self.server.auth.fingerprint))
             self.db.commit()
         return {'registered':True}
+
+    def require_owner(self, session, ident, token, environment):
+        if hasattr(self.server.auth, 'identity'):
+            owner = self.server.auth.identity(session)
+            previous = self.db.execute('SELECT owner FROM installations WHERE id=? OR (token=? AND environment=?)',
+                                       (ident, token, environment)).fetchall()
+            if any(row['owner'] != owner for row in previous):
+                raise PermissionError('通知安装不属于当前账号')
 
     def unregister_session(self,session):
         with self.lock:
@@ -92,13 +101,13 @@ class PushService:
         with self.server.auth_lock,self.lock:
             if self.server.sessions.get(session,0)<=time.monotonic():raise PermissionError('登录已过期，请重新登录')
             if hasattr(self.server.auth, 'identity'):
-                previous = self.db.execute('SELECT session FROM installations WHERE id=?',(ident,)).fetchone()
-                if previous and self.server.auth.identity(previous['session']) != self.server.auth.identity(session):
+                previous = self.db.execute('SELECT owner FROM installations WHERE id=?',(ident,)).fetchone()
+                if previous and previous['owner'] != self.server.auth.identity(session):
                     raise PermissionError('通知安装不属于当前账号')
             known=self.db.execute('SELECT revision FROM registration_versions WHERE authority=? AND id=?',(self.server.auth.fingerprint,ident)).fetchone()
             if known and revision<=known[0]:return
             self.db.execute('INSERT OR REPLACE INTO registration_versions VALUES(?,?,?)',(self.server.auth.fingerprint,ident,revision))
-            # Console sessions share one owner; permission denial revokes this installation across logins.
+            # Ownership is persisted independently of the expiring login session.
             self.db.execute('DELETE FROM installations WHERE id=?',(ident,));self.db.commit()
 
     def revoke(self,device):

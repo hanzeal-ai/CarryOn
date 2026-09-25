@@ -128,5 +128,7 @@ class CloudManager:
             for connection in self.connections.values():connection.start()
 
     def stop(self):
-        with self.lock:
-            for connection in self.connections.values():connection.stop()
+        from contextlib import ExitStack
+        with self.lock, ExitStack() as cleanup:
+            for connection in reversed(list(self.connections.values())):
+                cleanup.callback(connection.stop)

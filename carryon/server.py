@@ -158,11 +158,11 @@ def run(port, codex_home, directory):
     import uuid
     from .paths import private_dir
     from .services import workspace_codex_home, workspace_backend
-    codex_home = workspace_codex_home(directory, codex_home)
     os.umask(0o077)
     private_dir(directory)
     from .workspaces import initialize
     initialize(directory)
+    codex_home = workspace_codex_home(directory, codex_home)
     lock = (directory / 'server.lock').open('a+')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -181,9 +181,8 @@ def run(port, codex_home, directory):
         token_file.write_text(token)
     token_file.chmod(0o600)
     journal = Journal(directory / 'jobs.sqlite')
-    from .workspaces import backend
     ipc_lock = None
-    if backend(directory) == 'app-server':
+    if workspace_backend(directory) == 'app-server':
         from .services import records
         if Path(records()[str(directory)]['codexHome']).resolve() != codex_home.resolve():
             raise ValueError('独立工作区必须使用创建时分配的 Codex 目录')
@@ -227,22 +226,31 @@ def run(port, codex_home, directory):
         server.cloud.start()
         server.serve_forever()
     finally:
-        bridge.lifecycle.close()
-        bridge.workspace.close()
-        server.standby.close()
-        server.cloud.stop()
-        bridge.disable()
-        if bridge.realtime:
-            for session in list(bridge.realtime.sessions): session.close()
-            for worker in bridge.realtime.workers: worker.join(2)
-        server.server_close()
-        # The process owns the journal. Let process exit close it after daemon
-        # dispatchers; closing here can race their final uncertain-state update.
-        record = directory/'service.json'
+        close_resources(server, bridge, directory, lock, ipc_lock)
+
+
+def close_resources(server, bridge, directory, lock, ipc_lock):
+    """Attempt every owned cleanup even when an earlier shutdown fails."""
+    from contextlib import ExitStack
+    def remove_record():
+        record = directory / 'service.json'
         if record.exists() and json.loads(record.read_text()).get('instanceId') == server.service_info['instanceId']:
             record.unlink()
-        lock.close()
-        if ipc_lock: ipc_lock.close()
+    # ExitStack runs all callbacks in reverse order, propagating cleanup errors.
+    with ExitStack() as cleanup:
+        if ipc_lock: cleanup.callback(ipc_lock.close)
+        cleanup.callback(lock.close)
+        cleanup.callback(remove_record)
+        cleanup.callback(server.server_close)
+        if bridge.realtime:
+            for worker in bridge.realtime.workers: cleanup.callback(worker.join, 2)
+            for session in list(bridge.realtime.sessions): cleanup.callback(session.close)
+        cleanup.callback(bridge.disable)
+        cleanup.callback(server.cloud.stop)
+        cleanup.callback(server.standby.close)
+        cleanup.callback(bridge.workspace.close)
+        cleanup.callback(bridge.lifecycle.close)
+    # Journal remains process-owned: closing it can race daemon dispatchers.
 
 
 def main():

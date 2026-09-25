@@ -145,3 +145,16 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(updated['devices'],devices);self.assertNotIn('consoleToken',updated)
         self.assertNotIn('a long password 123',config.read_text())
         ConsoleAuth(updated,None).verify({'username':'admin','password':'a long password 123'})
+
+class PersistedIdentityTests(unittest.TestCase):
+    def test_missing_or_deleted_identity_never_restores_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auth = ConsoleAuth({'account': password_record('admin', 'long password for test')}, directory)
+            owner, missing, removed = ('a' * 64, 'b' * 64, 'c' * 64)
+            auth.path.write_text(json.dumps({'authority': auth.fingerprint,
+                'sessions': {key: time.time() + 60 for key in (owner, missing, removed)},
+                'identities': {owner: 'owner', removed: 'deleted-user'}}))
+            self.assertEqual(set(auth.load_sessions()), {owner})
+            for key in (missing, removed):
+                with self.assertRaises(PermissionError): auth.identity(key)
+            self.assertEqual(auth.identity(owner), 'owner')

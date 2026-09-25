@@ -103,7 +103,10 @@ class ConsoleAuth:
             return identity
 
     def identity(self, key):
-        return self.identities.get(key, 'owner')
+        identity = self.identities.get(key)
+        if not isinstance(identity, str) or not (identity == 'owner' and self.account or identity in self.users):
+            raise PermissionError('登录身份已失效，请重新登录')
+        return identity
 
     def profile(self, identity):
         record = self.account if identity == 'owner' else self.users.get(identity)
@@ -115,10 +118,12 @@ class ConsoleAuth:
         if self.path is None or not self.path.exists():return {}
         data = json.loads(self.path.read_text())
         if data.get('authority') != self.fingerprint:return {}
-        self.identities = data.get('identities', {})
+        identities = data.get('identities', {})
+        self.identities = {key: identity for key, identity in identities.items()
+                           if isinstance(identity, str) and (identity == 'owner' and self.account or identity in self.users)} if isinstance(identities, dict) else {}
         now, mono = time.time(), time.monotonic()
         return {key: mono + min(expiry-now, SESSION_SECONDS) for key, expiry in data['sessions'].items()
-                if isinstance(key, str) and len(key) == 64 and isinstance(expiry, (int, float)) and expiry > now}
+                if key in self.identities and isinstance(key, str) and len(key) == 64 and isinstance(expiry, (int, float)) and expiry > now}
 
     def save_sessions(self, sessions):
         if self.path is not None:

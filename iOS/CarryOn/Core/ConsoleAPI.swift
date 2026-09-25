@@ -117,14 +117,15 @@ public actor ConsoleAPI {
         }
     }
     /// A new session stays in memory until its directory is valid and initialization is not cancelled.
-    public func completeLogin() async throws -> [Record] {
+    public func completeLogin() async throws -> (devices: [Record], accountID: String) {
         let result = try await request("session")
         guard case .array(let values) = result["devices"] else { throw APIError("设备目录格式不正确") }
         let devices = try values.map(Record.init)
+        guard let accountID = result["account"]["id"].string, !accountID.isEmpty else { throw APIError("账号身份格式不正确") }
         try Task.checkCancellation()
         guard let token = loginCookie, token == cookie else { throw APIError("登录会话无效") }
         try credentials?.save(token, server: address.base.absoluteString)
-        return devices
+        return (devices, accountID)
     }
 
     /// Cleanup runs independently of the cancelled UI task; it only targets this new session.

@@ -36,6 +36,14 @@ class WorkspaceBackendTests(unittest.TestCase):
             self.assertEqual(workspace_backend(a), 'app-server')
         self.assertNotEqual(records()[str(a)]['codexHome'], records()[str(b)]['codexHome'])
 
+    def test_first_custom_workspace_uses_registered_desktop_identity(self):
+        from carryon.workspaces import initialize
+        directory = self.root / 'first-custom'
+        entry = initialize(directory)
+        self.assertEqual(entry['backend'], 'desktop-ipc')
+        self.assertEqual(workspace_backend(directory), 'desktop-ipc')
+        self.assertEqual(workspace_codex_home(directory), self.root / 'desktop-codex')
+
     def test_duplicate_real_home_and_default_symlink_are_rejected(self):
         shared = self.root/'shared'; shared.mkdir()
         register(self.root/'a', codex_home=shared)

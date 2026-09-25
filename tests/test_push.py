@@ -47,9 +47,24 @@ class PushTests(unittest.TestCase):
         self.assertNotIn('requestId',payload)
         self.assertNotIn('text',payload)
 
+    def test_concurrent_owner_registration_is_rechecked_after_baseline(self):
+        self.server.auth.identity = lambda session: 'a'
+        self.server.config['devices']['mac']['members']['a'] = ['view']
+        other_id = '22222222-2222-4222-8222-222222222222'
+        def baseline(request, timeout):
+            self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,owner,generation,updated,authority) VALUES(?,?,'sandbox','mac','other','b','g',?,'authority-a')",
+                                 (other_id, self.registration['token'], time.time()))
+            self.push.db.commit()
+            return {'status':200,'body':{'nextSequence':0}}
+        self.device.call = baseline
+        with self.assertRaisesRegex(PermissionError, '不属于'):
+            self.register()
+        self.assertEqual([(row['id'], row['owner']) for row in self.push.db.execute('SELECT id,owner FROM installations')], [(other_id, 'b')])
+
     def test_password_rotation_blocks_old_grant_across_restart(self):
         from carryon.console_auth import ConsoleAuth, password_record
         self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)
+        self.server.auth.identities['session']='owner'
         self.register()
         self.event()
         old_row=self.push.db.execute('SELECT * FROM installations').fetchone()
@@ -63,6 +78,7 @@ class PushTests(unittest.TestCase):
         self.assertEqual(self.push.db.execute('SELECT cursor FROM installations').fetchone()[0],0)
         self.assertEqual(self.push.db.execute('SELECT revision FROM registration_versions').fetchone()[0],1)
         self.server.sessions['fresh']=time.monotonic()+3600
+        self.server.auth.identities['fresh']='owner'
         result=self.push.register({**self.registration,'revision':1},'fresh')
         self.assertTrue(result['registered'])
         row=self.push.db.execute('SELECT * FROM installations').fetchone()
@@ -84,18 +100,18 @@ class PushTests(unittest.TestCase):
         with self.push.db:
             self.push.db.execute("UPDATE installations SET authority='old-authority'")
             for index in range(256):
-                self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,generation,updated,authority) VALUES(?,?,'sandbox','mac','s','g',?,'old-authority')",
+                self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,owner,generation,updated,authority) VALUES(?,?,'sandbox','mac','s','owner','g',?,'old-authority')",
                                      (f'old-{index}','cd'*32,time.time()))
         self.assertTrue(self.push.register({**self.registration,'revision':2},'session')['registered'])
         with self.push.db:
             for index in range(255):
-                self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,generation,updated,authority) VALUES(?,?,'sandbox','mac','s','g',?,?)",
+                self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,owner,generation,updated,authority) VALUES(?,?,'sandbox','mac','s','owner','g',?,?)",
                                      (f'new-{index}','ef'*32,time.time(),self.server.auth.fingerprint))
         new_id='33333333-3333-4333-8333-333333333333'
         with self.assertRaisesRegex(ValueError,'数量'):
             self.push.register({**self.registration,'installationId':new_id,'revision':3},'session')
         with self.push.db:
-            self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,generation,updated,authority) VALUES(?,'ee','sandbox','mac','s','g',?,'old-authority')",(new_id,time.time()))
+            self.push.db.execute("INSERT INTO installations(id,token,environment,device,session,owner,generation,updated,authority) VALUES(?,'ee','sandbox','mac','s','owner','g',?,'old-authority')",(new_id,time.time()))
         with self.assertRaisesRegex(ValueError,'数量'):
             self.push.register({**self.registration,'installationId':new_id,'revision':4},'session')
 
@@ -112,6 +128,7 @@ class PushTests(unittest.TestCase):
     def test_missing_members_does_not_grant_owner_access(self):
         from carryon.console_auth import ConsoleAuth, password_record
         self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)
+        self.server.auth.identities['session']='owner'
         self.server.config['devices']['mac'].pop('members')
         with self.assertRaises(PermissionError):self.register()
 

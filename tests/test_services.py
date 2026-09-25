@@ -73,3 +73,22 @@ class ServiceCatalogTests(unittest.TestCase):
             self.assertEqual(list_services()['services'],[])
             register(directory,name='Restored')
             self.assertEqual(len(list_services()['services']),1)
+
+class CleanupTests(unittest.TestCase):
+    def test_cleanup_continues_after_cloud_stop_failure(self):
+        from unittest.mock import Mock
+        from carryon.server import close_resources
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            server, bridge, lock, ipc_lock = Mock(), Mock(), Mock(), Mock()
+            bridge.realtime = None
+            server.service_info = {'instanceId': 'test'}
+            (directory / 'service.json').write_text('{"instanceId":"test"}')
+            server.cloud.stop.side_effect = ValueError('cloud thread blocked')
+            with self.assertRaisesRegex(ValueError, 'cloud thread blocked'):
+                close_resources(server, bridge, directory, lock, ipc_lock)
+            bridge.disable.assert_called_once()
+            server.server_close.assert_called_once()
+            lock.close.assert_called_once()
+            ipc_lock.close.assert_called_once()
+            self.assertFalse((directory / 'service.json').exists())

@@ -6,11 +6,6 @@ from .paths import default_codex_home, private_dir, save_json
 from .services import catalog_directory, records, register
 
 
-def backend(directory):
-    value = records().get(str(Path(directory).resolve()), {}).get('backend', 'desktop-ipc')
-    return value
-
-
 def initialize(directory):
     directory = Path(directory).resolve()
     root = private_dir(catalog_directory())

@@ -59,7 +59,7 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: isLogin ? ["Set-Cookie": "carryon-console=fixture-session; Path=/carryon/console/; Secure; HttpOnly"] : [:])!
         let result: JSONValue = status == 200 ? .object([
             "authenticated": .bool(true),
-            "devices": .array([]),
+            "devices": .array([]), "account": .object(["id": .string("owner")]),
             "cookie": .string(request.value(forHTTPHeaderField: "Cookie") ?? ""),
             "origin": .string(request.value(forHTTPHeaderField: "Origin") ?? ""),
             "method": .string(request.httpMethod ?? ""),
@@ -226,16 +226,84 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     defer { try? FileManager.default.removeItem(at: directory) }
     let file = directory.appendingPathComponent("drafts.json")
     let store = DraftStore(file: file) { _, _ in Issue.record("Draft persistence failed") }
-    await store.load()
+    await store.load(scope: "account-a")
     store.texts["server\nthread"] = "Pending edit"
     store.images["server\nthread"] = ["attachment"]
     store.reset()
     #expect(store.texts.isEmpty)
     #expect(store.images.isEmpty)
     store.save()
-    let saved = try LocalFiles.read(DraftSnapshot.self, from: file)
-    #expect(saved?.texts["server\nthread"] == "Pending edit")
-    await store.load()
+    #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).count == 1)
+    await store.load(scope: "account-a")
     #expect(store.texts["server\nthread"] == "Pending edit")
     #expect(store.images["server\nthread"] == ["attachment"])
+}
+
+@Test @MainActor func failedDraftSaveSurvivesResetAndOtherAccount() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let parent = directory.appendingPathComponent("drafts")
+    let store = DraftStore(file: parent.appendingPathComponent("drafts.json")) { _, _ in }
+    await store.load(scope: "a")
+    store.texts["thread"] = "unsaved"
+    store.images["thread"] = ["attachment"]
+    try Data().write(to: parent)
+    store.reset()
+    #expect(store.texts.isEmpty)
+    await store.load(scope: "b")
+    #expect(store.texts.isEmpty)
+    store.reset()
+    try FileManager.default.removeItem(at: parent)
+    await store.load(scope: "a")
+    #expect(store.texts["thread"] == "unsaved")
+    #expect(store.images["thread"] == ["attachment"])
+    store.reset()
+    await store.load(scope: "a")
+    #expect(store.texts["thread"] == "unsaved")
+}
+
+@Test @MainActor func draftsEditedAfterReadFailureStayRecoverable() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = DraftStore(file: directory.appendingPathComponent("drafts.json")) { _, _ in }
+    await store.load(scope: "a")
+    store.texts["old"] = "saved"
+    store.reset()
+    let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+    let original = try Data(contentsOf: file)
+    try Data("broken".utf8).write(to: file)
+    await store.load(scope: "a")
+    store.texts["new"] = "pending"
+    store.reset()
+    #expect(try String(contentsOf: file, encoding: .utf8) == "broken")
+    try original.write(to: file)
+    await store.load(scope: "a")
+    #expect(store.texts["old"] == "saved")
+    #expect(store.texts["new"] == "pending")
+}
+
+@Test @MainActor func clearingUnreadDraftDoesNotRestoreOldContent() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = DraftStore(file: directory.appendingPathComponent("drafts.json")) { _, _ in }
+    await store.load(scope: "a")
+    store.texts["thread"] = "old"
+    store.images["thread"] = ["image"]
+    store.reset()
+    let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+    let original = try Data(contentsOf: file)
+    try Data("broken".utf8).write(to: file)
+    await store.load(scope: "a")
+    store.texts["thread"] = ""
+    store.images["thread"] = []
+    store.reset()
+    try original.write(to: file)
+    await store.load(scope: "a")
+    #expect(store.texts["thread", default: ""].isEmpty)
+    #expect(store.images["thread", default: []].isEmpty)
+    store.reset()
+    await store.load(scope: "a")
+    #expect(store.texts.isEmpty)
+    #expect(store.images.isEmpty)
 }

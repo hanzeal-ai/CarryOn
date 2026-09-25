@@ -20,7 +20,7 @@ private final class RegistrationProtocol: URLProtocol, @unchecked Sendable {
         let registration = request.url!.path.hasSuffix("/register")
         let headers = registration ? ["Set-Cookie":"carryon-console=new-account-session; Path=/console/; Secure; HttpOnly"] : [:]
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
-        let result: JSONValue = .object(["authenticated":.bool(registration),"devices":.array([]),"cookie":.string(request.value(forHTTPHeaderField:"Cookie") ?? "")])
+        let result: JSONValue = .object(["authenticated":.bool(registration),"devices":.array([]),"account":.object(["id":.string("user-a")]),"cookie":.string(request.value(forHTTPHeaderField:"Cookie") ?? "")])
         client?.urlProtocol(self, didReceive:response, cacheStoragePolicy:.notAllowed)
         client?.urlProtocol(self, didLoad:try! result.encoded())
         client?.urlProtocolDidFinishLoading(self)
@@ -33,6 +33,6 @@ private final class RegistrationProtocol: URLProtocol, @unchecked Sendable {
     configuration.protocolClasses = [RegistrationProtocol.self]
     let api = ConsoleAPI(address:try ConsoleAddress("https://console.test"), configuration:configuration)
     _ = try await api.request("register", body:.object(["username":.string("alice"),"password":.string("a long password")]))
-    #expect(try await api.completeLogin().isEmpty)
+    #expect(try await api.completeLogin().devices.isEmpty)
     #expect(try await api.request("session")["cookie"].string == "carryon-console=new-account-session")
 }

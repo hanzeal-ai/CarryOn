@@ -154,7 +154,9 @@ def open_console(directory, info):
 
 
 def start(args):
+    from .workspaces import initialize
     directory = private_dir(args.state_dir)
+    initialize(directory)
     args.codex_home = workspace_codex_home(directory, args.codex_home)
     import fcntl
     with (directory/'launcher.lock').open('a+') as lock:

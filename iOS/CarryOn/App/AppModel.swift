@@ -110,7 +110,8 @@ import CarryOnCore
             guard case .array(let values) = session["devices"] else { throw APIError("设备目录格式不正确") }
             devices = try values.map(Record.init); api = restored
             addressText = address.base.absoluteString
-            await draftStore.load()
+            guard let accountID = session["account"]["id"].string, !accountID.isEmpty else { throw APIError("账号身份格式不正确") }
+            await draftStore.load(scope: addressText + "\n" + accountID)
             guard version == epoch, !Task.isCancelled else { return }
             authenticated = true
             switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
@@ -177,12 +178,12 @@ import CarryOnCore
         let version = epoch
         let directory = try await client.completeLogin()
         try Task.checkCancellation()
-        api = client; devices = directory; credential = ""
+        api = client; devices = directory.devices; credential = ""
         addressText = address.base.absoluteString
         UserDefaults.standard.set(addressText, forKey: "carryon.server")
         await restoreDisplayCache()
         guard version == epoch, !Task.isCancelled else { throw CancellationError() }
-        await draftStore.load()
+        await draftStore.load(scope: addressText + "\n" + directory.accountID)
         guard version == epoch, !Task.isCancelled else { throw CancellationError() }
         authenticated = true
         switchDevice(workspacePreferences.selectedDevice(server: addressText, available: devices.map(\.id)))
