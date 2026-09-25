@@ -135,14 +135,30 @@ class Catalog:
                 row['projectless'] = not (cwd and any(cwd.is_relative_to(root) for root in roots))
             cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
             pid = native.get(tid) or assignments.get(tid, {}).get('projectId')
+            if tid in projectless and not native.get(tid):
+                continue
             assigned = projects.get(pid, {}).get('rootPaths', []) if native.get(tid) or tid not in projectless else []
             root = Path(assigned[0]).expanduser().absolute() if assigned else None
-            if root is None and cwd and tid not in projectless:
+            if root is None and cwd and not pid:
                 matches = [r for r in roots if cwd.is_relative_to(r)]
                 root = max(matches, key=lambda r: len(r.parts)) if matches else None
+                candidates = [root] if root is not None else []
                 if root is None:
                     common = repository(cwd)
-                    root = next((r for r in roots if common and repository(r) == common), None)
+                    candidates = [r for r in roots if common and repository(r) == common]
+                    root = candidates[0] if candidates else None
+            if not pid and root is not None:
+                owners = [key for key, project in projects.items()
+                          if any(Path(p).expanduser().absolute() in candidates for p in project.get('rootPaths', []))]
+                if len(owners) == 1:
+                    pid = owners[0]
+            if pid:
+                project = projects.get(pid, {})
+                row['nativeProjectId'] = pid
+                row['projectName'] = project.get('name') or ''
+                row['projectRoots'] = [str(Path(p).expanduser().absolute()) for p in project.get('rootPaths', [])]
+                if row['projectRoots']:
+                    root = Path(row['projectRoots'][0])
             if root is not None:
                 row['projectless'] = False
                 row['projectRoot'] = str(root)

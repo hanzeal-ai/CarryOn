@@ -4,10 +4,47 @@ import tempfile
 import unittest
 from pathlib import Path
 from contextlib import closing
+from unittest.mock import patch
 from carryon.catalog import Catalog
 
 
 class CatalogTests(unittest.TestCase):
+    def test_shared_git_repository_does_not_guess_native_project(self):
+        with tempfile.TemporaryDirectory() as home, closing(sqlite3.connect(':memory:')) as db:
+            state={'local-projects':{'one':{'rootPaths':['/repo/one']},'two':{'rootPaths':['/repo/two']}}}
+            (Path(home)/'.codex-global-state.json').write_text(json.dumps(state))
+            db.execute('CREATE TABLE threads(id,project_id)')
+            rows=[{'id':'unassigned','cwd':'/worktree/branch'}]
+            with patch('carryon.catalog.subprocess.run') as run:
+                run.return_value.returncode=0
+                run.return_value.stdout='/repo/.git\n'
+                Catalog(home).classify_projects(db,rows)
+            self.assertNotIn('nativeProjectId',rows[0])
+
+    def test_multiple_roots_preserve_native_identity_and_infer_unique_owner(self):
+        with tempfile.TemporaryDirectory() as home, closing(sqlite3.connect(':memory:')) as db:
+            state = {'local-projects': {
+                'bundle': {'name': '产品矩阵', 'rootPaths': ['/project/web', '/project/api']},
+                'shared': {'name': '共享目录项目', 'rootPaths': ['/project/web']},
+            }, 'projectless-thread-ids': ['recent']}
+            (Path(home) / '.codex-global-state.json').write_text(json.dumps(state))
+            db.execute('CREATE TABLE threads(id,project_id)')
+            db.executemany('INSERT INTO threads VALUES(?,?)', [('web','bundle'), ('api','bundle'), ('other','shared')])
+            rows = [{'id': tid, 'cwd': cwd} for tid,cwd in [
+                ('web','/project/web'), ('api','/project/api'), ('other','/project/web'),
+                ('inferred','/project/api/src'), ('ambiguous','/project/web/src'), ('recent','/project/api')]]
+            Catalog(home).classify_projects(db, rows)
+            result = {r['id']: r for r in rows}
+            for tid in ('web','api','inferred'):
+                self.assertEqual(result[tid]['nativeProjectId'], 'bundle')
+                self.assertEqual(result[tid]['projectName'], '产品矩阵')
+                self.assertEqual(result[tid]['projectRoots'], ['/project/web','/project/api'])
+                self.assertEqual(result[tid]['projectRoot'], '/project/web')
+            self.assertEqual(result['other']['nativeProjectId'], 'shared')
+            self.assertNotIn('nativeProjectId', result['ambiguous'])
+            self.assertTrue(result['recent']['projectless'])
+            self.assertNotIn('nativeProjectId', result['recent'])
+
     def test_display_name_and_internal_thread_filter(self):
         with tempfile.TemporaryDirectory() as home:
             with closing(sqlite3.connect(Path(home) / 'state_5.sqlite')) as db:

@@ -9,7 +9,7 @@ from pathlib import Path
 from .contracts import digest
 from .errors import BridgeError
 from .ipc import IPCError
-from .workspace import project_identity
+from .workspace import project_identity, row_project_identity
 
 
 def is_git_repository(root):
@@ -33,9 +33,16 @@ def resolve_project(catalog, project_id):
     state = json.loads((catalog.home / '.codex-global-state.json').read_text())
     matches = []
     for native_id, project in state.get('local-projects', {}).items():
+        roots = project.get('rootPaths', [])
+        if roots and project_identity(roots[0], native_id=native_id)[0] == project_id:
+            matches.append({'id': native_id, 'cwd': str(Path(roots[0]).expanduser().absolute()), 'groupId': project_id})
+            continue
+        # Previously released clients can hold directory IDs in their display cache.
+        # Accept them only when they still identify exactly one native project.
         for root in project.get('rootPaths', []):
             if project_identity(root)[0] == project_id:
                 matches.append({'id': native_id, 'cwd': str(Path(root).expanduser().absolute()), 'groupId': project_id})
+                break
     if len(matches) != 1:
         raise BridgeError('此项目的 Codex 归属无法确认，请在桌面端重新选择项目', 409)
     project = matches[0]
@@ -44,7 +51,11 @@ def resolve_project(catalog, project_id):
 
 
 def belongs(row, project):
-    return project_identity(row.get('projectRoot', row.get('projectKey', row.get('cwd'))), row.get('projectless', False))[0] == project['groupId']
+    if row.get('projectless'):
+        return False
+    if row.get('nativeProjectId'):
+        return row['nativeProjectId'] == project['id']
+    return row_project_identity(row)[0] == project['groupId']
 
 
 def validate_controller(catalog, thread_id, project):

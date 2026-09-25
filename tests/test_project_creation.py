@@ -7,7 +7,7 @@ from pathlib import Path
 
 from carryon.bridge import Bridge
 from carryon.catalog import Catalog
-from carryon.creation import submit, resolve_project
+from carryon.creation import submit, resolve_project, belongs
 from carryon.errors import BridgeError
 from carryon.ipc import IPCError
 from carryon.store import Journal
@@ -41,6 +41,23 @@ class Native(FakeIPC):
         return {'id':'turn-1'}
 
 class ProjectCreationTests(unittest.TestCase):
+    def test_native_identity_resolves_shared_root_and_checks_created_membership(self):
+        self.state.write_text(json.dumps({'local-projects':{
+            'bundle':{'name':'Bundle','rootPaths':['/project','/second']},
+            'other':{'rootPaths':['/project']}}}))
+        pid=project_identity('/project',native_id='bundle')[0]
+        project=resolve_project(self.bridge.catalog,pid)
+        self.assertEqual(project,{'id':'bundle','cwd':'/project','groupId':pid,'isGitRepository':True})
+        self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},project))
+        self.assertFalse(belongs({'nativeProjectId':'other','cwd':'/project'},project))
+        self.assertFalse(belongs({'nativeProjectId':'bundle','projectless':True},project))
+        with self.assertRaises(BridgeError):resolve_project(self.bridge.catalog,project_identity('/project')[0])
+        legacy=resolve_project(self.bridge.catalog,project_identity('/second')[0])
+        self.assertEqual(legacy['id'],'bundle')
+        self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},legacy))
+        self.state.write_text(json.dumps({'local-projects':{'bundle':{'rootPaths':['/second','/second']}}}))
+        self.assertEqual(resolve_project(self.bridge.catalog,project_identity('/second')[0])['id'],'bundle')
+
     def setUp(self):
         git_state = patch('carryon.creation.is_git_repository', return_value=True)
         git_state.start(); self.addCleanup(git_state.stop)
