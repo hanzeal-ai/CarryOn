@@ -16,7 +16,9 @@ SETUP_SECONDS = 600
 
 
 def authority(config):
-    return {key: config[key] for key in ('account', 'accountSetup') if key in config}
+    # Existing account.json records bind to this recovery source. Retaining the
+    # retired token in the fingerprint does not permit token authentication.
+    return {key: config[key] for key in ('account', 'consoleToken', 'accountSetup') if key in config}
 
 
 class AccountSettings:

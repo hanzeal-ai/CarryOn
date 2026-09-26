@@ -16,7 +16,7 @@ from unittest.mock import patch
 from carryon.account_client import request
 from carryon.account_settings import AccountSettings
 from carryon.console import ConsoleServer
-from carryon.console_auth import password_record
+from carryon.console_auth import ConsoleAuth, password_record
 from carryon.cli import main
 
 PASSWORD = 'initial-password-123'
@@ -77,6 +77,39 @@ class AccountSettingsTests(unittest.TestCase):
         self.assertEqual(self.http('login', {'username': 'admin', 'password': PASSWORD}, origin=self.url)[0], 200)
         self.assertEqual(self.http('login', {'token': 't'*40}, origin=self.url)[0], 403)
         self.assertEqual(self.server.config['devices'], self.config['devices'])
+
+    def test_existing_password_account_survives_retired_token_login_removal(self):
+        self.stop()
+        self.config.pop('accountSetup')
+        self.config['consoleToken'] = 'retired-recovery-source-' + 'x' * 32
+        account = password_record('admin', PASSWORD)
+        # Fixture uses the deployed record format, not the current authority helper.
+        source = hashlib.sha256(json.dumps({'consoleToken': self.config['consoleToken']}, sort_keys=True).encode()).hexdigest()
+        record = {'version': 1, 'source': source, 'account': account, 'generation': 'a' * 64}
+        path = self.directory / 'account.json'
+        path.write_text(json.dumps(record))
+        before = path.read_bytes()
+        self.start()
+        self.assertEqual(self.server.auth.account, account)
+        self.assertEqual(self.server.config['devices'], self.config['devices'])
+        status, _, cookie = self.http('login', {'username': 'admin', 'password': PASSWORD}, origin=self.url)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.http('login', {'token': self.config['consoleToken']}, origin=self.url)[0], 403)
+        self.assertEqual(self.http('login', {'username': 'admin', 'password': 'wrong'}, origin=self.url)[0], 403)
+        self.stop(); self.start()
+        self.assertEqual(self.http('session', cookie=cookie)[0], 200)
+        self.assertEqual(path.read_bytes(), before)
+
+        # A different or removed recovery source must never adopt this account.
+        for config in ({**self.config, 'consoleToken': 'different-' + 'y' * 32},
+                       {k: v for k, v in self.config.items() if k != 'consoleToken'}):
+            effective = AccountSettings(config, self.directory).effective()
+            self.assertNotIn('account', effective)
+            with self.assertRaises(ValueError):
+                ConsoleAuth(effective, self.directory)
+        # Token-only configurations still cannot start an authenticated console.
+        with self.assertRaises(ValueError):
+            ConsoleAuth(self.config, None)
 
     def test_bootstrap_expiry_replacement_and_invalid_submission_preserves_code(self):
         store = AccountSettings(self.config, self.directory)
