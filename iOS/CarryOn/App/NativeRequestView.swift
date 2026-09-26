@@ -50,13 +50,13 @@ struct NativeRequestView: View {
                     guard !questions.isEmpty, questions.allSatisfy({ !(answers[$0["id"].text] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { model.error = "请回答全部问题"; return }
                     let values = answers.mapValues { JSONValue.array([.string($0)]) }
                     Task { await respond(["answers": .object(values)]) }
-                }.buttonStyle(.borderedProminent).frame(minHeight: 44)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent).frame(minHeight: 44)
             } else if action == "permissions-approval" {
                 Picker("授权有效期", selection: $permissionScope) { Text("仅本轮").tag("turn"); Text("整个会话").tag("session") }.pickerStyle(.segmented)
                 Toggle("继续逐条审查本轮命令", isOn: $strictReview).font(.caption)
                 Button("允许请求的权限") { Task {
                     await respond(["response": .object(["permissions": request["params"]["permissions"], "scope": .string(permissionScope), "strictAutoReview": .bool(strictReview)])])
-                } }.buttonStyle(.borderedProminent)
+                } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                 Button("拒绝", role: .destructive) { Task { await respond(["decision": .string("decline")]) } }.frame(minHeight: 44)
             } else if action == "mcp-response" {
                 if ElicitationForm.supports(schema) {
@@ -66,7 +66,7 @@ struct NativeRequestView: View {
                     Button("提交") { Task {
                         do { await respond(["response": .object(["action": .string("accept"), "content": try ElicitationForm.response(schema, values: formValues)])]) }
                         catch { failure = error.localizedDescription }
-                    } }.buttonStyle(.borderedProminent)
+                    } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                 } else { Text("此请求包含暂不支持的表单，请在 Codex App 完成。").font(.caption).foregroundStyle(Design.secondary) }
                 HStack {
                     Button("拒绝", role: .destructive) { Task { await respond(["response": .object(["action": .string("decline")])]) } }
@@ -83,7 +83,7 @@ struct NativeRequestView: View {
                         Button("确认应用此规则") { Task {
                             if let value = pendingDecision { await respond(["decision": value]) }
                             if submitted { pendingDecision = nil }
-                        } }.buttonStyle(.borderedProminent).disabled(!model.canPerform(target, action: action) || submitted)
+                        } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent).disabled(!model.canPerform(target, action: action) || submitted)
                         if let failure { Text(failure).foregroundStyle(.red) }
                     }.padding(16) }
                     .navigationTitle("审批规则").navigationBarTitleDisplayMode(.inline)

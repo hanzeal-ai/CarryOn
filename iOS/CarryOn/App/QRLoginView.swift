@@ -24,7 +24,7 @@ struct QRLoginView: View {
                         if failure == nil { ProgressView() }
                     } else {
                         Text("确认登录此云端地址").foregroundStyle(Design.secondary)
-                        Button("继续登录") { confirmed = true }.buttonStyle(.borderedProminent).disabled(confirmed)
+                        Button("继续登录") { confirmed = true }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent).disabled(confirmed)
                     }
                 } else if camera {
                     QRScanner(onScan: { raw in

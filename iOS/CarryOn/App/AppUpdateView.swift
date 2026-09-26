@@ -22,7 +22,7 @@ struct AppUpdateView: View {
                 case .checked(.available(let release)):
                     Text("发现新版本 " + release.versionLabel).font(.headline)
                     if !release.notes.isEmpty { ScrollView { Text(release.notes).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 200) }
-                    Button(release.actionTitle) { openURL(release.url) { openFailed = !$0 } }.buttonStyle(.borderedProminent)
+                    Button(release.actionTitle) { openURL(release.url) { openFailed = !$0 } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                 }
                 if openFailed { Text("无法打开更新页面，请稍后重试").font(.caption).foregroundStyle(.red) }
                 Button("重新检查") { Task { openFailed = false; await updater.check() } }.disabled(updater.state == .checking)

@@ -10,14 +10,24 @@ import CarryOnCore
                 else if fixture.screen == 2, let device = fixture.model.device { WorkspaceDetails(device: device) }
                 else if fixture.screen == 3, let thread = fixture.model.selectedThread { ConversationView(thread: thread) }
                 else if fixture.screen == 4 { ProjectsView() }
+                else if fixture.screen == 5 { ActivityView() }
+                else if fixture.screen == 6 {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            WorkspaceBindingRequests()
+                            MessageMarkdown(text: "正文 **强调**、`行内代码` 和 [链接](https://example.com)。\n\n> 引用内容\n\n```swift\nlet result = \"完成\"\n```", resolveCreatedThreads: false)
+                        }.padding(20)
+                    }.background(Design.background)
+                }
                 else { Color.white }
-            }.environment(fixture.model).task { await fixture.run() }
+            }.environment(fixture.model).tint(Design.ink).preferredColorScheme(fixture.dark ? .dark : .light).task { await fixture.run() }
         }
     }
 }
 @MainActor @Observable final class CacheFixture {
     let model = AppModel()
     var screen = 0
+    var dark = false
     private var started = false
     private var checks: [String: Bool] = [:]
     func pause() async { try? await Task.sleep(for: .milliseconds(650)) }
@@ -132,6 +142,23 @@ import CarryOnCore
             checks["restartRestoresRecentMessages"] = reopened.history != .null && !reopened.connected
             await reopened.logout()
             checks["logoutClearsVisibleCache"] = reopened.displayCache.value(reopened.historyCacheKey(thread.id)) == .null
+            screen = 0
+            model.setForeground(false); model.expireBackgroundSync()
+            await pause()
+            model.selectedThread = try Record(.object(["id": .string("activity-completed")]))
+            model.connected = true; model.status = .object(["enabled": .bool(true)])
+            UserDefaults.standard.set(false, forKey: "carryon.showInactiveConversations")
+            try await model.refreshActivityCounts()
+            checks["activityCountsHideInactive"] = model.activityCount == 1 && model.otherActivityCount == 0
+            UserDefaults.standard.set(true, forKey: "carryon.showInactiveConversations")
+            try await model.refreshActivityCounts()
+            checks["activityCountsIncludeInactiveWhenEnabled"] = model.activityCount == 2 && model.otherActivityCount == 1
+            UserDefaults.standard.set(false, forKey: "carryon.showInactiveConversations")
+            model.selectedThread = nil
+            screen = 6; await pause(); try capture("theme-light")
+            dark = true; await pause(); try capture("theme-dark")
+            screen = 1; await pause(); try capture("settings-dark")
+            screen = 5; await pause(); try capture("activity-dark")
             let result: [String: Any] = ["notificationDiagnostic": notificationDiagnostic, "passed": checks.values.allSatisfy { $0 }, "checks": checks]
             try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL.documentsDirectory.appendingPathComponent("cache-result.json"))
         } catch {

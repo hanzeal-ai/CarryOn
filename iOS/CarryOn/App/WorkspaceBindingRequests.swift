@@ -21,9 +21,9 @@ struct WorkspaceBindingRequests: View {
                     HStack {
                         Button("拒绝", role: .destructive) { Task { await respond(request, reject: true) } }
                         Spacer()
-                        Button("确认绑定") { Task { await respond(request, reject: false) } }.buttonStyle(.borderedProminent)
+                        Button("确认绑定") { Task { await respond(request, reject: false) } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                     }.disabled(busy)
-                }.padding(18).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                }.padding(18).background(Design.surface, in: RoundedRectangle(cornerRadius: 16))
             }
             if let failure { Text(failure).foregroundStyle(.red) }
         }.task(id: model.addressText) {
@@ -39,7 +39,12 @@ struct WorkspaceBindingRequests: View {
             let result = try await model.console("binding/pending")
             guard !Task.isCancelled, scope == model.addressText, epoch == model.epoch else { return }
             requests = try result["requests"].array.map(Record.init); failure = nil
-        } catch { if !Task.isCancelled { failure = error.localizedDescription } }
+        } catch is CancellationError { return }
+        catch {
+            if !Task.isCancelled, scope == model.addressText, epoch == model.epoch {
+                failure = error.localizedDescription
+            }
+        }
     }
     private func respond(_ request: Record, reject: Bool) async {
         let epoch = model.epoch
@@ -51,6 +56,7 @@ struct WorkspaceBindingRequests: View {
             guard epoch == model.epoch else { return }
             if !reject { model.switchDevice(result["deviceId"].text) }
             await load()
-        } catch { failure = error.localizedDescription }
+        } catch is CancellationError { return }
+        catch { if !Task.isCancelled, epoch == model.epoch { failure = error.localizedDescription } }
     }
 }

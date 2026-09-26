@@ -22,7 +22,7 @@ public final class StartupProtocol: URLProtocol, @unchecked Sendable {
         let login = request.url!.path.hasSuffix("/login")
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
             headerFields: login ? ["Set-Cookie": "carryon-console=fixture-session; Path=/console/; Secure; HttpOnly"] : nil)!
-        var body = #"{"devices":[],"requests":[],"history":[]}"#
+        var body = #"{"account":{"id":"fixture-account"},"devices":[],"requests":[],"history":[]}"#
         if Self.mode == "interactive" {
             body = #"{"devices":[{"id":"fixture","title":"测试工作区","online":false,"permissions":["view"]}],"requests":[],"history":[]}"#
             var requestData = request.httpBody

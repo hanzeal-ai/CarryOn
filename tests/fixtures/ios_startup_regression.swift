@@ -26,9 +26,9 @@ import CarryOnCore
         do {
             let savedServer = UserDefaults.standard.string(forKey: "carryon.server")
             UserDefaults.standard.removeObject(forKey: "carryon.server")
-            checks["freshInstallHasOfficialServer"] = AppModel().addressText == "https://carryon.hanzeal.com/"
+            checks["freshInstallHasOfficialServer"] = try ConsoleAddress(AppModel().addressText) == ConsoleAddress("https://carryon.hanzeal.com/")
             UserDefaults.standard.set("", forKey: "carryon.server")
-            checks["emptySavedServerUsesOfficialServer"] = AppModel().addressText == "https://carryon.hanzeal.com/"
+            checks["emptySavedServerUsesOfficialServer"] = try ConsoleAddress(AppModel().addressText) == ConsoleAddress("https://carryon.hanzeal.com/")
             UserDefaults.standard.set(server, forKey: "carryon.server")
             checks["customServerIsPreserved"] = AppModel().addressText == server
             if let savedServer { UserDefaults.standard.set(savedServer, forKey: "carryon.server") }
@@ -67,6 +67,11 @@ import CarryOnCore
             StartupProtocol.mode = "success"
             await model.restoreLogin()
             checks["retryRestoresAuthenticatedHome"] = model.authenticated && !model.restoringLogin && model.restorationError == nil
+            let emptyEpoch = model.epoch, emptyRevision = model.workspaceRevision
+            try await model.refreshDirectory()
+            try await model.refreshDirectory()
+            checks["emptyDirectoryDoesNotRestartWorkspace"] = model.epoch == emptyEpoch && model.workspaceRevision == emptyRevision
+            checks["emptyDirectoryKeepsBindingRequestsReadable"] = try await model.console("binding/pending")["requests"].array.isEmpty
             model.setForeground(false)
 
             model = AppModel(); model.addressText = server

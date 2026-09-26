@@ -23,6 +23,9 @@ assert api.read_text().count(transport_default) == 1, "The test transport inject
 api.write_text(api.read_text().replace(transport_default, "configuration: URLSessionConfiguration = StartupProtocol.configuration"))
 project = source / "CarryOn.xcodeproj/project.pbxproj"
 project.write_text(project.read_text().replace("com.hanzeal.carryon", "com.hanzeal.carryon.startupregression"))
+# The app target copies its product configuration from the adjacent package.
+(work / "carryon").mkdir(exist_ok=True)
+shutil.copy2(repo / "carryon/product.json", work / "carryon/product.json")
 device = sys.argv[1]
 with (work / "build.log").open("w") as log:
     subprocess.run(["xcodebuild", "-project", str(source / "CarryOn.xcodeproj"), "-scheme", "CarryOn",

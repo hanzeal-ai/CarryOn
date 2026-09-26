@@ -908,7 +908,7 @@ struct AsyncQuestionView: View {
                     HStack {
                         Spacer()
                         Button("跳过") { touched = true; expanded = false }
-                        Button("发送") { Task { await send() } }.buttonStyle(.borderedProminent)
+                        Button("发送") { Task { await send() } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                             .disabled(answer.isEmpty || answer == lastSubmission || !(model.canPerform(target) && model.allows(.send)) || submitting)
                     }.font(.caption)
                 }.padding(16).background(Design.background, in: RoundedRectangle(cornerRadius: 18)).disabled(submitting)

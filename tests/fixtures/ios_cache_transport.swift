@@ -29,16 +29,23 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         let path = body["path"].string ?? request.url!.path
         Self.lock.withLock { Self.counts[path, default: 0] += 1 }
         let devices: [JSONValue] = ["fixture", "other"].map { .object(["id": .string($0), "title": .string($0), "online": .bool(true), "permissions": .array([.string("view")])]) }
-        var result: JSONValue = .object(["devices": .array(devices), "requests": .array([]), "history": .array([])])
-        if path.hasPrefix("/api/workspace/threads?threadId=") {
+        var result: JSONValue = .object(["account": .object(["id": .string("fixture-account")]), "devices": .array(devices), "requests": .array([]), "history": .array([])])
+        if path.hasSuffix("/binding/pending") {
+            result = .object(["requests": .array([.object(["id": .string("binding-fixture"), "name": .string("工作区绑定申请"), "account": .object(["username": .string("fixture")]), "permissions": .array([.string("view")])])])])
+        }
+        else if path.hasPrefix("/api/workspace/threads?threadId=") {
             Thread.sleep(forTimeInterval: 0.3)
             let id = String(path.split(separator: "=").last!)
             result = .object(["threads": .array([.object(["id": .string(id), "title": .string(id)])]), "total": .number(1), "nextOffset": .number(1)])
         }
         else if path.contains("/history?") {
             let id = String(path.split(separator: "/")[2])
-            result = .object(["thread": .object(["id": .string(id)]), "timeline": .array([])])
+            result = .object(["thread": .object(["id": .string(id)]), "timeline": .array([
+                .object(["id": .string("activity-turn"), "type": .string("turn"), "turnId": .string("last-turn"), "status": .string("completed")]),
+                .object(["id": .string("activity-result"), "type": .string("agentMessage"), "turnId": .string("last-turn"), "phase": .string("final"), "text": .string("最后一次返回的结果：**验证完成**。")])
+            ])])
         }
+        else if path == "/api/notifications/read" { result = .object(["readThrough": .number(1)]) }
         else if path == "/api/standby" { result = .object(["supported": .bool(true), "enabled": .bool(true), "effective": .bool(true)]) }
         else if path == "/api/status" { result = .object(["deviceInfo": .object(["hostname": .string("Fixture Mac"), "listenHost": .string("127.0.0.1"), "port": .number(9000)])]) }
         else if path == "/api/usage" {
@@ -48,7 +55,14 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         }
         else if path.contains("filter=running") {
             result = .object(["threads": .array(Self.runningIDs.map { .object(["id": .string($0), "title": .string("执行中任务 " + $0)]) }), "total": .number(4), "nextOffset": .number(4)])
-        } else if path.hasPrefix("/api/activity") { result = .object(["threads": .array([]), "total": .number(0), "nextOffset": .number(0)]) }
+        } else if path.hasPrefix("/api/activity") {
+            let availableOnly = path.contains("availableOnly=true")
+            let ids = availableOnly ? ["activity-completed"] : ["activity-completed", "activity-inactive"]
+            let rows: [JSONValue] = ids.filter { !path.contains("excludeThreadId=" + $0) }.map {
+                .object(["id": .string($0), "title": .string($0 == "activity-completed" ? "任务完成结果" : "未活跃任务"), "activityKind": .string("completed"), "unread": .bool(true), "readSequence": .number(1)])
+            }
+            result = .object(["threads": .array(rows), "total": .number(Double(rows.count)), "nextOffset": .number(Double(rows.count))])
+        }
         else if path.hasPrefix("/api/projects?") { result = .object(["projects": .array([.object(["id": .string("project"), "name": .string("缓存项目")])]), "total": .number(1), "nextOffset": .number(1)]) }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

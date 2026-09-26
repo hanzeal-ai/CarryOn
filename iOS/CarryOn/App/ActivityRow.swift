@@ -51,10 +51,7 @@ struct ActivityRow: View {
         return nil
     }
     var body: some View {
-        Button {
-            if kind == .completed || kind == .failed { Task { await openResult() } }
-            else { showingDetails = true }
-        } label: {
+        Button { showingDetails = true } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(unread ? Design.blue : .clear).frame(width: 8, height: 8).padding(.top, 6)
                     .accessibilityHidden(true)
@@ -128,23 +125,6 @@ struct ActivityRow: View {
             Text(detail.kind == .completed ? "此轮没有提供最终结果" : "当前没有待处理事项或最终结果")
                 .font(.caption).foregroundStyle(Design.secondary)
         }
-    }
-    private func openResult() async {
-        guard !loading, scope == model.scope else { return }
-        loading = true; failure = nil
-        model.activitySnapshots[record.id] = .null
-        defer {
-            loading = false
-            if !showingDetails && scope == model.scope { model.activitySnapshots.removeValue(forKey: record.id) }
-        }
-        do {
-            try await model.loadActivity(target)
-            guard scope == model.scope else { return }
-            let value = snapshot, latest = ActivityDetail(history: value)
-            if latest.kind == .approval || latest.kind == .question { showingDetails = true; return }
-            beforeOpen?()
-            model.openActivity(record, snapshot: value, anchor: latest.anchorID)
-        } catch { if scope == model.scope { failure = error.localizedDescription } }
     }
     private func date(_ value: Double) -> String { Date(timeIntervalSince1970: value).formatted(date: .abbreviated, time: .shortened) }
     private func load() async {

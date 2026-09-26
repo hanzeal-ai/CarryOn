@@ -516,6 +516,20 @@ class AvailableConversationTests(unittest.TestCase):
             page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'availableOnly':['true']})[1]
             self.assertEqual(page['total'],0)
 
+    def test_unread_activity_filter_hides_unloaded_without_marking_read(self):
+        for tid in (T,U):
+            self.observe(tid,status='inProgress')
+            self.observe(tid,status='completed')
+        self.bridge.ipc.states.pop(U)
+        for include_read in ('false','true'):
+            filtered=self.workspace.dispatch('local','GET','/api/activity',None,{'availableOnly':['true'],'filter':['unread'],'includeRead':[include_read]})[1]
+            self.assertEqual([t['id'] for t in filtered['threads']],[T])
+            self.assertEqual(filtered['total'],1)
+            all_rows=self.workspace.dispatch('local','GET','/api/activity',None,{'availableOnly':['false'],'filter':['unread'],'includeRead':[include_read]})[1]
+            self.assertEqual({t['id'] for t in all_rows['threads']},{T,U})
+            self.assertEqual(all_rows['total'],2)
+            self.assertTrue(all(t['unread'] for t in all_rows['threads']))
+
     def test_available_activity_keeps_loaded_pending_requests(self):
         self.observe(T,request=True)
         self.observe(U,request=True)

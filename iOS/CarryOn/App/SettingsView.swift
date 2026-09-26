@@ -46,6 +46,12 @@ struct SettingsView: View {
                         settingsPage("偏好设置") {
                             VStack(alignment: .leading, spacing: 8) {
                                 Toggle("显示不活跃会话", isOn: $showInactiveConversations)
+                                    .onChange(of: showInactiveConversations) { _, _ in
+                                        Task {
+                                            do { try await model.refreshActivityCounts() }
+                                            catch { model.report(error, operation: "刷新动态角标", blocking: false) }
+                                        }
+                                    }
                                 Text("开启后显示全部会话；未在桌面 Codex 加载的会话只能查看历史。")
                                     .font(.caption).foregroundStyle(Design.secondary)
                             }.padding(16)

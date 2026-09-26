@@ -129,6 +129,7 @@ struct CodeFilePreview: View {
             }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .task(id: document.id + String(colorScheme == .dark)) {
+                highlighted = nil
                 let result = await CodeHighlight.shared.render(document.text, language: document.language, dark: colorScheme == .dark)
                 if !Task.isCancelled { highlighted = result }
             }

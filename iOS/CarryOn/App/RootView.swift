@@ -94,7 +94,7 @@ struct StartupView: View {
             if let failure = model.restorationError {
                 Text("连接失败").font(.headline)
                 Text(failure).font(.footnote).foregroundStyle(Design.secondary).multilineTextAlignment(.center)
-                Button("重试") { Task { await model.restoreLogin() } }.buttonStyle(.borderedProminent)
+                Button("重试") { Task { await model.restoreLogin() } }.buttonStyle(.borderedProminent).foregroundStyle(Design.onAccent)
                 Button("返回登录") { model.restorationError = nil }
             } else {
                 ProgressView("正在连接…")

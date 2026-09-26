@@ -53,7 +53,7 @@ for _ in range(150):
     if result.exists() and result.stat().st_mtime_ns != previous:
         data = json.loads(result.read_text())
         shutil.copy2(result, work / "result.json")
-        for name in ("cache-settings.png", "cache-conversation.png"):
+        for name in ("cache-settings.png", "cache-conversation.png", "theme-light.png", "theme-dark.png", "settings-dark.png", "activity-dark.png"):
             if (container / "Documents" / name).exists():
                 shutil.copy2(container / "Documents" / name, work / name)
         print(json.dumps(data, ensure_ascii=False, indent=2))

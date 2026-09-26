@@ -514,7 +514,10 @@ import CarryOnCore
             displayCache.remove(prefix: addressText + "\n" + removed.id + "\n")
         }
         devices = directory
-        if !devices.contains(where: { $0.id == selectedDevice }) { switchDevice(devices.first?.id ?? "") }
+        if !devices.contains(where: { $0.id == selectedDevice }) {
+            let nextDevice = devices.first?.id ?? ""
+            if nextDevice != selectedDevice { switchDevice(nextDevice) }
+        }
         let result = try await console("binding/pending")
         guard version == directoryVersion else { return }
         guard case .array(let values) = result["requests"] else { throw APIError("连接申请格式不正确") }
@@ -529,13 +532,16 @@ import CarryOnCore
         guard connected, status["enabled"].bool == true, !selectedDevice.isEmpty else { return }
         let version = UUID(), currentThread = selectedThread?.id, capturedScope = scope
         activityRequestVersion = version
-        async let allRequest = deviceRequest("/api/activity?limit=1")
+        let availableOnly = !UserDefaults.standard.bool(forKey: "carryon.showInactiveConversations")
+        let path = "/api/activity?limit=1&availableOnly=\(availableOnly)"
+        async let allRequest = deviceRequest(path)
         let others: JSONValue?
         if let currentThread {
-            others = try await deviceRequest("/api/activity?limit=1&excludeThreadId=" + ConsoleAddress.component(currentThread))
+            others = try await deviceRequest(path + "&excludeThreadId=" + ConsoleAddress.component(currentThread))
         } else { others = nil }
         let all = try await allRequest
-        guard version == activityRequestVersion, capturedScope == scope, currentThread == selectedThread?.id else { return }
+        guard version == activityRequestVersion, capturedScope == scope, currentThread == selectedThread?.id,
+              availableOnly == !UserDefaults.standard.bool(forKey: "carryon.showInactiveConversations") else { return }
         guard let total = all["total"].int, total >= 0,
               let otherTotal = (others ?? all)["total"].int, otherTotal >= 0 else { throw APIError("动态统计格式不正确") }
         activityCount = total
