@@ -5,7 +5,7 @@ extension AppModel {
     func loadActivity(_ target: ConversationActionTarget) async throws {
         guard target.isActivity, target.scope == scope, activitySnapshots[target.threadID] != nil else { throw CancellationError() }
         let value = try await deviceRequest(target.path("history") + "?limit=40")
-        guard target.scope == scope, activitySnapshots[target.threadID] != nil, value["thread"]["id"].text == target.threadID else { throw CancellationError() }
+        guard !Task.isCancelled, target.scope == scope, activitySnapshots[target.threadID] != nil, value["thread"]["id"].text == target.threadID else { throw CancellationError() }
         guard case .array = value["timeline"] else { throw APIError("动态详情格式不正确") }
         activitySnapshots[target.threadID] = value
     }

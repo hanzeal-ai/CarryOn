@@ -13,3 +13,9 @@
 变更为本地代码实现，不含部署或真实数据清理。SQLite 增加 `activity_cleared` 表，既有读游标与通知事件保持不变；回退代码可忽略新表，无需删除用户数据。
 
 相关测试覆盖已读保留、同绑定不同账号隔离、HTTP 身份伪造拒绝、持久化恢复、新事件重现、清理期间未读保留、原生已读同步、只读连接清理、待审批状态保留及原生完成时间。验证日志：`/tmp/carryon-activity-tests-final.log`、`/tmp/carryon-activity-transport.log`、`/tmp/carryon-activity-build.log`。尚未完成真机登录后的视觉与点击验收。
+
+## 动态首屏摘要
+
+`/api/activity` 的分页记录包含可选 `activityPreview`：`kind`、`text`（最多 6000 字符）、`truncated`，以及原生证据存在时的 `turnId`、`itemId` 和 `completedAt`。摘要来自原生终态结果、失败原因或待处理问题；不包含 reasoning、commentary、审批控件或可执行凭据。读取列表不请求会话历史。新通知将摘要保存在既有事件 JSON 中，原生会话卸载或桥接重启后仍可读；已有旧事件没有摘要时继续按需读取详情，无需迁移。
+
+iOS 先显示摘要，后台读取完整详情；读取失败保留摘要与重试入口。「进入会话」不依赖详情请求成功。摘要仅用于阅读，不授予操作权限，也不单独推进已读游标；审批和问题回复仍使用新鲜详情与原生核验。

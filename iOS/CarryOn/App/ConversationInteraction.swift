@@ -18,7 +18,7 @@ extension AppModel {
         let explicitReady = value["access"]["nativeReady"].bool
         let native = value["source"].text == "desktop-snapshot" || explicitReady == true
         let permitted = target.parentID == nil ? explicitAccess != false : explicitAccess == true
-        return canWrite && failure == nil && permitted && native
+        return canWrite && (target.isActivity || historySynchronized) && failure == nil && permitted && native
             && explicitReady != false && value["syncing"].bool != true
             && ["idle", "running", "waiting"].contains(value["status"]["state"].text)
     }
@@ -29,7 +29,7 @@ extension AppModel {
     func interactionUnavailableReason(_ target: ConversationActionTarget, capability: WorkspaceCapability) -> String? {
         if target.scope != scope { return "工作区已切换，请返回当前工作区后重试" }
         if !authenticated { return "登录已失效，请重新登录" }
-        if !connected { return "工作区尚未连接，连接恢复后可操作" }
+        if !connected && !commandReady { return "工作区尚未连接，连接恢复后可操作" }
         if status["enabled"].bool != true { return "Codex 尚未就绪，请在电脑端检查连接" }
         if status["remoteControl"].bool != true { return "工作区为只读，请在电脑端开启远程控制" }
         if !allows(capability) { return "当前账号没有此操作权限，请联系工作区管理员" }

@@ -14,10 +14,11 @@ struct ActivityRow: View {
     @State private var failure: String?
     private var target: ConversationActionTarget { .init(scope: scope, threadID: record.id, isActivity: true) }
     private var snapshot: JSONValue { model.snapshot(for: target) }
+    private var preview: JSONValue { record.value["activityPreview"] }
     private var detail: ActivityDetail { ActivityDetail(history: snapshot) }
     private var kind: ActivityDetail.Kind {
         if snapshot != .null { return detail.kind }
-        switch record.value["activityKind"].text {
+        switch (preview["kind"].string ?? record.value["activityKind"].text) {
         case "approval": return .approval
         case "question": return .question
         case "failed": return .failed
@@ -72,7 +73,8 @@ struct ActivityRow: View {
                 if let value = pendingOpen, target.scope == model.scope {
                     pendingOpen = nil
                     beforeOpen?()
-                    model.openActivity(record, snapshot: value, anchor: ActivityDetail(history: value).anchorID)
+                    if value == .null { model.open(record) }
+                    else { model.openActivity(record, snapshot: value, anchor: ActivityDetail(history: value).anchorID) }
                 }
             }) {
                 NavigationStack {
@@ -80,16 +82,20 @@ struct ActivityRow: View {
                         VStack(alignment: .leading, spacing: 18) {
                             Text(record.title).font(.headline)
                             Text(label).font(.subheadline).foregroundStyle(Design.secondary)
-                            if loading && snapshot == .null { ProgressView("正在读取详情…") }
+                            if snapshot == .null, let text = preview["text"].string, !text.isEmpty {
+                                MessageMarkdown(text: text, resolveCreatedThreads: false)
+                                if preview["truncated"].bool == true {
+                                    Text("进入会话查看完整内容").font(.caption).foregroundStyle(Design.secondary)
+                                }
+                            }
+                            if loading && snapshot == .null { ProgressView("正在刷新详情…") }
                             if let failure {
                                 Text(failure).font(.caption).foregroundStyle(.red)
                                 Button("重试") { Task { await load() } }.disabled(loading)
                             }
-                            if snapshot != .null {
-                                content
-                                Button("进入会话") { pendingOpen = snapshot; showingDetails = false }
-                                    .buttonStyle(.bordered)
-                            }
+                            if snapshot != .null { content }
+                            Button("进入会话") { pendingOpen = snapshot; showingDetails = false }
+                                .buttonStyle(.bordered)
                         }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
                     }.background(Design.background)
                         .navigationTitle("动态详情").navigationBarTitleDisplayMode(.inline)
@@ -130,10 +136,10 @@ struct ActivityRow: View {
     private func load() async {
         guard !loading, showingDetails, target.scope == model.scope else { return }
         loading = true; defer { loading = false }
+        let sequence = record.value["readSequence"].int ?? 0
         do {
             try await model.loadActivity(target)
             failure = nil
-            let sequence = record.value["readSequence"].int ?? 0
             if unread, sequence > readThrough, showingDetails, model.foreground {
                 do {
                     let receipt = try await model.deviceRequest("/api/notifications/read", body: .object([
@@ -147,7 +153,6 @@ struct ActivityRow: View {
         } catch is CancellationError { return }
         catch {
             guard target.scope == model.scope, showingDetails, model.activitySnapshots[record.id] != nil else { return }
-            model.activitySnapshots[record.id] = .null
             failure = error.localizedDescription
         }
     }

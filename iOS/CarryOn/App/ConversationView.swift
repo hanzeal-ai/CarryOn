@@ -407,9 +407,9 @@ struct ConversationView: View {
         @Bindable var model = model
         if !model.conversationReadOnly {
         CarryOnChatComposer(text: $model.draft,
-            disabled: !model.canInteract || loadingImages || submitting,
+            disabled: !(model.canCompose || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting,
-            sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.allows(.stop),
+            sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.canInteract(.stop),
             hasImages: !images.isEmpty, stopping: model.state == "running",
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             send: submitMessage,
@@ -417,7 +417,7 @@ struct ConversationView: View {
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
                 PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
                     Image(systemName: "plus").frame(width: 44, height: 44)
-                }.disabled(!model.canInteract(.send) || !["idle", "running", "waiting"].contains(model.state) || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
+                }.disabled(!model.canCompose || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
                     .accessibilityLabel("添加图片")
                 Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
                     .accessibilityLabel("模型与思考强度")
@@ -486,9 +486,9 @@ struct ConversationView: View {
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.conversationReadOnly {
-                if !model.connected && model.allows(.send) {
+                if !model.connected && !model.commandReady && model.allows(.send) {
                     Text("可继续编辑草稿，连接恢复后可发送").font(.caption).foregroundStyle(Design.secondary)
-                } else if model.connected && !model.canInteract(.send), let reason = model.interactionUnavailableReason(actionTarget, capability: .send) {
+                } else if (model.connected || model.commandReady) && !model.canCompose, let reason = model.interactionUnavailableReason(actionTarget, capability: .send) {
                     Text(reason).font(.caption).foregroundStyle(Design.secondary)
                 }
                 ConversationActionBar(target: actionTarget)

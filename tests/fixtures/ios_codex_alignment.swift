@@ -80,7 +80,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         model.fixtureClient(api)
         model.addressText = "https://ios-alignment.invalid/"; model.selectedDevice = "fixture-device"
         model.devices = [try! Record(.object(["id": .string("fixture-device"), "title": .string("隔离夹具"), "online": .bool(true), "permissions": .array(["view", "send", "edit", "approve"].map { .string($0) })]))]
-        model.authenticated = true; model.connected = true; model.foreground = true
+        model.authenticated = true; model.connected = true; model.historySynchronized = true; model.foreground = true
         model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true)])
         model.selectedThread = thread; model.history = snapshot(id: "fixture"); model.historyRevision += 1
         let target = ConversationActionTarget(scope: model.scope, threadID: "fixture")

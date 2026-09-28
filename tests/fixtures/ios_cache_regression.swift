@@ -77,8 +77,9 @@ import ExyteChat
             checks["settingsReentryReusesStandby"] = CacheProtocol.count("/api/standby") == 1
             checks["settingsReentryReusesUsage"] = CacheProtocol.count("/api/usage") == 1
             try capture("cache-settings")
+            let statusCountBeforeDetails = CacheProtocol.count("/api/status")
             screen = 2; await pause(); screen = 0; await pause(); screen = 2; await pause()
-            checks["workspaceDetailsReentryReusesStatus"] = CacheProtocol.count("/api/status") == 1
+            checks["workspaceDetailsReentryReusesStatus"] = CacheProtocol.count("/api/status") == statusCountBeforeDetails + 1
             screen = 4; await pause(); screen = 0; await pause(); screen = 4; await pause()
             checks["projectReentryReusesRows"] = CacheProtocol.count("/api/projects?limit=50&offset=0&search=&filter=all&availableOnly=true") == 1
             UserDefaults.standard.set(true, forKey: "carryon.showInactiveConversations")
@@ -91,7 +92,36 @@ import ExyteChat
             let cached = model.displayCache.value(model.historyCacheKey(thread.id))
             model.open(thread)
             checks["openDisplaysPrefetchedMessagesSynchronously"] = cached != .null && model.history == cached
-            checks["cacheDoesNotAuthorizeOrMarkRead"] = !model.connected && !model.canWrite && model.readSequence == 0
+            checks["cacheDoesNotAuthorizeOrMarkRead"] = model.connected && !model.canWrite && !model.canInteract && !model.historySynchronized && model.readSequence == 0
+            CacheProtocol.remoteControlEnabled = true
+            let savedDevices = model.devices
+            let savedStatus = model.status
+            model.devices = try model.devices.map { try Record($0.value.setting("permissions", .array([.string("view"), .string("send"), .string("stop")]))) }
+            model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true)])
+            let earlyThread = try Record(.object(["id": .string("send-before-history"), "title": .string("历史延迟会话")]))
+            CacheProtocol.heldHistories = [earlyThread.id]
+            model.open(earlyThread)
+            checks["sendReadyBeforeHistoryWithoutEnablingControls"] = model.connected && model.canCompose && !model.canInteract && model.history == .null && model.state == "unknown"
+            let composePath = "/api/threads/" + earlyThread.id + "/compose"
+            let beforeCompose = CacheProtocol.count(composePath)
+            model.draft = "历史同步前发送"
+            let sentEarly = await model.compose()
+            checks["composeUsesHTTPBeforeFirstHistory"] = sentEarly && CacheProtocol.count(composePath) == beforeCompose + 1 && model.draft.isEmpty && !model.historySynchronized
+            model.draft = "权限撤销后保留草稿"
+            model.status = .object(["enabled": .bool(true), "remoteControl": .bool(false)])
+            let deniedEarly = await model.compose()
+            checks["earlyComposeStillChecksRemoteControl"] = !deniedEarly && !model.canCompose && CacheProtocol.count(composePath) == beforeCompose + 1 && !model.draft.isEmpty
+            model.setForeground(false); model.expireBackgroundSync()
+            model.setForeground(true)
+            for _ in 0..<100 {
+                if model.commandReady { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            checks["coldReconnectEnablesHTTPBeforeHistory"] = model.commandReady && !model.connected && model.canCompose && !model.canInteract && !model.historySynchronized
+            CacheProtocol.remoteControlEnabled = false
+            model.status = savedStatus; model.devices = savedDevices; model.error = nil
+            model.draft = ""; CacheProtocol.heldHistories = []
+            model.open(thread)
             screen = 3; await pause(); try capture("cache-conversation")
             let retainedSocket = CacheSocket.connectionIDs(for: thread.id)
             let retainedSubscriptions = CacheSocket.subscriptionCount(for: thread.id)
@@ -173,6 +203,7 @@ import ExyteChat
             dark = false; await pause(); try capture("composer-light")
             screen = 1; await pause(); try capture("settings-light")
             dark = true
+            CacheProtocol.failActivityHistory = true
             screen = 5; await pause(); try capture("activity-dark")
             let result: [String: Any] = ["notificationDiagnostic": notificationDiagnostic, "passed": checks.values.allSatisfy { $0 }, "checks": checks]
             try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL.documentsDirectory.appendingPathComponent("cache-result.json"))

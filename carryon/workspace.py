@@ -8,6 +8,7 @@ from .catalog import valid_id
 from .contracts import digest
 from .operations import turns, controls
 from .thread_status import project_status
+from .activity_preview import preview
 
 KINDS=('message','done','failed','approval')
 
@@ -106,7 +107,11 @@ class Workspace:
         for question in questions:
             key=digest([tid,question['id'],'question'])
             candidates[key]={'kind':'approval','turnId':question['turnId'],'itemId':question['itemId'],'questionId':question['id']}
-        fingerprint=digest([candidates,status,failed])
+        activity_kind=('approval' if any(r['action'] in ('command-approval','file-approval','permissions-approval') for r in requests)
+                       else 'question' if requests or questions else 'failed' if failed
+                       else 'completed' if terminal=='completed' else 'other')
+        activity_preview=preview(last,activity_kind,requests=requests,questions=questions)
+        fingerprint=digest([candidates,status,failed,activity_preview])
         with self.lock:
             if self.fingerprints.get(tid)==fingerprint:return
             previous=self.db.execute('SELECT body FROM notification_baselines WHERE thread_id=?',(tid,)).fetchone()
@@ -115,7 +120,11 @@ class Workspace:
             for key,body in candidates.items():
                 # Existing pending requests must be visible on first connection; old completed history is only a baseline.
                 if key in known and (previous or body['kind']!='approval'):continue
-                record={**body,'eventId':key,'threadId':tid,'created':time.time()}
+                event_turn=next((t for t in native_turns if t.get('turnId')==body.get('turnId')),last)
+                event_kind=(activity_kind if body['kind']=='approval' else 'failed' if event_turn.get('status')=='failed'
+                            else 'completed' if event_turn.get('status')=='completed' else 'other')
+                event_preview=preview(event_turn,event_kind,requests=requests,questions=questions)
+                record={**body,'eventId':key,'threadId':tid,'created':time.time(),'preview':event_preview}
                 inserted=self.db.execute('INSERT OR IGNORE INTO notification_events(event_id,thread_id,kind,body) VALUES(?,?,?,?)',
                     (key,tid,body['kind'],json.dumps(record))).rowcount
                 changed=changed or bool(inserted)
@@ -125,9 +134,7 @@ class Workspace:
             self.fingerprints[tid]=fingerprint
             self.states[tid]={'status':status,'actionable':bool(requests or questions) or status['state']=='waiting' or failed,'failed':failed,
                               'needsConfirmation':bool(requests or questions) or status['state']=='waiting',
-                              'activityKind':('approval' if any(r['action'] in ('command-approval','file-approval','permissions-approval') for r in requests)
-                                              else 'question' if requests or questions else 'failed' if failed
-                                              else 'completed' if terminal=='completed' else 'other')}
+                              'activityKind':activity_kind,'activityPreview':activity_preview}
         if changed:self.bridge.notify()
 
     def preferences(self,reader,data=None):
@@ -300,6 +307,22 @@ class Workspace:
         if path=='/api/activity':threads.sort(key=lambda t: not t['actionable'])
         result={'threads':threads[offset:offset+limit],'total':len(threads),'nextOffset':offset+limit}
         if path=='/api/activity':
+            preferences=self.preferences(reader)
+            ipc,_=self.bridge.require()
+            native_states={thread['id']:ipc.current(thread['id']) for thread in result['threads']}
+            with self.lock:
+                for thread in result['threads']:
+                    native=native_states[thread['id']]
+                    known=self.states.get(thread['id'],{}) if native and not native.get('_metadataOnly') else {}
+                    value=known.get('activityPreview')
+                    if value is None:
+                        kinds=[kind for kind,enabled in preferences.items() if enabled]
+                        if kinds:
+                            event=self.db.execute('SELECT body FROM notification_events WHERE thread_id=? AND kind IN ('+
+                                                  ','.join('?' for _ in kinds)+') ORDER BY sequence DESC LIMIT 1',
+                                                  (thread['id'],*kinds)).fetchone()
+                            if event:value=json.loads(event[0]).get('preview')
+                    if value is not None:thread['activityPreview']=value
             current=query.get('currentThreadId',[''])[0]
             result['currentThreadIncluded']=any(t['id']==current for t in threads)
         return 200,result

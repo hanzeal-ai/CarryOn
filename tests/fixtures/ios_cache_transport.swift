@@ -3,6 +3,21 @@ import Foundation
 public final class CacheProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var counts: [String: Int] = [:]
+    nonisolated(unsafe) private static var activityFailure = false
+    public static var failActivityHistory: Bool {
+        get { lock.withLock { activityFailure } }
+        set { lock.withLock { activityFailure = newValue } }
+    }
+    nonisolated(unsafe) private static var controlEnabled = false
+    public static var remoteControlEnabled: Bool {
+        get { lock.withLock { controlEnabled } }
+        set { lock.withLock { controlEnabled = newValue } }
+    }
+    nonisolated(unsafe) private static var held: Set<String> = []
+    public static var heldHistories: Set<String> {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
     nonisolated(unsafe) private static var running = (0..<4).map { "running-\($0)" }
     public static var runningIDs: [String] {
         get { lock.withLock { running } }
@@ -28,7 +43,7 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         let body = data.flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) } ?? .null
         let path = body["path"].string ?? request.url!.path
         Self.lock.withLock { Self.counts[path, default: 0] += 1 }
-        let devices: [JSONValue] = ["fixture", "other"].map { .object(["id": .string($0), "title": .string($0), "online": .bool(true), "permissions": .array([.string("view")])]) }
+        let devices: [JSONValue] = ["fixture", "other"].map { .object(["id": .string($0), "title": .string($0), "online": .bool(true), "permissions": .array((Self.remoteControlEnabled ? ["view", "send", "stop"] : ["view"]).map(JSONValue.string))]) }
         var result: JSONValue = .object(["account": .object(["id": .string("fixture-account")]), "devices": .array(devices), "requests": .array([]), "history": .array([])])
         if path.hasSuffix("/binding/pending") {
             result = .object(["requests": .array([.object(["id": .string("binding-fixture"), "name": .string("工作区绑定申请"), "account": .object(["username": .string("fixture")]), "permissions": .array([.string("view")])])])])
@@ -37,6 +52,9 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.3)
             let id = String(path.split(separator: "=").last!)
             result = .object(["threads": .array([.object(["id": .string(id), "title": .string(id)])]), "total": .number(1), "nextOffset": .number(1)])
+        }
+        else if path.hasSuffix("/compose") {
+            result = .object(["id": body["body"]["requestId"], "state": .string("accepted")])
         }
         else if path.contains("/history?") {
             let id = String(path.split(separator: "/")[2])
@@ -47,7 +65,7 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         }
         else if path == "/api/notifications/read" { result = .object(["readThrough": .number(1)]) }
         else if path == "/api/standby" { result = .object(["supported": .bool(true), "enabled": .bool(true), "effective": .bool(true)]) }
-        else if path == "/api/status" { result = .object(["deviceInfo": .object(["hostname": .string("Fixture Mac"), "listenHost": .string("127.0.0.1"), "port": .number(9000)])]) }
+        else if path == "/api/status" { result = .object(["enabled": .bool(true), "remoteControl": .bool(Self.remoteControlEnabled), "deviceInfo": .object(["hostname": .string("Fixture Mac"), "listenHost": .string("127.0.0.1"), "port": .number(9000)])]) }
         else if path == "/api/usage" {
             let window: JSONValue = .object(["id": .string("primary"), "usedPercent": .number(20), "windowDurationMins": .number(10080)])
             let limit: JSONValue = .object(["id": .string("codex"), "name": .string("Codex"), "windows": .array([window])])
@@ -59,12 +77,14 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
             let availableOnly = path.contains("availableOnly=true")
             let ids = availableOnly ? ["activity-completed"] : ["activity-completed", "activity-inactive"]
             let rows: [JSONValue] = ids.filter { !path.contains("excludeThreadId=" + $0) }.map {
-                .object(["id": .string($0), "title": .string($0 == "activity-completed" ? "任务完成结果" : "未活跃任务"), "activityKind": .string("completed"), "unread": .bool(true), "readSequence": .number(1)])
+                .object(["id": .string($0), "title": .string($0 == "activity-completed" ? "任务完成结果" : "未活跃任务"), "activityKind": .string("completed"), "activityPreview": .object(["kind": .string("completed"), "text": .string("通知摘要：**验证完成**，无需等待会话历史。"), "turnId": .string("last-turn")]), "unread": .bool(true), "readSequence": .number(1)])
             }
             result = .object(["threads": .array(rows), "total": .number(Double(rows.count)), "nextOffset": .number(Double(rows.count))])
         }
         else if path.hasPrefix("/api/projects?") { result = .object(["projects": .array([.object(["id": .string("project"), "name": .string("缓存项目")])]), "total": .number(1), "nextOffset": .number(1)]) }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        let failed = Self.failActivityHistory && path.contains("/api/threads/activity-") && path.contains("/history?")
+        if failed { result = .object(["error": .string("详情暂不可用")]) }
+        let response = HTTPURLResponse(url: request.url!, statusCode: failed ? 503 : 200, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! result.encoded()); client?.urlProtocolDidFinishLoading(self)
     }
@@ -105,11 +125,15 @@ public final class CacheSocket: ConsoleSocket, @unchecked Sendable {
     }
     func receive() async throws -> URLSessionWebSocketTask.Message {
         try await Task.sleep(for: .milliseconds(200))
+        while let thread = lock.withLock({ selection["threadId"].string }), CacheProtocol.heldHistories.contains(thread) {
+            try await Task.sleep(for: .milliseconds(20))
+            if lock.withLock({ closed }) { throw URLError(.cancelled) }
+        }
         let selected = try lock.withLock {
             if closed { throw URLError(.cancelled) }
             revision += 1; return selection
         }
-        var body: JSONValue = .object(["type": .string("update"), "threadId": selected["threadId"], "status": .object(["enabled": .bool(true), "remoteControl": .bool(false)]), "jobs": .array([])])
+        var body: JSONValue = .object(["type": .string("update"), "threadId": selected["threadId"], "status": .object(["enabled": .bool(true), "remoteControl": .bool(CacheProtocol.remoteControlEnabled)]), "jobs": .array([])])
         if let thread = selected["threadId"].string {
             body = body.setting("history", .object(["thread": .object(["id": .string(thread)]), "status": .object(["state": .string(CacheProtocol.runningIDs.contains(thread) ? "running" : "idle")]), "historyRevision": .string("\(revision)"), "timeline": .array([.object(["id": .string("message"), "type": .string("agentMessage"), "text": .string("后台已同步的任务消息 · \(revision)")])])]))
         }

@@ -537,3 +537,54 @@ class AvailableConversationTests(unittest.TestCase):
         page=self.workspace.dispatch('local','GET','/api/activity',None,{'availableOnly':['true']})[1]
         self.assertEqual([t['id'] for t in page['threads']],[T])
         self.assertTrue(page['threads'][0]['actionable'])
+
+    def test_activity_preview_survives_unload_restart_without_history_reads(self):
+        from unittest.mock import Mock
+        self.observe()
+        state=self.observe(status='completed',text='Final result')
+        state=copy.deepcopy(state)
+        state['turns'][0]['items'].extend([
+            {'id':'private','type':'agentMessage','phase':'analysis','text':'Private reasoning'},
+            {'id':'tail','type':'agentMessage','phase':'commentary','text':'Progress only'}])
+        self.workspace.observe(state)
+        self.bridge.history=Mock(side_effect=AssertionError('activity must not fetch history'))
+        self.bridge.ipc.states.pop(T)
+        self.workspace=Workspace(self.bridge);self.bridge.workspace=self.workspace;self.workspace.catalog_refresh()
+        row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
+        self.assertEqual(row['activityPreview']['text'],'Final result')
+        self.assertEqual(row['activityPreview']['kind'],'completed')
+        self.assertEqual(row['activityPreview']['turnId'],'turn-1')
+        self.assertTrue(row['unread'])
+        self.assertNotIn('controls',row['activityPreview'])
+        self.bridge.history.assert_not_called()
+
+    def test_failed_preview_is_not_overwritten_by_message_event(self):
+        self.observe()
+        state=copy.deepcopy(self.bridge.ipc.states[T])
+        state['threadRuntimeStatus']={'type':'idle'}
+        state['turns'][0].update(status='failed',error={'message':'Execution failed'})
+        self.bridge.ipc.states[T]=state;self.workspace.observe(state)
+        self.bridge.ipc.states[T]={'id':T,'_metadataOnly':True}
+        row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
+        self.assertEqual(row['activityPreview']['kind'],'failed')
+        self.assertEqual(row['activityPreview']['text'],'Execution failed')
+
+    def test_activity_preview_is_bounded_and_read_only(self):
+        self.observe()
+        self.observe(status='completed',text='a'*7000)
+        row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
+        self.assertEqual(len(row['activityPreview']['text']),6000)
+        self.assertTrue(row['activityPreview']['truncated'])
+        self.assertNotIn('activityPreview',self.workspace.dispatch('local','GET','/api/workspace/threads',None,{})[1]['threads'][0])
+        self.observe(request=True)
+        row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
+        self.assertEqual(row['activityPreview']['kind'],'question')
+        self.assertNotIn('requests',row['activityPreview'])
+
+    def test_interrupted_message_preview_does_not_claim_completion(self):
+        self.observe()
+        self.observe(status='interrupted',text='Partial result')
+        self.bridge.ipc.states.pop(T)
+        row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
+        self.assertEqual(row['activityPreview']['kind'],'other')
+        self.assertEqual(row['activityPreview']['text'],'Partial result')

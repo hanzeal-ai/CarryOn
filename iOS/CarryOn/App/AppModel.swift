@@ -20,6 +20,8 @@ import CarryOnCore
     var devices: [Record] = []
     var selectedDevice = ""
     var status: JSONValue = .null
+    var commandReady = false
+    var historySynchronized = false
     var connected = false
     var reconnecting = false
     @ObservationIgnored lazy var connectivity = ConnectivityMonitor()
@@ -66,7 +68,7 @@ import CarryOnCore
     var notice: String?
     private(set) var removingDevice = false
     private let readReceipts = ReadReceiptSync()
-    private(set) var epoch = UUID() { didSet { endBackgroundSync(); historyUpdatedAt = [:]; displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
+    private(set) var epoch = UUID() { didSet { commandReady = false; historySynchronized = false; endBackgroundSync(); historyUpdatedAt = [:]; displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
     private var liveStream: ConsoleStream?
@@ -129,15 +131,15 @@ import CarryOnCore
     func allows(_ capability: WorkspaceCapability) -> Bool { capability.isGranted(in: device?.value["permissions"] ?? .null) }
     func canWrite(_ capability: WorkspaceCapability) -> Bool { canWrite && allows(capability) }
     func canInteract(_ capability: WorkspaceCapability) -> Bool { canInteract && allows(capability) }
-    var canCompose: Bool { canInteract(editingMessage == .null ? .send : .edit) }
+    var canCompose: Bool { editingMessage == .null ? (selectedThread != nil && canWrite(.send) && !conversationReadOnly) : canInteract(.edit) }
     func allowsRequest(_ path: String, body: JSONValue? = nil) -> Bool {
         guard let capability = WorkspaceCapability.request(path: path, body: body) else { return false }
         return allows(capability)
     }
-    var canWrite: Bool { !removingDevice && authenticated && foreground && connected && status["enabled"].bool == true && status["remoteControl"].bool == true && !writing }
+    var canWrite: Bool { !removingDevice && authenticated && foreground && (connected || commandReady) && status["enabled"].bool == true && status["remoteControl"].bool == true && !writing }
     var conversationReadOnly: Bool { (history["access"]["canInteract"].bool ?? selectedThread?.value["access"]["canInteract"].bool) == false }
-    var canInteract: Bool { canWrite && !conversationReadOnly && history["access"]["nativeReady"].bool != false }
-    var state: String { connected ? history["status"]["state"].text : "unknown" }
+    var canInteract: Bool { canWrite && historySynchronized && historyFailure == nil && !conversationReadOnly && history["access"]["nativeReady"].bool != false }
+    var state: String { connected && historySynchronized ? history["status"]["state"].text : "unknown" }
     var scope: String { addressText + "\n" + selectedDevice }
     var connectionLabel: String {
         if device == nil { return "未选择工作区" }
@@ -305,7 +307,6 @@ import CarryOnCore
         otherActivityCount = 0
         conversationPrefetcher.exclude(thread.id)
         selectedThread = thread; history = displayCache.value(historyCacheKey(thread.id)); readSequence = 0
-        connected = false
         updateSelection()
     }
     func openSubagent(_ id: String, parentID: String) async {
@@ -402,6 +403,7 @@ import CarryOnCore
         selectionUpdate?.cancel(); selectionUpdate = nil
         updates?.cancel(); updates = nil
         liveStream?.close(); liveStream = nil
+        commandReady = false; historySynchronized = false
         connected = false; reconnecting = false
         endBackgroundSync()
     }
@@ -567,9 +569,10 @@ import CarryOnCore
                  "includeSideChats": .bool(sideThreadID != nil), "sideThreadId": sideThreadID.map(JSONValue.string) ?? .null, "sideHistoryLimit": .number(Double(sideHistoryLimit))])
     }
     private func updateSelection() {
-        connected = false
+        historySynchronized = false
         sideHistory = .null
         guard let connection = liveStream, connection.canResubscribe else {
+            connected = false
             updates?.cancel(); updates = nil; liveStream?.close(); liveStream = nil; startStream(); return
         }
         let previous = selectionUpdate, generation = epoch, threadID = selectedThread?.id, limit = historyLimit, sideID = sideThreadID
@@ -585,6 +588,8 @@ import CarryOnCore
         }
     }
     private func startStream() {
+        commandReady = false
+        historySynchronized = false
         guard !removingDevice, foreground, let client = api, !selectedDevice.isEmpty else { return }
         updates?.cancel()
         let generation = epoch, deviceID = selectedDevice
@@ -602,6 +607,8 @@ import CarryOnCore
                     try Task.checkCancellation()
                     self.liveStream = connection
                     connection.setForeground(self.foreground || self.backgroundSyncTask != .invalid)
+                    // HTTP commands need current workspace permission, not a downloaded history window.
+                    async let _: Void = self.refreshCommandReadiness(generation: generation)
                     while !Task.isCancelled {
                         let packet = try await connection.next()
                         try Task.checkCancellation()
@@ -623,6 +630,13 @@ import CarryOnCore
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
+    }
+    private func refreshCommandReadiness(generation: UUID) async {
+        do {
+            let value = try await deviceRequest("/api/status")
+            guard !Task.isCancelled, epoch == generation, !connected else { return }
+            status = value; commandReady = true
+        } catch { /* The live stream reports connection failures and remains the fallback. */ }
     }
     private func apply(_ packet: JSONValue, threadID: String?) async {
         let generation = epoch, capturedScope = scope, limit = historyLimit
@@ -649,9 +663,10 @@ import CarryOnCore
         reconcile(packet["jobs"].array)
         reconcileOutgoing()
         if let revision = packet["workspaceRevision"].int, revision != workspaceRevision { workspaceRevision = revision }
-        if packet["error"].string != nil { historyFailure = packet["error"].string; return }
+        if packet["error"].string != nil { historySynchronized = false; historyFailure = packet["error"].string; return }
         historyFailure = nil
         if let threadID, packet["threadId"].string == threadID, packet["history"].object != nil {
+            historySynchronized = true
             let sequence = packet["readSequence"].int ?? 0
             historyUpdatedAt[threadID] = Date()
             if changed { history = incoming; displayCache.store(history, key: historyCacheKey(threadID), bytes: encodedBytes) }
@@ -676,7 +691,7 @@ import CarryOnCore
     @discardableResult func write(path: String, target: String, body: JSONValue, awaitCompletion: Bool = false) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
-        if target == selectedThread?.id && !canInteract { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
+        if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
         let version = epoch, capturedScope = scope
         writing = true; defer { writing = false }
         do {
@@ -754,6 +769,8 @@ import CarryOnCore
         }
     }
     private func reportStreamFailure(_ failure: Error) {
+        commandReady = false
+        historySynchronized = false
         connected = false; reconnecting = true
         report(failure, operation: "实时连接", blocking: false)
     }
