@@ -1,6 +1,10 @@
 import Foundation
 
 public enum ConversationPresentation {
+    public static func navigationMessages(_ timeline: [JSONValue]) -> [JSONValue] {
+        timeline.filter { ["userMessage", "steeringUserMessage"].contains($0["type"].text) }
+    }
+
     public static func visibleReasoning(_ items: [JSONValue]) -> [JSONValue] {
         var result: [JSONValue] = []
         var turnID: String?

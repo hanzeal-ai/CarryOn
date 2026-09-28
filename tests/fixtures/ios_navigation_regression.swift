@@ -20,16 +20,18 @@ import CarryOnCore
     func pause() async { try? await Task.sleep(for: .seconds(3)) }
     func run() async {
         model.selectedThread = thread
-        var rows: [JSONValue] = (1...150).map { .object(["id": .string("message-\($0)"), "type": .string("agentMessage"), "text": .string("消息 \($0) · 用于验证导航定位和当前消息颜色。")]) }
+        var rows: [JSONValue] = (1...150).map { .object(["id": .string("message-\($0)"), "type": .string($0 % 5 == 0 ? "userMessage" : "agentMessage"), "text": .string("消息 \($0) · 用于验证导航定位和当前消息颜色。")]) }
         model.history = .object(["thread":thread.value,"timeline": .array(rows), "status": .object(["state": .string("idle")])])
         model.historyRevision += 1
         await pause()
         guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.windows.first,
               let list = table(window) else { return }
+        let initialListFrame = list.convert(list.bounds, to: window)
         let before = list.contentOffset.y
         model.activityScrollTarget = "message-20"
         await pause()
         let moved = abs(list.contentOffset.y - before) > 100
+        let floatingButtonKeepsListHeight = abs(list.convert(list.bounds, to: window).height - initialListFrame.height) < 1
         func marker(_ view: UIView, _ id: String) -> UIView? {
             if view.accessibilityIdentifier == "conversation-message-" + id { return view }
             return view.subviews.lazy.compactMap { marker($0, id) }.first
@@ -48,7 +50,7 @@ import CarryOnCore
         let output = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
         try? image.pngData()?.write(to: output.appendingPathComponent("navigation.png"))
-        let result: [String: Any] = ["passed": moved && model.activityScrollTarget == nil && stable, "incomingAndStreamingKeepReadingPosition": stable, "pinnedY": pinnedY ?? -1, "appendedY": appendedY ?? -1, "streamedY": streamedY ?? -1, "activityTargetConsumed":model.activityScrollTarget == nil,"scrolledToEarlierMessage":moved]
+        let result: [String: Any] = ["passed": moved && model.activityScrollTarget == nil && stable && floatingButtonKeepsListHeight, "floatingButtonKeepsListHeight": floatingButtonKeepsListHeight, "incomingAndStreamingKeepReadingPosition": stable, "pinnedY": pinnedY ?? -1, "appendedY": appendedY ?? -1, "streamedY": streamedY ?? -1, "activityTargetConsumed":model.activityScrollTarget == nil,"scrolledToEarlierMessage":moved]
         try? JSONSerialization.data(withJSONObject: result).write(to: output.appendingPathComponent("navigation-result.json"))
     }
 }

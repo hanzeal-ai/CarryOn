@@ -152,6 +152,17 @@ class Catalog:
                           if any(Path(p).expanduser().absolute() in candidates for p in project.get('rootPaths', []))]
                 if len(owners) == 1:
                     pid = owners[0]
+                elif owners and len(set(candidates)) == 1:
+                    # Match Codex's sidebar preference for projects sharing one root:
+                    # single-root, primary-root match, earlier creation, then larger ID.
+                    # Distinct roots sharing a Git repository remain ambiguous.
+                    def preference(key):
+                        project = projects[key]
+                        paths = project.get('rootPaths', [])
+                        return (len(paths) == 1,
+                                Path(paths[0]).expanduser().absolute() == root,
+                                -(project.get('createdAt') or 0), key)
+                    pid = max(owners, key=preference)
             if pid:
                 project = projects.get(pid, {})
                 row['nativeProjectId'] = pid

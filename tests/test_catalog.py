@@ -41,9 +41,41 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(result[tid]['projectRoots'], ['/project/web','/project/api'])
                 self.assertEqual(result[tid]['projectRoot'], '/project/web')
             self.assertEqual(result['other']['nativeProjectId'], 'shared')
-            self.assertNotIn('nativeProjectId', result['ambiguous'])
+            self.assertEqual(result['ambiguous']['nativeProjectId'], 'shared')
             self.assertTrue(result['recent']['projectless'])
             self.assertNotIn('nativeProjectId', result['recent'])
+
+    def test_shared_root_matches_desktop_preference_without_overriding_membership(self):
+        with tempfile.TemporaryDirectory() as home, closing(sqlite3.connect(':memory:')) as db:
+            projects = {
+                'bundle': {'rootPaths': ['/other', '/repo'], 'createdAt': 1},
+                'single': {'rootPaths': ['/repo'], 'createdAt': 9},
+            }
+            state = {'local-projects': projects, 'projectless-thread-ids': ['recent'],
+                     'thread-project-assignments': {'assigned': {'projectId': 'bundle'}}}
+            path = Path(home) / '.codex-global-state.json'
+            db.execute('CREATE TABLE threads(id,project_id)')
+            db.execute("INSERT INTO threads VALUES('native','bundle')")
+            def classify():
+                path.write_text(json.dumps(state))
+                rows = [{'id': tid, 'cwd': '/repo'} for tid in ('inferred','assigned','native','recent')]
+                Catalog(home).classify_projects(db, rows)
+                result = {r['id']: r for r in rows}
+                self.assertEqual(result['assigned']['nativeProjectId'], 'bundle')
+                self.assertEqual(result['native']['nativeProjectId'], 'bundle')
+                self.assertTrue(result['recent']['projectless'])
+                self.assertNotIn('nativeProjectId', result['recent'])
+                return result['inferred']['nativeProjectId']
+            self.assertEqual(classify(), 'single')
+            projects['primary'] = {'rootPaths': ['/repo','/third'], 'createdAt': 10}
+            del projects['single']
+            self.assertEqual(classify(), 'primary')
+            projects['earlier'] = {'rootPaths': ['/repo','/fourth'], 'createdAt': 2}
+            self.assertEqual(classify(), 'earlier')
+            projects['z-tie'] = {'rootPaths': ['/repo','/fifth'], 'createdAt': 2}
+            self.assertEqual(classify(), 'z-tie')
+            state['local-projects'] = dict(reversed(list(projects.items())))
+            self.assertEqual(classify(), 'z-tie')
 
     def test_display_name_and_internal_thread_filter(self):
         with tempfile.TemporaryDirectory() as home:

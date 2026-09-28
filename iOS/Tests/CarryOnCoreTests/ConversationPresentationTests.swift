@@ -69,3 +69,15 @@ private func reasoningItem(_ id: String, _ turn: String, _ text: String, _ statu
     #expect(values.count == 2)
     #expect(values.last?["text"].text == "找到原因")
 }
+
+@Test func navigationContainsOnlyUserMessagesInOrder() {
+    let rows: [JSONValue] = [
+        .object(["id": .string("first"), "type": .string("userMessage"), "text": .string("问题")]),
+        .object(["id": .string("reply"), "type": .string("agentMessage"), "text": .string("回答")]),
+        .object(["id": .string("process"), "type": .string("processGroup")]),
+        .object(["id": .string("followup"), "type": .string("steeringUserMessage"), "text": .string("补充")]),
+        .object(["id": .string("image"), "type": .string("userMessage"), "text": .string("")])
+    ]
+    #expect(ConversationPresentation.navigationMessages(rows).map { $0["id"].text } == ["first", "followup", "image"])
+    #expect(ConversationPresentation.navigationMessages(Array(rows[1...2])).isEmpty)
+}

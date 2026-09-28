@@ -1,5 +1,6 @@
 import SwiftUI
 import CarryOnCore
+import ExyteChat
 
 @main struct CacheRegressionApp: App {
     @State private var fixture = CacheFixture()
@@ -14,10 +15,20 @@ import CarryOnCore
                 else if fixture.screen == 6 {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
+                            TimelineEntry(item: .object(["id": .string("user-bubble"), "type": .string("userMessage"), "text": .string("右侧气泡：**白色文字**，黑色背景")]), threadID: "fixture")
+                            TimelineEntry(item: .object(["id": .string("steering-bubble"), "type": .string("steeringUserMessage"), "text": .string("补充消息同样使用黑底白字")]), threadID: "fixture")
                             WorkspaceBindingRequests()
                             MessageMarkdown(text: "正文 **强调**、`行内代码` 和 [链接](https://example.com)。\n\n> 引用内容\n\n```swift\nlet result = \"完成\"\n```", resolveCreatedThreads: false)
                         }.padding(20)
                     }.background(Design.background)
+                }
+                else if fixture.screen == 7 {
+                    VStack(alignment: .leading, spacing: 20) {
+                        DraftImageThumbnail(dataURL: "data:image/png;base64," + UIImage(systemName: "photo.fill")!.pngData()!.base64EncodedString(), remove: {})
+                        CarryOnChatComposer(text: .constant("追加消息"), stopping: true, send: {}, stop: {}) { Image(systemName: "plus").frame(width: 44, height: 44) }
+                        CarryOnChatComposer(text: .constant(""), resuming: true, send: {}, resume: {}) { Image(systemName: "plus").frame(width: 44, height: 44) }
+                        CarryOnChatComposer(text: .constant("停止后发送新消息"), resuming: true, send: {}, resume: {}) { Image(systemName: "plus").frame(width: 44, height: 44) }
+                    }.padding(20).chatTheme(colors: .init(mainBG: Design.canvas, mainTint: Design.ink, inputBG: Design.input, inputText: Design.ink, sendButtonBackground: Design.ink))
                 }
                 else { Color.white }
             }.environment(fixture.model).tint(Design.ink).preferredColorScheme(fixture.dark ? .dark : .light).task { await fixture.run() }
@@ -158,6 +169,10 @@ import CarryOnCore
             screen = 6; await pause(); try capture("theme-light")
             dark = true; await pause(); try capture("theme-dark")
             screen = 1; await pause(); try capture("settings-dark")
+            screen = 7; await pause(); try capture("composer-dark")
+            dark = false; await pause(); try capture("composer-light")
+            screen = 1; await pause(); try capture("settings-light")
+            dark = true
             screen = 5; await pause(); try capture("activity-dark")
             let result: [String: Any] = ["notificationDiagnostic": notificationDiagnostic, "passed": checks.values.allSatisfy { $0 }, "checks": checks]
             try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL.documentsDirectory.appendingPathComponent("cache-result.json"))

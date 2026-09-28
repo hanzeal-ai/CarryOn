@@ -788,7 +788,7 @@ import CarryOnCore
         draft = editContext["draft"].text; draftImages = editContext["images"].array.compactMap(\.string)
         editContext = .null
     }
-    func compose(images: [JSONValue] = [], queued: Bool = false) async -> Bool {
+    func compose(images: [JSONValue] = []) async -> Bool {
         guard let thread = selectedThread else { return false }
         let text = draft
         let capturedKey = scope + "\n" + thread.id
@@ -800,8 +800,6 @@ import CarryOnCore
         let success: Bool
         if edit != .null {
             success = await operation("edit", fields: ["turnId": edit["turnId"], "prompt": .string(text), "confirmed": .bool(true)])
-        } else if queued {
-            success = await perform("queue-add", target: .init(scope: scope, threadID: thread.id), fields: ["prompt": .string(text), "images": .array(images), "queueFingerprint": history["queue"]["fingerprint"]])
         } else {
             success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body)
         }

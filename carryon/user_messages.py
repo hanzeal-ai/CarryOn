@@ -19,13 +19,18 @@ def _unwrap_attachments(text):
     if not request.startswith('## My request:\n'):
         return text, []
     paths = []
+    image_flag_allowed = False
     for line in prefix[len(HEADER):].splitlines():
         if not line.strip():
+            continue
+        if image_flag_allowed and line in ('Image attachment: true', 'Image attachment: false'):
+            image_flag_allowed = False
             continue
         match = FILE.fullmatch(line)
         if not match or PurePosixPath(match[2]).name != match[1]:
             return text, []
         paths.append(match[2])
+        image_flag_allowed = True
     if not paths:
         return text, []
     return request[len('## My request:\n'):], list(dict.fromkeys(paths))

@@ -31,7 +31,7 @@ struct SettingsView: View {
                     Button { scanning = true } label: { SettingRow(icon: "qrcode.viewfinder", title: "扫码绑定工作区", chevron: true) }
                 }
                 Paper {
-                    HStack { Text("Codex 剩余额度").font(.body); Spacer(); CodexUsageView().id(model.scope) }.padding(16)
+                    HStack { Text("Codex 剩余额度").font(.body); Spacer(); CodexUsageView().id(model.scope) }.padding(.horizontal, 16).padding(.vertical, 10)
                 }.padding(.top, 16)
                 Paper {
                     NavigationLink {

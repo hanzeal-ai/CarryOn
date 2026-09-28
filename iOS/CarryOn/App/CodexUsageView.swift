@@ -26,9 +26,13 @@ struct CodexUsageView: View {
                         ZStack {
                             Circle().stroke(Design.secondary.opacity(0.15), lineWidth: 3)
                             if loading { ProgressView().controlSize(.mini) }
-                            else { Text("—").font(.caption).foregroundStyle(Design.secondary) }
+                            else {
+                                VStack(spacing: 0) {
+                                    Text("—").font(.caption)
+                                    Text("额度").font(.system(size: 9))
+                                }.foregroundStyle(Design.secondary)
+                            }
                         }.frame(width: 44, height: 44)
-                        Text("额度").font(.caption).foregroundStyle(Design.secondary)
                     }
                 }
             }.padding(4).contentShape(Rectangle())
@@ -111,12 +115,20 @@ private struct CodexUsageWindow: View {
                     Circle().trim(from: 0, to: remaining / 100)
                         .stroke(remaining <= 10 ? Design.orange : Design.ink, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                    Text("\(remaining, specifier: "%.0f")%")
-                        .font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium)).monospacedDigit()
-                } else { Text("—").font(.caption).foregroundStyle(Design.secondary) }
+                }
+                VStack(spacing: 0) {
+                    if let remaining {
+                        Text("\(remaining, specifier: "%.0f")%")
+                            .font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium)).monospacedDigit()
+                    } else { Text("—").font(.caption).foregroundStyle(Design.secondary) }
+                    if compact {
+                        Text(label.replacingOccurrences(of: "额度", with: ""))
+                            .font(.system(size: ringSize * 9 / 44)).foregroundStyle(Design.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                    }
+                }.padding(.horizontal, 3)
             }.frame(width: compact ? ringSize : ringSize * 52 / 44, height: compact ? ringSize : ringSize * 52 / 44)
-            Text(compact ? label.replacingOccurrences(of: "额度", with: "") : label + " · 剩余")
-                .font(.caption).foregroundStyle(Design.secondary)
+            if !compact { Text(label + " · 剩余").font(.caption).foregroundStyle(Design.secondary) }
             if !compact, case .number(let reset) = window["resetsAt"] {
                 Text("重置时间 " + Date(timeIntervalSince1970: reset).formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2).foregroundStyle(Design.secondary)

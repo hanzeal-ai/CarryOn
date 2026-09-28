@@ -87,7 +87,6 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var stopping = false
     var resuming = false
     let send: () -> Void
-    var queue: (() -> Void)?
     var stop: (() -> Void)?
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
@@ -102,11 +101,12 @@ struct CarryOnChatComposer<Accessories: View>: View {
                 .font(.body).lineLimit(1...6).disabled(!draftEditable || !sendAllowed)
                 .foregroundStyle(theme.colors.inputText)
             HStack(alignment: .center, spacing: 0) {
-                if action == .send, stopping, let queue {
-                    Menu {
-                        Button("当前执行结束后发送", systemImage: "text.badge.plus", action: queue).disabled(!sendAllowed)
-                        if let stop { Button("停止当前执行", systemImage: "stop", action: stop).disabled(!stopAllowed) }
-                    } label: { Label("发送方式", systemImage: "chevron.down").font(.caption).frame(minHeight: 44) }.disabled(disabled).accessibilityLabel("发送方式")
+                if action == .send, stopping, let stop {
+                    Button(action: stop) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(theme.colors.mainTint).frame(width: 44, height: 44)
+                    }.disabled(disabled || !stopAllowed).accessibilityLabel("停止执行")
                 }
                 Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
                     Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")

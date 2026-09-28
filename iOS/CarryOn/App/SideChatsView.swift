@@ -88,7 +88,7 @@ private struct SideChatConversation: View {
             CarryOnChatComposer(text: Binding(get: { model.draftStore.texts[draftKey] ?? "" }, set: { model.draftStore.texts[draftKey] = $0 }),
                 disabled: !writable, sendAllowed: model.allows(.send), stopAllowed: model.allows(.stop), hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
                 resuming: history["status"]["state"].text == "idle" && history["controls"]["lastTurnStatus"].text == "interrupted",
-                send: { Task { await send() } }, queue: { Task { await send(queued: true) } },
+                send: { Task { await send() } },
                 stop: { Task { await send(stopping: true) } },
                 resume: { Task { _ = await model.perform("resume", target: target, fields: ["turnId": history["controls"]["lastTurnId"]]) } }) {
                     ConversationPhotoPicker(images: images, disabled: !writable || !model.allows(.send))
@@ -142,7 +142,7 @@ private struct SideChatConversation: View {
         .onChange(of: model.sideHistoryFailure) { _, value in failure = value }
         .onDisappear { if model.sideThreadID == chat.id { model.watchSide(nil) } }
     }
-    private func send(stopping: Bool = false, queued: Bool = false) async {
+    private func send(stopping: Bool = false) async {
         guard writable, model.allows(stopping ? .stop : .send) else { return }
         let scope = model.scope, key = draftKey, text = model.draftStore.texts[draftKey] ?? ""
         let sentImages = images.wrappedValue
@@ -152,8 +152,6 @@ private struct SideChatConversation: View {
         let ok: Bool
         if stopping {
             ok = await model.perform("interrupt", target: destination, fields: ["expectedTurnId": history["controls"]["activeTurnId"]])
-        } else if queued {
-            ok = await model.perform("queue-add", target: destination, fields: ["prompt": .string(text), "images": .array(sentImages.map(JSONValue.string)), "queueFingerprint": history["queue"]["fingerprint"]])
         } else {
             ok = await model.write(path: destination.path("compose"), target: chat.id, body: destination.body(["prompt": .string(text), "images": .array(sentImages.map(JSONValue.string))]))
         }

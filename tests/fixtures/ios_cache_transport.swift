@@ -49,7 +49,7 @@ public final class CacheProtocol: URLProtocol, @unchecked Sendable {
         else if path == "/api/standby" { result = .object(["supported": .bool(true), "enabled": .bool(true), "effective": .bool(true)]) }
         else if path == "/api/status" { result = .object(["deviceInfo": .object(["hostname": .string("Fixture Mac"), "listenHost": .string("127.0.0.1"), "port": .number(9000)])]) }
         else if path == "/api/usage" {
-            let window: JSONValue = .object(["id": .string("primary"), "usedPercent": .number(20), "windowDurationMins": .number(300)])
+            let window: JSONValue = .object(["id": .string("primary"), "usedPercent": .number(20), "windowDurationMins": .number(10080)])
             let limit: JSONValue = .object(["id": .string("codex"), "name": .string("Codex"), "windows": .array([window])])
             result = .object(["limits": .array([limit])])
         }

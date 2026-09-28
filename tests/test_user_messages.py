@@ -11,6 +11,21 @@ def envelope(path, request='看一下图片\n保留我的正文。'):
 
 
 class UserMessageTests(unittest.TestCase):
+    def test_attachment_image_metadata_is_display_only(self):
+        raw = envelope('/tmp/example.png').replace('\n\nDistinguish', '\n\nImage attachment: true\n\nDistinguish')
+        for kind, key in [('userMessage', 'content'), ('steeringUserMessage', 'input')]:
+            result = project_item({'id': 'u', 'type': kind, key: [{'type': 'text', 'text': raw}]}, {'turnId': 't'}, 0)
+            self.assertEqual(result['displayText'], '看一下图片\n保留我的正文。')
+            self.assertEqual(result['text'], raw)
+            self.assertEqual(result['data'][key][0]['text'], raw)
+            self.assertEqual(result['artifacts'][0]['name'], 'example.png')
+        for flag in ('true', 'false'):
+            self.assertEqual(unwrap_user_message(raw.replace('attachment: true', 'attachment: ' + flag))[1], ['/tmp/example.png'])
+        for invalid in [raw.replace('attachment: true', 'attachment: unknown'),
+                        raw.replace('Image attachment: true', 'Image attachment: true\nImage attachment: true'),
+                        raw.replace('## example.png: /tmp/example.png\n\n', ''), '引用：\n' + raw]:
+            self.assertEqual(unwrap_user_message(invalid), (invalid, []))
+
     def test_projection_preserves_original_and_structured_images(self):
         raw = envelope('/tmp/example.png')
         for kind, key in [('userMessage', 'content'), ('steeringUserMessage', 'input')]:

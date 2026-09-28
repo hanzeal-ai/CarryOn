@@ -152,9 +152,22 @@ struct ConversationView: View {
         .keyboardDismissMode(.interactive)
         .mainHeaderBuilder { historyHeader }
         .enableLoadMoreOlderMessages(hasMoreToLoad: canLoadEarlier, handleClosure: loadEarlierMessages)
-        .betweenListAndInputViewBuilder { composerAccessories }
+        .betweenListAndInputViewBuilder {
+            composerAccessories.frame(maxWidth: .infinity)
+                .anchorPreference(key: ConversationComposerBounds.self, value: .bounds) { $0 }
+        }
         .onContentOffsetChange(updateContentOffset)
         .carryOnChatAppearance()
+        .overlayPreferenceValue(ConversationComposerBounds.self) { anchor in
+            GeometryReader { geometry in
+                if let anchor {
+                    latestButton
+                        .padding(.trailing, 16)
+                        .padding(.bottom, max(0, geometry.size.height - geometry[anchor].minY) + 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+            }
+        }
         .overlay(alignment: .leading) { navigationRail.offset(x: 8) }
         .overlay(alignment: .leading) { navigationPreviewCard }
         .background(GeometryReader { geometry in
@@ -296,11 +309,20 @@ struct ConversationView: View {
             abs($0.value.midY - center) < abs($1.value.midY - center)
         }) { navigationAnchor = nearest.key }
     }
+    private var navigationItems: [JSONValue] { ConversationPresentation.navigationMessages(timeline) }
+    private var navigationSelection: String? {
+        guard let anchor = navigationAnchor, let index = timeline.firstIndex(where: { $0.stableID == anchor }) else { return nil }
+        return ConversationPresentation.navigationMessages(Array(timeline.prefix(index + 1))).last?.stableID
+    }
+    private func navigationText(_ item: JSONValue) -> String {
+        let text = item["displayText"].string ?? item["text"].text
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "图片消息" : text
+    }
     private func navigationButton(_ item: JSONValue, index: Int, center: Int) -> some View {
-        let selected = (navigationPreview?.stableID ?? navigationAnchor) == item.stableID
+        let selected = (navigationPreview?.stableID ?? navigationSelection) == item.stableID
         let widths: [CGFloat] = [28, 22, 16, 10, 6]
         let width = widths[min(4, abs(index - center))]
-        let label = String((item["text"].string ?? item["title"].string ?? "执行活动").prefix(60))
+        let label = String(navigationText(item).prefix(60))
         return Button {
             navigationPreview = nil
             navigate(to: item.stableID)
@@ -315,15 +337,9 @@ struct ConversationView: View {
     }
     @ViewBuilder private var navigationPreviewCard: some View {
         if let item = navigationPreview {
-            let index = timeline.firstIndex { $0.stableID == item.stableID } ?? 0
-            let user = timeline.prefix(index + 1).last { ["userMessage", "steeringUserMessage"].contains($0["type"].text) }
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top) {
-                    Text(String((user?["text"].string ?? item["title"].string ?? "执行过程").prefix(140)))
-                        .font(.subheadline.weight(.semibold)).lineLimit(2)
-                }
-                Text(String((item["text"].string ?? item["title"].string ?? ConversationProcess.summary(item)).prefix(500)))
-                    .font(.subheadline).foregroundStyle(Design.secondary).lineLimit(5)
+                Text(String(navigationText(item).prefix(500)))
+                    .font(.subheadline).foregroundStyle(Design.ink).lineLimit(5)
             }.padding(14).frame(width: min(300, max(180, navigationBounds.width - 52)), alignment: .leading)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.2)))
@@ -336,29 +352,29 @@ struct ConversationView: View {
         return content.minY - viewport.minY
     }
     private func navigationItem(at y: CGFloat) -> JSONValue? {
-        guard !timeline.isEmpty, let origin = navigationContentOrigin else { return nil }
+        guard !navigationItems.isEmpty, let origin = navigationContentOrigin else { return nil }
         let index = Int(floor((y - origin) / 10))
-        return timeline[max(0, min(timeline.count - 1, index))]
+        return navigationItems[max(0, min(navigationItems.count - 1, index))]
     }
     private func keepNavigationVisible(_ anchor: String, proxy: ScrollViewProxy) {
-        guard let index = timeline.firstIndex(where: { $0.stableID == anchor }),
+        guard let index = navigationItems.firstIndex(where: { $0.stableID == anchor }),
               let origin = navigationContentOrigin else { return }
         let top = origin + CGFloat(index) * 10
-        let height = min(180, CGFloat(timeline.count) * 10)
+        let height = min(180, CGFloat(navigationItems.count) * 10)
         if top < 0 { proxy.scrollTo(anchor, anchor: .top) }
         else if top + 10 > height { proxy.scrollTo(anchor, anchor: .bottom) }
     }
     private var navigationRail: some View {
         // Expansion belongs to the current gesture, not the last scroll destination.
-        let center = timeline.firstIndex { $0.stableID == navigationPreview?.stableID } ?? -100
+        let center = navigationItems.firstIndex { $0.stableID == navigationPreview?.stableID } ?? -100
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
-                    ForEach(Array(timeline.enumerated()), id: \.element.stableID) { index, item in
+                    ForEach(Array(navigationItems.enumerated()), id: \.element.stableID) { index, item in
                         navigationButton(item, index: index, center: center)
                     }
                 }.background(ConversationNavigationMarker(id: "content", tracker: navigationRailTracker))
-            }.scrollIndicators(.hidden).frame(width: 32, height: min(180, CGFloat(timeline.count) * 10))
+            }.scrollIndicators(.hidden).frame(width: 32, height: min(180, CGFloat(navigationItems.count) * 10))
                 .background(ConversationNavigationMarker(id: "viewport", tracker: navigationRailTracker))
                 .highPriorityGesture(DragGesture(minimumDistance: 0)
                     .updating($navigationDragging) { _, active, _ in active = true }
@@ -382,7 +398,7 @@ struct ConversationView: View {
                 .onChange(of: navigationPreview?.stableID) { _, preview in
                     if let preview { keepNavigationVisible(preview, proxy: proxy) }
                 }
-                .onChange(of: navigationAnchor) { _, anchor in
+                .onChange(of: navigationSelection) { _, anchor in
                     if let anchor, navigationPreview == nil { keepNavigationVisible(anchor, proxy: proxy) }
                 }
         }.accessibilityLabel("对话消息导航")
@@ -397,7 +413,6 @@ struct ConversationView: View {
             hasImages: !images.isEmpty, stopping: model.state == "running",
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             send: submitMessage,
-            queue: supportsOperation("queue-add", in: model.history) ? { Task { await send(queued: true) } } : nil,
             stop: interruptTurn,
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
                 PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
@@ -470,22 +485,6 @@ struct ConversationView: View {
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !bottomVisible {
-                Button {
-                    newMessages = false; navigationPinned = false; pendingNavigation = nil
-                    model.activityScrollTarget = nil
-                    restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
-                } label: {
-                    HStack(spacing: 6) {
-                        if newMessages { Text("有新消息").font(.subheadline) }
-                        Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
-                    }.padding(.horizontal, newMessages ? 14 : 0)
-                        .frame(minWidth: 44, minHeight: 44).background(Design.surface, in: Capsule())
-                        .overlay(Capsule().stroke(Design.border, lineWidth: 1))
-                }.accessibilityLabel(newMessages ? "有新消息，回到最新" : "回到最新")
-                    .accessibilityIdentifier("conversation-latest")
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
             if !model.conversationReadOnly {
                 if !model.connected && model.allows(.send) {
                     Text("可继续编辑草稿，连接恢复后可发送").font(.caption).foregroundStyle(Design.secondary)
@@ -509,10 +508,27 @@ struct ConversationView: View {
             }
         }.padding(.horizontal, 16)
     }
-    private func send(queued: Bool = false) async {
+    @ViewBuilder private var latestButton: some View {
+        if !bottomVisible {
+            Button {
+                newMessages = false; navigationPinned = false; pendingNavigation = nil
+                model.activityScrollTarget = nil
+                restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
+            } label: {
+                HStack(spacing: 6) {
+                    if newMessages { Text("有新消息").font(.subheadline) }
+                    Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
+                }.padding(.horizontal, newMessages ? 14 : 0)
+                    .frame(minWidth: 44, minHeight: 44).background(Design.surface, in: Capsule())
+                    .overlay(Capsule().stroke(Design.border, lineWidth: 1))
+            }.accessibilityLabel(newMessages ? "有新消息，回到最新" : "回到最新")
+                .accessibilityIdentifier("conversation-latest")
+        }
+    }
+    private func send() async {
         guard !submitting, model.canCompose, !loadingImages else { return }
         submitting = true; defer { submitting = false }
-        if await model.compose(images: images.map(JSONValue.string), queued: queued) { photos = [] }
+        if await model.compose(images: images.map(JSONValue.string)) { photos = [] }
     }
     private func markRead() {
         let sequence = model.readSequence
@@ -543,6 +559,7 @@ struct ConversationTimelineRow: View {
 }
 
 struct TimelineEntry: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     @Environment(\.conversationContentContext) private var contentContext
     let item: JSONValue
@@ -571,7 +588,8 @@ struct TimelineEntry: View {
                 let messageText = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
                 if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     MessageMarkdown(text: messageText, artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
-                        .padding(user ? 13 : 0).background(user ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 20))
+                        .environment(\.colorScheme, user ? .dark : colorScheme)
+                        .padding(user ? 13 : 0).background(user ? Color.black : .clear, in: RoundedRectangle(cornerRadius: 20))
                         .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
                         .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
                         .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
@@ -1003,4 +1021,9 @@ private struct ConversationNavigationMarker: UIViewRepresentable {
 private struct ConversationNavigationBounds: PreferenceKey {
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+private struct ConversationComposerBounds: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
 }
