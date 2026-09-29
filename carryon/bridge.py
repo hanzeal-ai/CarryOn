@@ -443,7 +443,7 @@ class Bridge:
                 payload = json.dumps({"prompt": prompt, "title": job["expectedTitle"]}, ensure_ascii=False)
                 target_instruction = ('先调用 codex_app 的 list_projects，确认 projectId 为 ' + json.dumps(project['id']) +
                     ' 的本机项目存在，路径为 ' + json.dumps(project['cwd']) + '；不匹配就停止并报告失败。'
-                    'create_thread 的 target 使用 type=project、该 projectId，environment.type 在 isGitRepository 为 true 时用 worktree，否则用 local。'
+                    'create_thread 的 target 使用 type=project、该 projectId，environment.type 使用 local，在项目目录当前检出的分支上创建会话。'
                     '不要指定 startingState。model 和 thinking 均省略。') if project else 'target 使用 {"type":"projectless"}，model 和 thinking 均省略。'
                 prompt = (
                     "用户通过 CarryOn 明确请求创建一个新任务。请只调用一次 codex_app 的 create_thread 工具，"
@@ -568,8 +568,7 @@ class Bridge:
                 target = args.get('target') or {}
                 project = job.get('creationProject')
                 target_matches = (target.get('type') == 'project' and target.get('projectId') == project['id']
-                                  and isinstance(project.get('isGitRepository'), bool)
-                                  and target.get('environment') == {'type': 'worktree' if project['isGitRepository'] else 'local'}) if project else target == {'type': 'projectless'}
+                                  and target.get('environment') == {'type': 'local'}) if project else target == {'type': 'projectless'}
                 if (call.get("status") != "completed" or call.get("error")
                         or not target_matches
                         or args.get("title") != job["expectedTitle"]

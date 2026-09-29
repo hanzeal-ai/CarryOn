@@ -47,7 +47,7 @@ class ProjectCreationTests(unittest.TestCase):
             'other':{'rootPaths':['/project']}}}))
         pid=project_identity('/project',native_id='bundle')[0]
         project=resolve_project(self.bridge.catalog,pid)
-        self.assertEqual(project,{'id':'bundle','cwd':'/project','groupId':pid,'isGitRepository':True})
+        self.assertEqual(project,{'id':'bundle','cwd':'/project','groupId':pid})
         self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},project))
         self.assertFalse(belongs({'cwd':'/project','projectRoot':'/project'},project))
         self.assertFalse(belongs({'nativeProjectId':'other','cwd':'/project'},project))
@@ -58,8 +58,8 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual(resolve_project(self.bridge.catalog,project_identity('/second',native_id='bundle')[0])['id'],'bundle')
 
     def setUp(self):
-        git_state = patch('carryon.creation.is_git_repository', return_value=True)
-        git_state.start(); self.addCleanup(git_state.stop)
+        directory_state = patch('carryon.creation.Path.is_dir', return_value=True)
+        directory_state.start(); self.addCleanup(directory_state.stop)
         self.temp=tempfile.TemporaryDirectory();self.home=Path(self.temp.name)
         self.state=self.home/'.codex-global-state.json'
         self.state.write_text(json.dumps({'local-projects':{'native-project':{'rootPaths':['/project']}}}))
@@ -83,10 +83,18 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertIn(json.dumps(prompt,ensure_ascii=False),payload)
         self.assertIn('native-project',payload)
         self.assertIn('list_projects',payload)
+        self.assertIn('environment.type 使用 local',payload)
+        self.assertNotIn('worktree',payload)
         self.assertNotIn('"type":"projectless"',payload)
         self.assertEqual(submit(self.bridge,'project-create-1',prompt,self.project)['id'],job['id'])
         self.assertEqual(len(self.bridge.ipc.prompts),1)
         with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','different',self.project)
+    def test_rejects_unavailable_project_directory(self):
+        with patch('carryon.creation.Path.is_dir', return_value=False):
+            with self.assertRaises(BridgeError):
+                submit(self.bridge,'project-create-1','hello',self.project)
+        self.assertEqual(self.bridge.ipc.prompts,[])
+
     def test_rejects_missing_project_busy_and_unowned_candidates(self):
         with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','hello',project_identity('/other')[0])
         self.bridge.ipc.states[THREAD]['threadRuntimeStatus']['type']='active'
@@ -129,25 +137,25 @@ class ProjectCreationTests(unittest.TestCase):
     def test_native_creation_result_must_match_project_and_prompt(self):
         job=submit(self.bridge,'project-create-1','hello',self.project);self.settled(job)
         call={'status':'completed','arguments':{'prompt':'hello','title':job['expectedTitle'],
-             'target':{'type':'project','projectId':'wrong','environment':{'type':'worktree'}}},
+             'target':{'type':'project','projectId':'wrong','environment':{'type':'local'}}},
              'result':{'content':[{'type':'text','text':json.dumps({'hostId':'local','threadId':CHILD})}]}}
         self.bridge.turn_evidence=lambda *args:{'status':'completed','createCalls':[call]}
-        self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/worktree','projectRoot':'/project','nativeProjectId':'native-project'})
+        self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/project','projectRoot':'/project','nativeProjectId':'native-project'})
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
         call['arguments']['target']['projectId']='native-project'
-        call['arguments']['target']['environment'] = {'type': 'local'}
+        call['arguments']['target']['environment'] = {'type': 'worktree'}
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
         call['arguments']['target']['environment'] = {'type': 'worktree', 'startingState': {'type': 'working-tree'}}
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
-        call['arguments']['target']['environment'] = {'type': 'worktree'}
+        call['arguments']['target']['environment'] = {'type': 'local'}
         self.assertEqual(self.bridge.refresh_job(job['id'])['createdThreadId'],CHILD)
-    def test_queued_worktree_id_requires_native_binding(self):
+    def test_queued_creation_id_requires_native_binding(self):
         catalog=Catalog(self.home)
         with self.assertRaises(ValueError):catalog.created_thread_id({'clientThreadId':THREAD})
         self.state.write_text(json.dumps({'electron-persisted-atom-state':{'client-thread-bindings-v1':{THREAD:CHILD}}}))
         self.assertEqual(catalog.created_thread_id({'clientThreadId':THREAD}),CHILD)
 
-    def test_prefixed_queued_worktree_id_resolves_only_through_native_binding(self):
+    def test_prefixed_queued_creation_id_resolves_only_through_native_binding(self):
         catalog=Catalog(self.home)
         client_id='client-new-thread:438ce5fa-14b0-495d-a349-a9b5dc84f50f'
         with self.assertRaises(ValueError):catalog.created_thread_id({'clientThreadId':client_id})
