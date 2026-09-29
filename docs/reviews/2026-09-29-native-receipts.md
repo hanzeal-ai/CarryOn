@@ -12,7 +12,7 @@
 - 服务重启前仍为 preparing 的请求确定未投递，记为失败；dispatching 仍按未知处理。
 - 创建表单等待真实 createdThreadId，不能把 controller 已收到指令当作新会话创建完成。AppServer 已有 createdThreadId 的成功回执不再追踪后续任务执行。
 
-本机 `/Applications/ChatGPT.app/Contents/Resources/app.asar` 原始证据：router 超时返回 `request-timeout`；handler 明确失败返回 error.message；acceptFromFollower 等待 storage.update 后返回成功，但队列 broadcast 不等待；wasMessageAccepted 使用 userMessage.clientId。只读检查安装包，未执行真实消息发送。
+本机 `/Applications/ChatGPT.app/Contents/Resources/app.asar` 原始证据：router 超时返回 `request-timeout`，follower 包装超时使用 `<method>-timeout`，二者均保留未知；handler 明确失败返回 error.message；acceptFromFollower 等待 storage.update 后返回成功，但队列 broadcast 不等待；wasMessageAccepted 使用 userMessage.clientId。只读检查安装包，未执行真实消息发送。
 
 ## 验证
 
@@ -24,5 +24,7 @@
 - 独立审查发现并修复队列并发覆盖和云端 HTTP status 丢失，随后复核原始代码与测试证据；最终独立结论：接受，无剩余阻断缺陷（适用于隔离工作树，合入后另核验交集）。
 
 ## 恢复与集成
+
+组合审查发现文本归一化会改变既有未决请求的 fingerprint；现保留原始 wire prompt 计算幂等标识，投递文本仍按当前契约规范化。新增原始空白与同 ID 重试回归通过。
 
 没有数据库 schema 迁移，没有自动重发未知请求。若需回滚，回退本次代码提交并保留已有 Journal 与客户端请求 ID；不可删除记录来重发。合入前备份并保留 main 上另一会话的全部未提交改动，仅提交本任务差异；完成三方差异预检及集成回归后再交还 legacy 清理。

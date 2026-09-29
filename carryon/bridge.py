@@ -359,12 +359,14 @@ class Bridge:
         from .contracts import digest
         from .operations import controls,submit as operate
         from .images import validate_images
+        # Idempotency binds the original wire payload, before native text normalization.
+        raw_prompt = prompt
         images=validate_images(images)
         if not isinstance(prompt,str):raise ValueError('消息必须是文本')
         if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_id):raise ValueError('requestId 无效')
         valid_id(thread_id)
         self.assert_target(thread_id, parent_id)
-        fingerprint=digest([thread_id,prompt,images] + ([parent_id] if parent_id else []))
+        fingerprint=digest([thread_id,raw_prompt,images] + ([parent_id] if parent_id else []))
         ipc,generation=self.require()
         previous=self.journal.get(request_id)
         if previous:

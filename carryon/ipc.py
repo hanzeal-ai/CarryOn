@@ -102,9 +102,10 @@ class DesktopIPC:
             response = waiter["response"]
             if response.get("resultType") != "success":
                 error = response.get("error", "Codex 拒绝请求")
-                # A handler error is a rejection; only a router timeout loses
-                # the acknowledgement after dispatch.
-                raise IPCError(error, uncertain=error in ("timeout", "request-timeout"))
+                # Router and native follower deadlines lose the acknowledgement;
+                # an explicit handler refusal is a known failure.
+                timeout = isinstance(error, str) and (error == "timeout" or error.endswith("-timeout"))
+                raise IPCError(error, uncertain=timeout)
             return response
         except OSError as exc:
             raise IPCError("Socket 写入或读取失败", uncertain=True) from exc

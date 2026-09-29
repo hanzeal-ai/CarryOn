@@ -35,6 +35,15 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual(self.bridge.compose(T,'compose-running','hello')['id'],job['id'])
         self.assertEqual(len(self.bridge.ipc.calls),1)
         with self.assertRaises(BridgeError):self.bridge.compose(T,'compose-running','other')
+    def test_compose_identity_preserves_original_wire_whitespace(self):
+        from carryon.contracts import digest
+        self.bridge.ipc.state = state('active')
+        self.bridge.ipc.snapshot = lambda _: ('owner', self.bridge.ipc.state)
+        job = self.bridge.compose(T, 'compose-whitespace', '  hello  ')
+        self.assertEqual(job['composeFingerprint'], digest([T, '  hello  ', []]))
+        self.assertEqual(self.bridge.compose(T, 'compose-whitespace', '  hello  ')['id'], job['id'])
+        self.assertEqual(len(self.bridge.ipc.calls), 1)
+
     def test_waiting_uses_original_queue_and_readonly_is_rejected(self):
         pending=state('active');pending['requests']=[{'id':1,'method':'item/tool/requestUserInput','params':{'questions':[]}}]
         self.bridge.ipc.snapshot=lambda tid:('owner',pending);self.bridge.ipc.current=lambda tid:pending

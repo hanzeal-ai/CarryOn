@@ -129,7 +129,7 @@ class WakeSnapshotTests(unittest.TestCase):
 
 class ReceiptErrorTests(unittest.TestCase):
     def test_explicit_refusal_is_failed_but_router_timeout_is_uncertain(self):
-        for error, uncertain in [('permission denied', False), ('no-client-found', False), ('request-timeout', True)]:
+        for error, uncertain in [('permission denied', False), ('no-client-found', False), ('request-timeout', True), ('thread-follower-start-turn-timeout', True)]:
             ipc = DesktopIPC('unused')
             def respond(message):
                 waiter = ipc.pending[message['requestId']]
