@@ -1,4 +1,6 @@
 """Concurrency contracts using real Bridge/Journal and isolated native evidence."""
+import hashlib
+import json
 import tempfile
 import threading
 import time
@@ -56,13 +58,17 @@ class LiveStateTests(unittest.TestCase):
         self.assertTrue(second.owner.closed.is_set())
 
     def test_slow_job_reconciliation_does_not_block_two_streams_or_repeat_reads(self):
-        self.journal.insert({'id':'request-slow', 'fingerprint':'f', 'kind':'message',
+        fingerprint = hashlib.sha256(json.dumps(['create', T, 'prompt'], ensure_ascii=False).encode()).hexdigest()
+        self.bridge.catalog = SimpleNamespace(get=lambda tid: {'id': tid, 'created_at': time.time()})
+        self.journal.insert({'id':'request-slow', 'fingerprint':fingerprint, 'kind':'create', 'expectedTitle':'title',
             'threadId':T, 'created':time.time(), 'state':'accepted', 'turnId':'turn'})
         entered = threading.Event()
         def evidence(*_):
             entered.set()
             if not self.release.wait(3): raise RuntimeError('test timeout')
-            return {'status': 'completed'}
+            return {'status': 'completed', 'createCalls': [{'status': 'completed',
+                'arguments': {'target': {'type': 'projectless'}, 'prompt': 'prompt', 'title': 'title'},
+                'result': {'content': [{'type': 'text', 'text': json.dumps({'hostId': 'local', 'threadId': 'child'})}]}}]}
         self.bridge.turn_evidence = Mock(side_effect=evidence)
         first, second = self.open(), self.open()
         self.assertTrue(entered.wait(2))

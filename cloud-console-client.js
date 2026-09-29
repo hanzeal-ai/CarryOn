@@ -23,7 +23,7 @@ class CloudConsoleClient extends CarryOnClient {
     if(epoch!==this.epoch)throw Error('设备已改变，请重新读取状态');
     if(!response.ok){
       if(response.status===401){this.token='';this.close();this.onAuthError();}
-      throw Error(result.error||'云端请求失败');
+      throw responseError(result.error||'云端请求失败',response.status);
     }
     return result;
   }
@@ -59,9 +59,9 @@ class CloudConsoleClient extends CarryOnClient {
     if(epoch!==this.epoch)throw Error('设备已改变，请重新读取状态');
     return result;
   }
-  requestJob(path,body,key,pending,storageKey,retainUncertain=false) {
+  requestJob(path,body,key,pending,storageKey) {
     return super.requestJob(path,body,key,pending,
-      this.storageScope+(storageKey==='carryon-pending'?'pending':'operations'),retainUncertain);
+      this.storageScope+(storageKey==='carryon-pending'?'pending':'operations'));
   }
   subscribe(selection) {
     const key=JSON.stringify([this.epoch,this.device,selection.threadId??null,

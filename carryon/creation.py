@@ -82,7 +82,7 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
         with bridge.lock:
             bridge.check_generation(ipc, generation)
             if authorize: authorize()
-            if any(job['threadId'] == row['id'] and job['state'] in ('preparing', 'dispatching', 'accepted', 'uncertain') for job in bridge.journal.list()):
+            if any(job['threadId'] == row['id'] and job['state'] in ('preparing', 'dispatching') for job in bridge.journal.list()):
                 continue
         try:
             bridge.assert_target(row['id'])

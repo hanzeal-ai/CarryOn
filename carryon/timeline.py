@@ -105,7 +105,7 @@ def project_item(item, turn, index):
         title = ("手动" if item.get("source") == "manual" else "自动") + "压缩上下文"
     display_body = unwrap_user_message(body)[0] if kind in ("userMessage", "steeringUserMessage") else body
     return {"id": f"{turn.get('turnId')}:{item.get('id', index)}", "nativeId": item.get("id"),
-        "clientMessageId": item.get("clientUserMessageId", item.get("clientMessageId")),
+        "clientMessageId": item.get("clientUserMessageId", item.get("clientMessageId", item.get("clientId"))),
         "turnId": turn.get("turnId"), "type": kind, "title": title, "status": status,
         "text": body, **({"displayText": display_body} if display_body != body else {}), "phase": item.get("phase"), "durationMs": item.get("durationMs"),
         "data": data, "artifacts": artifact_references(kind, data), "supported": kind in FIELDS,

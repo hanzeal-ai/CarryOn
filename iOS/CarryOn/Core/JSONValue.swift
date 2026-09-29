@@ -51,6 +51,7 @@ public struct APIError: LocalizedError, Sendable {
     public let status: Int
     public let message: String
     public var errorDescription: String? { message }
+    public var isWriteRejection: Bool { (400..<500).contains(status) && status != 408 }
     public init(_ message: String, status: Int = 0) { self.message = message; self.status = status }
 }
 

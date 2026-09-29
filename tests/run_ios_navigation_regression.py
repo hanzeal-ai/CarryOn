@@ -31,7 +31,7 @@ with (work / "build.log").open("w") as log:
     subprocess.run(["xcodebuild", "-project", str(source / "CarryOn.xcodeproj"), "-scheme", "CarryOn",
                     "-configuration", "Debug", "-sdk", "iphonesimulator", "-destination", f"id={device}",
                     "-derivedDataPath", str(work / "build"), "-clonedSourcePackagesDirPath", str(repo / "iOS/.build/SourcePackages"),
-                    "ARCHS=arm64", "CODE_SIGN_IDENTITY=-", "build"], stdout=log, stderr=subprocess.STDOUT, check=True)
+                    "-skipPackageUpdates", "ARCHS=arm64", "CODE_SIGN_IDENTITY=-", "build"], stdout=log, stderr=subprocess.STDOUT, check=True)
 app = work / "build/Build/Products/Debug-iphonesimulator/CarryOn.app"
 subprocess.run(["xcrun", "simctl", "install", device, str(app)], check=True)
 bundle = "com.hanzeal.carryon." + mode + "regression"
@@ -44,7 +44,7 @@ for _ in range(150):
     if result.exists() and result.stat().st_mtime_ns != previous:
         data = json.loads(result.read_text())
         shutil.copy2(result, work / "result.json")
-        if mode == "navigation": shutil.copy2(container / "Documents/navigation.png", work / "navigation.png")
+        shutil.copy2(container / ("Documents/" + mode + ".png"), work / (mode + ".png"))
         print(json.dumps(data, ensure_ascii=False, indent=2))
         sys.exit(0 if data["passed"] else 1)
     time.sleep(0.2)

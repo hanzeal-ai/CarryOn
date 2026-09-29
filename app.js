@@ -419,7 +419,7 @@ function renderJobs(jobs) {
     label.append(node('small','',job.error || job.result?.goalPauseError || job.id)); row.append(label);
     if(job.createdThreadId){ const open=node('button','quiet','打开会话');open.onclick=async()=>{await loadThreads();await selectThread(job.createdThreadId);};row.append(open); }
     if(['uncertain','failed','preparing','dispatching','accepted'].includes(job.state)){const check=node('button','quiet','核对结果');check.onclick=async()=>{const scope=draftScope();check.disabled=true;try{const result=await api('/jobs/'+encodeURIComponent(job.id));if(scope!==draftScope())return;reconcileOutgoing([result]);label.firstChild.textContent=name+' · '+(states[result.state]||result.state);label.querySelector('small').textContent=result.error||result.id;}catch(e){if(scope===draftScope())notice(e.message);}finally{check.disabled=false;}};row.append(check);}
-    if(job.state==='uncertain'){ const ack=node('button','quiet','已在 App 核对');ack.disabled=!canWrite();ack.onclick=async()=>{if(confirm('确认已在 Codex App 核对这个请求？这只解除阻塞，不会重发。')){try{await api('/jobs/'+job.id+'/acknowledge',{confirmed:true});await tick();}catch(e){notice(e.message);}}};row.append(ack); }
+    if(job.state==='uncertain'){ const ack=node('button','quiet','已在 App 核对');ack.disabled=!canWrite();ack.onclick=async()=>{if(confirm('确认已在 Codex App 核对这个请求？这会清除待核对标记，不会重发。')){try{await api('/jobs/'+job.id+'/acknowledge',{confirmed:true});await tick();}catch(e){notice(e.message);}}};row.append(ack); }
     return row;
   }));
 }
@@ -462,7 +462,7 @@ $('create-form').onsubmit=async e=>{
   try{const job=await client.createInProject(project,prompt,()=>canCreateProject()&&scope===draftScope()&&project===$('new-project').value);
     if(scope!==draftScope())return;if(['failed','uncertain'].includes(job.state))throw Error(job.error||'结果待核对，请勿重复发送');
     $('create-dialog').close();if($('new-prompt').value.trim()===prompt)$('new-prompt').value='';
-  }catch(e){if(scope===draftScope())$('create-error').textContent=e.message+'；重试会沿用原请求 ID。';}
+  }catch(e){if(scope===draftScope())$('create-error').textContent=e.message;}
   finally{delete $('submit-create').dataset.pending;updateCreateButton();}
 };
 let attachedImages=[],imageGeneration=0,imageBusy=false;
@@ -500,7 +500,7 @@ Timeline.configureQuestions({
   submit:async(thread,prompt)=>{
     if(!canInteract()||selected!==thread)throw Error('会话或控制权限已改变');
     const job=await client.submit('compose',thread,prompt,[],()=>selected===thread&&canInteract());
-    if(['failed','uncertain'].includes(job.state))throw Error(job.error||'结果待核对，重试会沿用原请求编号');
+    if(['failed','uncertain'].includes(job.state))throw Error(job.error||'请求未确认，请核对结果');
   }
 });
 $('composer').onsubmit=async e=>{
@@ -514,7 +514,7 @@ $('composer').onsubmit=async e=>{
   try{const job=await client.submit('compose',target,prompt,attachedImages.map(i=>i.url),()=>selected===target&&generation===imageGeneration);
     if(['failed','uncertain'].includes(job.state))throw Error(job.error||'请求未成功，请先核对原请求');
     if(selected===target&&generation===imageGeneration){$('prompt').value='';conversationDrafts.delete(draftScope()+':'+target);clearImages();}
-  }catch(e){notice(e.message+'；重试会沿用原请求 ID。');}
+  }catch(e){notice(e.message);}
   finally{imageBusy=false;renderImages();$('attach-images').disabled=!canAttach();$('send').disabled=!canInteract()||!selected;}
 };
 $('prompt').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();if(!$('send').disabled)$('composer').requestSubmit();}};

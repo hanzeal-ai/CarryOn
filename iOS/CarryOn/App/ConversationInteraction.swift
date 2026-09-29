@@ -41,7 +41,7 @@ extension AppModel {
     }
     @discardableResult func perform(_ action: String, target: ConversationActionTarget, fields: [String: JSONValue] = [:]) async -> Bool {
         guard canPerform(target, action: action) else { error = interactionUnavailableReason(target, capability: WorkspaceCapability.operation(action) ?? .view) ?? "当前操作不可用，请刷新会话后重试"; return false }
-        let accepted = await write(path: target.path("operations"), target: target.threadID, body: target.body(fields.merging(["action": .string(action)]) { _, new in new }), awaitCompletion: true)
+        let accepted = await write(path: target.path("operations"), target: target.threadID, body: target.body(fields.merging(["action": .string(action)]) { _, new in new }))
         if accepted && target.isActivity {
             do { try await loadActivity(target) } catch { report(error, operation: "刷新动态详情", blocking: false) }
         }
@@ -58,7 +58,7 @@ extension AppModel {
         guard canPerform(target), allows(.send) else { return false }
         let records: JSONValue = .array([.object(["questionItemId": question["id"], "question": question["title"], "answer": .string(text)])])
         let accepted = await write(path: target.path("compose"), target: target.threadID,
-            body: target.body(["prompt": .string("<send_user_message_question_reply>\n" + records.formatted + "\n</send_user_message_question_reply>")]), awaitCompletion: true)
+            body: target.body(["prompt": .string("<send_user_message_question_reply>\n" + records.formatted + "\n</send_user_message_question_reply>")]))
         if accepted && target.isActivity {
             do { try await loadActivity(target) } catch { report(error, operation: "刷新动态详情", blocking: false) }
         }

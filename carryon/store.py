@@ -17,7 +17,9 @@ class Journal:
             created REAL NOT NULL, updated REAL NOT NULL)""")
         self.conn.commit()
         for job in self.list():
-            if job["state"] in ("preparing", "dispatching"):
+            if job["state"] == "preparing":
+                self.update(job["id"], state="failed", error="服务在投递前中断，请重试")
+            elif job["state"] == "dispatching":
                 self.update(job["id"], state="uncertain", error="服务曾中断，请核对原会话；不会自动重发")
 
     def get(self, job_id):

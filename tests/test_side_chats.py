@@ -94,7 +94,7 @@ class SideChatTests(unittest.TestCase):
         self.assertEqual(len(self.bridge.ipc.calls),1)
         self.assertEqual(job['sideParentId'],PARENT)
         self.bridge.ipc.state['turns'].append({'turnId':'next-turn','status':'completed','items':[]})
-        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'completed')
+        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'accepted')
 
     def test_cloud_side_job_is_scoped_and_can_be_polled(self):
         from carryon.remote_scope import scoped_dispatch, request_key

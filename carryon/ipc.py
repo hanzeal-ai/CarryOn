@@ -102,9 +102,9 @@ class DesktopIPC:
             response = waiter["response"]
             if response.get("resultType") != "success":
                 error = response.get("error", "Codex 拒绝请求")
-                # Routing failure proves no handler received the mutation.
-                raise IPCError(error, uncertain=error not in (
-                    "no-client-found", "request-version-mismatch", "no-handler-for-request"))
+                # A handler error is a rejection; only a router timeout loses
+                # the acknowledgement after dispatch.
+                raise IPCError(error, uncertain=error in ("timeout", "request-timeout"))
             return response
         except OSError as exc:
             raise IPCError("Socket 写入或读取失败", uncertain=True) from exc

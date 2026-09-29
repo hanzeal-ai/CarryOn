@@ -92,9 +92,9 @@ class ProjectCreationTests(unittest.TestCase):
         self.bridge.ipc.states[THREAD]['threadRuntimeStatus']['type']='active'
         with self.assertRaises(BridgeError):submit(self.bridge,'project-create-2','hello',self.project)
         self.assertEqual(self.bridge.ipc.prompts,[])
-    def test_pending_jobs_are_not_selected(self):
+    def test_old_uncertain_receipt_does_not_override_native_idle(self):
         self.journal.insert({'id':'pending','kind':'message','fingerprint':'f','threadId':THREAD,'state':'uncertain','created':time.time()})
-        with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','hello',self.project)
+        self.assertEqual(submit(self.bridge,'project-create-1','hello',self.project)['state'], 'accepted')
     def test_revocation_prevents_dispatch(self):
         def denied():raise BridgeError('revoked',403)
         with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','hello',self.project,authorize=denied)
@@ -173,7 +173,7 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual(submit(self.bridge,'recent-create-1','hello',self.project)['id'],job['id'])
         self.assertEqual(len(self.bridge.ipc.prompts),1)
 
-    def test_recent_candidates_use_recency_and_skip_busy_waiting_and_uncertain(self):
+    def test_recent_candidates_use_recency_and_native_runtime(self):
         self.add_recent(CHILD,updated_at=1)
         self.add_recent(BUSY,updated_at=3,runtime='active')
         waiting='44444444-4444-4444-8444-444444444444'
@@ -184,7 +184,7 @@ class ProjectCreationTests(unittest.TestCase):
         self.journal.insert({'id':'pending','kind':'message','fingerprint':'f','threadId':pending,'state':'uncertain','created':time.time()})
         job=submit(self.bridge,'recent-create-2','hello',self.project)
         self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],CHILD)
+        self.assertEqual(self.bridge.ipc.prompts[0][0],pending)
 
     def test_falls_back_to_other_project_when_recent_is_busy(self):
         self.add_recent(runtime='active')

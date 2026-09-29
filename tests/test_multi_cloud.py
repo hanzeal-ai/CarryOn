@@ -131,12 +131,15 @@ class MultiCloudTests(unittest.TestCase):
         def blocked(ipc,tid):registered.set();release.wait(5);return original(ipc,tid)
         try:
             with patch.object(IPC,'snapshot',blocked):
-                status,_=self.request(0,device,'POST',f'/api/threads/{T}/messages',{'requestId':'cloud-revoke-pending','prompt':'hello'})
-                self.assertEqual(status,202);self.assertTrue(registered.wait(2))
+                results=[]
+                worker=threading.Thread(target=lambda:results.append(self.request(0,device,'POST',f'/api/threads/{T}/messages',{'requestId':'cloud-revoke-pending','prompt':'hello'})))
+                worker.start()
+                self.assertTrue(registered.wait(2))
                 status,result=self.call(0,'DELETE',f'/console/devices/{device}')
                 self.assertEqual(status,200);self.assertIn('在途',result['notice'])
                 wait(lambda:not self.managers[0].connections[binding].status()['connected'])
-                release.set()
+                release.set(); worker.join(4)
+                self.assertFalse(worker.is_alive())
                 wait(lambda:self.journals[0].get(request_key(binding,'cloud-revoke-pending'))['state']=='failed')
                 self.assertEqual(IPC.sends,0)
         finally:release.set()
@@ -168,10 +171,16 @@ class MultiCloudTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal=Journal(Path(directory)/'jobs.sqlite');bridge=Bridge('fake',Catalog(),journal,IPC);bridge.enable()
             gate=threading.Barrier(3);results=[];IPC.sends=0
+            rejected=threading.Event()
+            original=bridge.ipc.start
+            def slow_start(*args):
+                rejected.wait(2)
+                return original(*args)
+            bridge.ipc.start=slow_start
             def submit(binding):
                 gate.wait()
                 try:results.append(scoped_dispatch(bridge,'POST',f'/api/threads/{T}/messages',{'requestId':'same-request','prompt':'hello'},True,binding)[0])
-                except BridgeError as exc:results.append(exc.status)
+                except BridgeError as exc:results.append(exc.status);rejected.set()
             workers=[threading.Thread(target=submit,args=(binding,)) for binding in ('cloud-a','cloud-b')]
             try:
                 for worker in workers:worker.start()
@@ -205,8 +214,12 @@ class MultiCloudTests(unittest.TestCase):
                 if cancelled.is_set():raise BridgeError('binding revoked',403)
             try:
                 with patch.object(IPC,'snapshot',blocked):
-                    status,job=scoped_dispatch(bridge,'POST',f'/api/threads/{T}/messages',{'requestId':'cancel-before-send','prompt':'hello'},True,'binding',authorize)
-                    self.assertEqual(status,202);self.assertTrue(registered.wait(2))
-                    cancelled.set();release.set()
-                    wait(lambda:journal.get(request_key('binding','cancel-before-send'))['state']=='failed')
+                    results=[]
+                    worker=threading.Thread(target=lambda:results.append(scoped_dispatch(bridge,'POST',f'/api/threads/{T}/messages',{'requestId':'cancel-before-send','prompt':'hello'},True,'binding',authorize)))
+                    worker.start()
+                    self.assertTrue(registered.wait(2))
+                    cancelled.set();release.set();worker.join(4)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(results[0][0],202)
+                    self.assertEqual(results[0][1]['state'],'failed')
             finally:release.set();bridge.disable();journal.conn.close()

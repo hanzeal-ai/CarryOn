@@ -124,14 +124,17 @@ test('image hashing cannot submit after device or selected conversation changes'
 });
 
 
-test('proxy HTML failures are actionable and retain the retry ID', async()=>{
+test('proxy rejections release the ID while gateway failures retain it', async()=>{
   const f=fixture();
   f.respond(async()=>({ok:false,status:413,json:async()=>{throw new SyntaxError('The string did not match the expected pattern.')}}));
   await assert.rejects(f.client.submit('message','thread','hello'),/图片请求超过服务器大小限制/);
   const id=f.requests.at(-1).body.requestId;
   f.respond(async()=>({ok:false,status:502,json:async()=>{throw new SyntaxError('invalid JSON')}}));
   await assert.rejects(f.client.submit('message','thread','hello'),/HTTP 502/);
-  assert.equal(f.requests.at(-1).body.requestId,id);
+  assert.notEqual(f.requests.at(-1).body.requestId,id);
+  const ambiguous=f.requests.at(-1).body.requestId;
+  await assert.rejects(f.client.submit('message','thread','hello'),/HTTP 502/);
+  assert.equal(f.requests.at(-1).body.requestId,ambiguous);
 });
 
 test('compose announces pending message before HTTP completes and preserves retry identity',async()=>{
@@ -151,7 +154,8 @@ test('live confirmation cannot be rolled back or recreated by delayed admission 
  vm.runInContext(fs.readFileSync('client.js','utf8')+'\nthis.merge=mergeOutgoingMessage;',context);
  const start={id:'r',prompt:'hello',state:'sending'};
  const confirmed=context.merge(start,{id:'r',state:'completed',clientMessageId:'native'},true);
- assert.equal(context.merge(confirmed,{id:'r',state:'preparing'}).state,'completed');
+ assert.equal(confirmed,null);
+ assert.equal(context.merge(confirmed,{id:'r',state:'preparing'}),null);
  assert.equal(context.merge(null,{id:'r',state:'preparing'}),null);
  assert.equal(context.merge(confirmed,{id:'r',state:'acknowledged'},true),null);
 });

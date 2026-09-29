@@ -688,7 +688,7 @@ import CarryOnCore
             } else { self.report(failure, operation: "同步已读状态", blocking: false) }
         })
     }
-    @discardableResult func write(path: String, target: String, body: JSONValue, awaitCompletion: Bool = false) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
         if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
@@ -705,23 +705,26 @@ import CarryOnCore
             var result: JSONValue
             do { result = try await deviceRequest(path, body: body.setting("requestId", .string(id))) }
             catch {
-                if composing, version == epoch, let item = outgoing[id] { outgoing[id] = OutgoingMessageProjection.merge(item, .object(["state": .string("uncertain")])) }
+                let rejected = (error as? APIError)?.isWriteRejection == true
+                if rejected { try pending.resolve(scope: capturedScope, target: target, requestID: id) }
+                if composing, version == epoch, let item = outgoing[id] {
+                    outgoing[id] = OutgoingMessageProjection.merge(item, .object(["state": .string(rejected ? "failed" : "uncertain")]))
+                }
                 throw error
             }
-            if awaitCompletion {
-                let deadline = Date().addingTimeInterval(20)
-                while ["preparing", "dispatching"].contains(result["state"].text) {
+            let deadline = Date().addingTimeInterval(20)
+            do {
+                while ["preparing", "dispatching"].contains(result["state"].text) ||
+                    (path == "/api/threads" && result["state"].text == "accepted" && result["createdThreadId"].string == nil) {
                     guard version == epoch, capturedScope == scope else { return false }
                     guard Date() < deadline else { throw APIError("操作仍在处理，尚未确认结果；原请求已保留，请稍后核对") }
                     try await Task.sleep(for: .milliseconds(300))
                     guard version == epoch, capturedScope == scope else { return false }
                     result = try await deviceRequest("/api/jobs/" + ConsoleAddress.component(id))
                 }
-                guard version == epoch, capturedScope == scope else { return false }
-                guard result["state"].text == "completed" || ((composing || (path == "/api/threads" && result["createdThreadId"].string != nil)) && ["accepted", "inProgress"].contains(result["state"].text)) else {
-                    try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
-                    throw APIError(result["error"].string ?? "操作结果尚未确认，请核对请求记录")
-                }
+            } catch {
+                if composing, version == epoch { mergeOutgoing(.object(["id": .string(id), "state": .string("uncertain")])) }
+                throw error
             }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
@@ -730,10 +733,10 @@ import CarryOnCore
             if ["failed", "interrupted"].contains(state) {
                 throw APIError(result["error"].string ?? (state == "interrupted" ? "操作已暂停" : "操作失败"))
             }
-            guard ["preparing", "dispatching", "completed", "accepted", "inProgress"].contains(state) else {
+            guard ["completed", "accepted", "inProgress"].contains(state) else {
                 throw APIError((result["error"].string ?? "操作结果尚未确认") + "；请在请求记录与 Codex App 核对，原请求编号已保留。")
             }
-            if ["accepted", "completed", "inProgress"].contains(state) { try pending.accepted(scope: capturedScope, target: target) }
+            try pending.resolve(scope: capturedScope, target: target, requestID: id)
             return true
         } catch { if version == epoch { report(error, operation: path.hasSuffix("/compose") ? "发送消息" : "提交操作") }; return false }
     }
@@ -744,6 +747,9 @@ import CarryOnCore
             let job = try await deviceRequest("/api/jobs/" + ConsoleAddress.component(identifier))
             guard scope == capturedScope, job["id"].text == identifier else { return }
             reconcile([job]); reconcileOutgoing()
+            if job["state"].text == "uncertain", outgoing[identifier] != nil {
+                error = "尚未找到原生接收凭证，请在 Codex App 核对后，从请求记录标记已核对。此请求不会阻止其他操作。"
+            }
         } catch { if scope == capturedScope { report(error, operation: "核对发送结果") } }
     }
     func reconcile(_ jobs: [JSONValue]) {

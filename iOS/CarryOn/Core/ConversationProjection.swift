@@ -30,10 +30,11 @@ public enum OutgoingMessageProjection {
             questions.contains { $0["id"] == reply["questionItemId"] && $0["answer"] == reply["answer"] }
         }
     }
-    /// Once the live journal is observed, the HTTP admission result cannot roll it back.
+    /// Native acceptance ends the temporary bubble, independently of history loading.
     public static func merge(_ previous: JSONValue?, _ update: JSONValue, live: Bool = false) -> JSONValue? {
-        guard var fields = previous?.object, update["state"].text != "acknowledged" else { return nil }
-        if previous?["live"].bool == true && !live { return previous }
+        guard var fields = previous?.object else { return nil }
+        if ["accepted", "completed", "inProgress", "acknowledged"].contains(update["state"].text) { return nil }
+        if ["failed", "uncertain"].contains(previous?["state"].text ?? "") && ["preparing", "dispatching"].contains(update["state"].text) { return previous }
         if case .number(let old) = previous?["updated"], case .number(let new) = update["updated"], new < old { return previous }
         for (key, value) in update.object ?? [:] where key != "created" { fields[key] = value }
         fields["live"] = .bool(live || previous?["live"].bool == true)

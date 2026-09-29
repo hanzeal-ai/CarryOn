@@ -126,3 +126,17 @@ class WakeSnapshotTests(unittest.TestCase):
         ipc=DesktopIPC('unused')
         with self.assertRaises(IPCError):
             ipc.wake_snapshot('11111111-1111-4111-8111-111111111111',before_open=Mock())
+
+class ReceiptErrorTests(unittest.TestCase):
+    def test_explicit_refusal_is_failed_but_router_timeout_is_uncertain(self):
+        for error, uncertain in [('permission denied', False), ('no-client-found', False), ('request-timeout', True)]:
+            ipc = DesktopIPC('unused')
+            def respond(message):
+                waiter = ipc.pending[message['requestId']]
+                waiter['response'] = {'resultType': 'error', 'error': error}
+                waiter['event'].set()
+            ipc._write = respond
+            with self.assertRaises(IPCError) as caught:
+                ipc.request('thread-follower-start-turn', {})
+            self.assertEqual(caught.exception.uncertain, uncertain)
+            self.assertEqual(ipc.pending, {})

@@ -163,20 +163,26 @@ class DeliveryTests(unittest.TestCase):
         submit(self.bridge, T, d); self.assertEqual(self.wait()['state'], 'completed')
         submit(self.bridge, T, d); self.assertEqual(len(self.bridge.ipc.calls), 1)
         with self.assertRaises(BridgeError): submit(self.bridge, T, {**d, 'action': 'clear-queue'})
-    def test_uncertain_blocks_replay_and_followup(self):
+    def test_uncertain_deduplicates_only_its_own_request(self):
         self.bridge.ipc.error = IPCError('timeout', uncertain=True)
         d = {'action': 'compact', 'requestId': 'operation-1'}
         submit(self.bridge, T, d); self.assertEqual(self.wait()['state'], 'uncertain')
         submit(self.bridge, T, d)
-        with self.assertRaises(BridgeError): submit(self.bridge, T, {**d, 'requestId': 'operation-2'})
         self.assertEqual(len(self.bridge.ipc.calls), 1)
+        self.bridge.ipc.error = None
+        self.assertEqual(submit(self.bridge, T, {**d, 'requestId': 'operation-2'})['state'], 'completed')
+        self.assertEqual(len(self.bridge.ipc.calls), 2)
     def test_disable_during_snapshot_prevents_write(self):
         ready, resume = threading.Event(), threading.Event()
         ipc = self.bridge.ipc
         def snapshot(_): ready.set(); resume.wait(2); return 'owner', state()
         ipc.snapshot = snapshot
-        submit(self.bridge, T, {'action': 'compact', 'requestId': 'operation-1'})
-        self.assertTrue(ready.wait(1)); self.bridge.disable(); resume.set()
+        worker = threading.Thread(target=submit, args=(self.bridge, T, {'action': 'compact', 'requestId': 'operation-1'}))
+        worker.start()
+        try:
+            self.assertTrue(ready.wait(1)); self.bridge.disable()
+        finally:
+            resume.set(); worker.join(3)
         self.assertEqual(self.wait()['state'], 'failed'); self.assertEqual(ipc.calls, [])
     def test_native_failure_is_not_success(self):
         self.bridge.ipc.error = IPCError('no-handler-for-request')
@@ -226,15 +232,18 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.wait()['state'], 'failed')
         self.assertEqual(ipc.calls, [])
 
-    def test_resume_timeout_blocks_another_resume(self):
+    def test_resume_timeout_keeps_id_and_native_state_rejects_stale_retry(self):
         ipc = self.bridge.ipc
         ipc.state['turns'][0]['status'] = 'interrupted'
         ipc.error = IPCError('timeout', uncertain=True)
         data = {'action': 'resume', 'requestId': 'operation-1', 'turnId': 'turn-1'}
         submit(self.bridge, T, data)
         self.assertEqual(self.wait()['state'], 'uncertain')
-        with self.assertRaises(BridgeError):
-            submit(self.bridge, T, {**data, 'requestId': 'operation-2'})
+        submit(self.bridge, T, data)
+        self.assertEqual(len(ipc.calls), 1)
+        ipc.error = None
+        ipc.state['turns'][0]['status'] = 'completed'
+        self.assertEqual(submit(self.bridge, T, {**data, 'requestId': 'operation-2'})['state'], 'failed')
         self.assertEqual(len(ipc.calls), 1)
 
 

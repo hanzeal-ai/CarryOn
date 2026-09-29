@@ -1,10 +1,11 @@
 /* HTTP authentication, durable retry IDs and the live connection lifecycle. */
 'use strict';
+function responseError(message,status){return Object.assign(Error(message),{status});}
 async function readApiResponse(response) {
   try { return await response.json(); }
   catch {
-    if (response.status === 413) throw Error('图片请求超过服务器大小限制，请减少图片或压缩后重试');
-    throw Error(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试');
+    if (response.status === 413) throw responseError('图片请求超过服务器大小限制，请减少图片或压缩后重试',response.status);
+    throw responseError(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试',response.status);
   }
 }
 // Display-only cache bounded by both count and encoded bytes.
@@ -48,9 +49,9 @@ class HistoryWire {
 }
 
 function mergeOutgoingMessage(previous,update,live=false){
-  if(!previous||update.state==='acknowledged')return null;
+  if(!previous||['accepted','completed','inProgress','acknowledged'].includes(update.state))return null;
   // Live journal evidence can arrive before the HTTP admission response.
-  if(previous.live&&!live)return previous;
+  if(['failed','uncertain'].includes(previous.state)&&['preparing','dispatching'].includes(update.state))return previous;
   if(previous.updated&&update.updated&&update.updated<previous.updated)return previous;
   return {...previous,...update,live:previous.live||live};
 }
@@ -91,7 +92,7 @@ class CarryOnClient {
     if (epoch !== this.epoch) throw Error('配对已改变，请重新读取状态');
     if (!response.ok) {
       if (response.status === 401) this.onAuthError();
-      throw Error(result.error || '请求失败');
+      throw responseError(result.error || '请求失败',response.status);
     }
     return result;
   }
@@ -102,7 +103,7 @@ class CarryOnClient {
     this.workspaceSession=session;this.localStorageScope='carryon-local:'+session+':';
     this.pending=this.restore(this.localStorageScope+'pending');this.operations=this.restore(this.localStorageScope+'operations');
   }
-  async requestJob(path, body, key, pending, storageKey, retainUncertain = false) {
+  async requestJob(path, body, key, pending, storageKey) {
     if(this.localStorageScope)storageKey=this.localStorageScope+(storageKey==='carryon-pending'?'pending':'operations');
     const requestId = pending.get(key) || crypto.randomUUID();
     pending.set(key, requestId);
@@ -110,12 +111,27 @@ class CarryOnClient {
     const scope=this.epoch;
     const composing=path.endsWith('/compose');
     if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,state:'sending',begin:true});
-    let job;
-    try { job = await this.request(path, {...body, requestId}); }
-    catch(error){if(composing&&scope===this.epoch)this.onSubmission({id:requestId,threadId:path.split('/')[2],state:'uncertain'});throw error;}
+    let job, admitted=false;
+    try {
+      job = await this.request(path, {...body, requestId});
+      admitted=true;
+      const deadline=Date.now()+20000;
+      while(['preparing','dispatching'].includes(job.state)||(path==='/threads'&&job.state==='accepted'&&!job.createdThreadId)){
+        if(scope!==this.epoch)throw Error('工作区已改变');
+        if(Date.now()>=deadline)throw Error('请求仍在处理，请稍后核对；原请求编号已保留');
+        await new Promise(resolve=>setTimeout(resolve,300));
+        job=await this.request('/jobs/'+encodeURIComponent(requestId));
+      }
+    }
+    catch(error){
+      const rejected=!admitted&&error.status>=400&&error.status<500&&error.status!==408;
+      if(rejected){pending.delete(key);sessionStorage.setItem(storageKey,JSON.stringify([...pending]));}
+      if(composing&&scope===this.epoch)this.onSubmission({id:requestId,threadId:path.split('/')[2],state:rejected?'failed':'uncertain'});
+      throw error;
+    }
     if(composing&&scope===this.epoch)this.onSubmission({...job,id:requestId,threadId:path.split('/')[2]});
-    // A known failed/uncertain operation keeps its ID for explicit reconciliation.
-    if (!retainUncertain || (job.state !== 'failed' && job.state !== 'uncertain')) {
+    // Retain ambiguous receipts only; explicit rejections may be retried.
+    if (['accepted','completed','inProgress','failed','interrupted','acknowledged'].includes(job.state)) {
       pending.delete(key);
       sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
     }
@@ -131,12 +147,12 @@ class CarryOnClient {
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob(kind === 'create' ? '/threads' : '/threads/' + target + (kind==='compose'?'/compose':'/messages'),
-      {prompt,...(images.length?{images}:{})}, key, this.pending, 'carryon-pending',kind==='compose');
+      {prompt,...(images.length?{images}:{})}, key, this.pending, 'carryon-pending');
   }
 
   async createInProject(projectId,prompt,isCurrent=()=>true){
     if(!isCurrent())throw Error('工作区或项目已改变');
-    return this.requestJob('/threads',{projectId,prompt},'project:'+projectId+':'+prompt,this.pending,'carryon-pending',true);
+    return this.requestJob('/threads',{projectId,prompt},'project:'+projectId+':'+prompt,this.pending,'carryon-pending');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
@@ -146,7 +162,7 @@ class CarryOnClient {
     if (!isCurrent()) throw Error('当前会话已改变，请重新操作');
     const key = Array.from(new Uint8Array(bytes), v => v.toString(16).padStart(2, '0')).join('');
     return this.requestJob('/threads/' + target + '/operations', {action, ...fields},
-      key, this.operations, 'carryon-operations', true);
+      key, this.operations, 'carryon-operations');
   }
 
   async sideAction(parent, target, action, fields, isCurrent = () => true) {
@@ -156,7 +172,7 @@ class CarryOnClient {
     if (epoch !== this.epoch || !isCurrent()) throw Error('当前临时聊天已改变，请重新操作');
     const key = 'side:' + Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, '0')).join('');
     return this.requestJob('/side-chats/' + target + (action === 'compose' ? '/compose' : '/operations'),
-      body, key, this.operations, 'carryon-operations', true);
+      body, key, this.operations, 'carryon-operations');
   }
 
   subscribe(selection) {

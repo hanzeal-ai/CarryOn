@@ -20,6 +20,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         let lock = NSLock()
         var jobs: [String: [String: Any]] = [:]
         var captures: [[String: Any]] = []
+        var creationPolls = 0
         func respond(_ envelope: [String: Any]) -> [String: Any] {
             lock.lock(); defer { lock.unlock() }
             let path = envelope["path"] as? String ?? ""
@@ -27,13 +28,22 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
             captures.append(envelope)
             if path.contains("/api/jobs/") {
                 let id = String(path.split(separator: "/").last ?? "")
+                if jobs[id]?["kind"] as? String == "create" {
+                    creationPolls += 1
+                    if creationPolls >= 2 { jobs[id]?["state"] = "completed"; jobs[id]?["createdThreadId"] = "new-native-thread" }
+                }
                 return jobs[id] ?? ["state": "failed", "error": "unknown fixture job"]
             }
             if path.hasSuffix("/operations") || path.hasSuffix("/compose") {
                 let id = body["requestId"] as? String ?? ""
                 let failed = (body["prompt"] as? String ?? "").contains("fail")
-                jobs[id] = ["id": id, "threadId": path.contains("side-chats") ? "side" : "fixture", "kind": "operation:\(body["action"] ?? "")", "state": failed ? "failed" : path.hasSuffix("/compose") ? "accepted" : "completed", "error": failed ? "排队消息已变化" : ""]
+                jobs[id] = ["id": id, "threadId": path.contains("side-chats") ? "side" : "fixture", "kind": "operation:\(body["action"] ?? "")", "state": (body["prompt"] as? String) == "uncertain" ? "uncertain" : failed ? "failed" : path.hasSuffix("/compose") ? "accepted" : "completed", "error": failed ? "排队消息已变化" : ""]
                 return ["id": id, "state": "preparing", "threadId": path.contains("side-chats") ? "side" : "fixture", "kind": "operation:\(body["action"] ?? "")"]
+            }
+            if path == "/api/threads" {
+                let id = body["requestId"] as? String ?? ""
+                jobs[id] = ["id": id, "threadId": "controller", "kind": "create", "state": "accepted"]
+                return jobs[id]!
             }
             if path == "/api/activity" { return ["threads": [], "total": 0, "nextOffset": 0] }
             if path == "/api/models" { return ["models": [["id": "fixture-model", "name": "Fixture", "efforts": ["medium"], "defaultEffort": "medium"]]] }
@@ -52,7 +62,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         }
         let envelope = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] ?? [:]
         let value = Self.store.respond(envelope)
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: (envelope["body"] as? [String: Any])?["prompt"] as? String == "reject-http" ? 403 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: value))
         client?.urlProtocolDidFinishLoading(self)
@@ -79,10 +89,22 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         let api = ConsoleAPI(address: try! ConsoleAddress("https://ios-alignment.invalid/"), configuration: config)
         model.fixtureClient(api)
         model.addressText = "https://ios-alignment.invalid/"; model.selectedDevice = "fixture-device"
-        model.devices = [try! Record(.object(["id": .string("fixture-device"), "title": .string("隔离夹具"), "online": .bool(true), "permissions": .array(["view", "send", "edit", "approve"].map { .string($0) })]))]
+        model.devices = [try! Record(.object(["id": .string("fixture-device"), "title": .string("隔离夹具"), "online": .bool(true), "permissions": .array(["view", "send", "stop", "edit", "approve", "create"].map { .string($0) })]))]
         model.authenticated = true; model.connected = true; model.historySynchronized = true; model.foreground = true
         model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true)])
         model.selectedThread = thread; model.history = snapshot(id: "fixture"); model.historyRevision += 1
+        // No historical snapshot is needed to acknowledge a native receipt.
+        model.history = .null; model.historySynchronized = false
+        let sentWithoutHistory = await model.write(path: "/api/threads/fixture/compose", target: "fixture", body: .object(["prompt": .string("accepted without history")]))
+        let receiptClearsBubble = sentWithoutHistory && model.visibleOutgoing.isEmpty && model.history == .null
+        let rejected = !(await model.write(path: "/api/threads/fixture/compose", target: "fixture", body: .object(["prompt": .string("reject-http")])))
+        let knownRejection = rejected && model.visibleOutgoing.last?["state"].text == "failed"
+        let unknown = !(await model.write(path: "/api/threads/fixture/compose", target: "fixture", body: .object(["prompt": .string("uncertain")])))
+        let unknownID = model.visibleOutgoing.first { $0["state"].text == "uncertain" }?["id"].text
+        model.history = snapshot(id: "fixture"); model.historySynchronized = true
+        let stopAfterUnknown = await model.operation("interrupt", fields: ["expectedTurnId": .string("turn")])
+        let unknownRetained = unknown && unknownID != nil && model.visibleOutgoing.contains { $0["id"].text == unknownID }
+        model.outgoing.removeAll(); model.error = nil
         let target = ConversationActionTarget(scope: model.scope, threadID: "fixture")
         let mainWithoutAccess = model.canPerform(target)
         model.history = model.history.setting("source", .string("local-preview"))
@@ -97,6 +119,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         let question: JSONValue = .object(["id": .string("q"), "title": .string("question")])
         let failedAnswer = !(await model.answer(question, text: "fail", target: target))
         model.error = nil
+        let failedBubble = model.visibleOutgoing.contains { $0["state"].text == "failed" }
         let acceptedAnswer = await model.answer(question, text: "yes", target: target)
         model.sideThreadID = "side"; model.sideHistory = snapshot(id: "side", parent: "fixture")
         let side = ConversationActionTarget(scope: model.scope, threadID: "side", parentID: "fixture")
@@ -104,13 +127,21 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         model.sideThreadID = "another-side"
         let staleDenied = !model.canPerform(side)
         model.sideThreadID = nil; model.error = nil; model.historyRevision += 1
+        let created = await model.write(path: "/api/threads", target: "new", body: .object(["prompt": .string("create fixture")]))
+        let creationWaited = created && MockTransport.store.creationPolls == 2
+        model.outgoing.removeAll()
+        try? await Task.sleep(for: .seconds(2))
         let captures = MockTransport.store.all()
         let polls = captures.filter { ($0["path"] as? String ?? "").contains("/api/jobs/") }.count
         let sideBody = captures.first { ($0["path"] as? String) == "/api/side-chats/side/operations" }?["body"] as? [String: Any]
-        let result: [String: Any] = ["failedJobNotAccepted": failedReported, "completedJobAccepted": success, "sideOperationAccepted": sideSuccess, "staleSideDenied": staleDenied, "parentPreserved": sideBody?["parentId"] as? String == "fixture", "jobPolls": polls, "mainWithoutAccess": mainWithoutAccess, "previewDenied": previewDenied, "readOnlyDenied": readOnlyDenied, "failedAnswerRetained": failedAnswer, "acceptedAnswerConfirmed": acceptedAnswer, "passed": failedAnswer && acceptedAnswer && mainWithoutAccess && previewDenied && readOnlyDenied && failedReported && success && sideSuccess && staleDenied && polls >= 3 && sideBody?["parentId"] as? String == "fixture"]
+        let result: [String: Any] = ["failedJobNotAccepted": failedReported, "completedJobAccepted": success, "sideOperationAccepted": sideSuccess, "staleSideDenied": staleDenied, "parentPreserved": sideBody?["parentId"] as? String == "fixture", "jobPolls": polls, "mainWithoutAccess": mainWithoutAccess, "previewDenied": previewDenied, "readOnlyDenied": readOnlyDenied, "failedAnswerRetained": failedAnswer, "acceptedAnswerConfirmed": acceptedAnswer, "receiptClearsBubbleWithoutHistory": receiptClearsBubble, "explicitHTTPRejectionIsFailed": knownRejection, "stopAfterUnknown": stopAfterUnknown, "unknownIDRetained": unknownRetained, "failedBubbleUpdated": failedBubble, "creationWaitedForNativeId": creationWaited, "passed": creationWaited && failedBubble && receiptClearsBubble && knownRejection && stopAfterUnknown && unknownRetained && failedAnswer && acceptedAnswer && mainWithoutAccess && previewDenied && readOnlyDenied && failedReported && success && sideSuccess && staleDenied && polls >= 3 && sideBody?["parentId"] as? String == "fixture"]
         let output = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         do {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            if let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.windows.first {
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+                try image.pngData()?.write(to: output.appendingPathComponent("alignment.png"))
+            }
             try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted).write(to: output.appendingPathComponent("alignment-result.json"))
         } catch { fatalError("Fixture result write failed: \(error)") }
         print("ALIGNMENT_RESULT \(output.path)")

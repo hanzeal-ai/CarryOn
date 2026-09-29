@@ -31,7 +31,7 @@ import Testing
     #expect(page.nextOffset == 50)
     #expect(throws: APIError.self) { try RecordPage(.object(["projects": .array([])]), key: "projects") }
 }
-@Test @MainActor func unknownWriteKeepsIDAcrossRestartAndRejectsChangedPayload() throws {
+@Test @MainActor func unknownWriteKeepsIDAcrossRestartWithoutBlockingOtherCommands() throws {
     let suite = "CarryOn.Tests." + UUID().uuidString
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -40,11 +40,14 @@ import Testing
     let id = try first.requestID(scope: "cloud/device1", target: "thread1", path: "/compose", body: body)
     let restored = PendingWrites(defaults: defaults)
     #expect(try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/compose", body: body) == id)
-    #expect(throws: APIError.self) { try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/compose", body: .object(["prompt": .string("changed")])) }
+    #expect(try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/compose", body: .object(["prompt": .string("changed")])) != id)
+    let stop = try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/operations", body: .object(["action": .string("interrupt")]))
+    #expect(stop != id)
     #expect(try restored.requestID(scope: "cloud/device2", target: "thread1", path: "/compose", body: body) != id)
     let persisted = try #require(defaults.data(forKey: "carryon.pendingWrites.v1"))
     #expect(!String(decoding: persisted, as: UTF8.self).contains("private prompt"))
-    try restored.accepted(scope: "cloud/device1", target: "thread1")
+    try restored.resolve(scope: "cloud/device1", target: "thread1", requestID: id)
+    #expect(try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/operations", body: .object(["action": .string("interrupt")])) == stop)
     #expect(try restored.requestID(scope: "cloud/device1", target: "thread1", path: "/compose", body: body) != id)
 }
 
@@ -112,7 +115,8 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
 @Test func outgoingLiveEvidenceIgnoresLateHTTPAndNeverRecreatesConfirmedMessage() {
     let start: JSONValue = .object(["id": .string("r"), "prompt": .string("hello"), "state": .string("sending")])
     let live = OutgoingMessageProjection.merge(start, .object(["state": .string("completed")]), live: true)
-    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("preparing")]))?["state"].text == "completed")
+    #expect(live == nil)
+    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("preparing")])) == nil)
     #expect(OutgoingMessageProjection.merge(nil, .object(["state": .string("preparing")])) == nil)
     #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("acknowledged")]), live: true) == nil)
 }
@@ -172,7 +176,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     await restored.invalidate(); await other.invalidate()
 }
 
-@Test @MainActor func definitiveWriteFailureUnlocksChangedContentButUnknownOutcomeDoesNot() throws {
+@Test @MainActor func definitiveFailureReleasesItsIDButAmbiguousReceiptsRetainIt() throws {
     let suite = "CarryOn.Tests." + UUID().uuidString
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -183,14 +187,13 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
         let id = try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: body)
         let job: JSONValue = .object(["id": .string(id), "threadId": .string("thread"), "state": .string(state)])
         try pending.reconcile(scope: "scope", job: job.setting("id", .string("other")))
-        #expect(throws: APIError.self) { try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) }
+        let changedID = try pending.requestID(scope: "scope", target: "thread", path: "/compose", body: changed)
+        #expect(changedID != id)
         try pending.reconcile(scope: "scope", job: job)
         let restarted = PendingWrites(defaults: defaults, storageKey: state)
-        if ["failed", "interrupted"].contains(state) {
-            #expect(try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) != id)
-        } else {
-            #expect(throws: APIError.self) { try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) }
-        }
+        #expect(try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: changed) == changedID)
+        let retry = try restarted.requestID(scope: "scope", target: "thread", path: "/compose", body: body)
+        #expect(["failed", "interrupted"].contains(state) ? retry != id : retry == id)
     }
 }
 

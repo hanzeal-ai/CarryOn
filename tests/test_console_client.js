@@ -170,3 +170,13 @@ test('expanding the history window creates a new subscription on the same socket
   client.base=new URL('http://127.0.0.1:8780/');
   assert.equal(client.initializationCommand,'');
  });
+
+test('cloud write rejection clears only the rejected receipt and marks compose failed',async()=>{
+ const calls=[],events=[];
+ const {client}=fixture(async(url,options)=>{calls.push(JSON.parse(options.body).body.requestId);return {ok:false,status:403,json:async()=>({error:'permission denied'})};});
+ client.device='one';client.setStorage();client.onSubmission=event=>events.push(event);
+ await assert.rejects(client.submit('compose','thread','hello'),/permission denied/);
+ assert.equal(events.at(-1).state,'failed');assert.equal(client.pending.size,0);
+ await assert.rejects(client.submit('compose','thread','hello'),/permission denied/);
+ assert.notEqual(calls[0],calls[1]);
+});

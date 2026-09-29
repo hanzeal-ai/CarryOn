@@ -77,15 +77,16 @@ class BridgeTests(unittest.TestCase):
         self.bridge.submit("message", "request-123", "hello", THREAD)
         self.assertEqual(self.await_job("request-123")["state"], "failed")
         self.assertEqual(FakeIPC.sends, 0)
-    def test_timeout_never_replays_and_blocks_next(self):
+    def test_timeout_never_replays_but_does_not_block_new_request(self):
         self.bridge.enable()
         FakeIPC.error = IPCError("timeout", uncertain=True)
         self.bridge.submit("message", "request-123", "hello", THREAD)
         self.assertEqual(self.await_job("request-123")["state"], "uncertain")
-        with self.assertRaises(BridgeError):
-            self.bridge.submit("message", "request-456", "hello again", THREAD)
         self.bridge.submit("message", "request-123", "hello", THREAD)
         self.assertEqual(FakeIPC.sends, 1)
+        FakeIPC.error = None
+        self.assertEqual(self.bridge.submit("message", "request-456", "hello again", THREAD)['state'], 'accepted')
+        self.assertEqual(FakeIPC.sends, 2)
     def test_disable_during_preparation_prevents_dispatch(self):
         reached, proceed = threading.Event(), threading.Event()
         class Slow(FakeIPC):
@@ -94,9 +95,13 @@ class BridgeTests(unittest.TestCase):
                 return super().snapshot(thread_id)
         self.bridge.ipc_factory = Slow
         self.bridge.enable()
-        self.bridge.submit("message", "request-123", "hello", THREAD)
-        self.assertTrue(reached.wait(1))
-        self.bridge.disable(); proceed.set()
+        worker = threading.Thread(target=self.bridge.submit, args=("message", "request-123", "hello", THREAD))
+        worker.start()
+        try:
+            self.assertTrue(reached.wait(1))
+            self.bridge.disable()
+        finally:
+            proceed.set(); worker.join(3)
         self.assertEqual(self.await_job("request-123")["state"], "failed")
         self.assertEqual(FakeIPC.sends, 0)
     def test_controller_required(self):
@@ -213,7 +218,7 @@ class BridgeTests(unittest.TestCase):
         self.bridge.history=Mock(side_effect=AssertionError('display history must not be projected'))
         self.journal.insert({'id':'request-evidence','fingerprint':'f','kind':'message',
             'threadId':THREAD,'created':time.time(),'state':'accepted','turnId':'3999'})
-        self.assertEqual(self.bridge.refresh_job('request-evidence')['state'],'completed')
+        self.assertEqual(self.bridge.refresh_job('request-evidence')['state'],'accepted')
         self.bridge.history.assert_not_called()
         native={'id':THREAD,'turnHistory':{'kind':'canonical','history':{'entitiesByKey':{'key':{'turnId':'canonical','status':'interrupted','items':[]}},'islands':[{'entries':[{'value':'key'}]}]}}}
         self.assertEqual(self.bridge.turn_evidence(THREAD,'canonical')['status'],'interrupted')

@@ -334,13 +334,13 @@ class Bridge:
             self.check_generation(ipc, generation)
         return result
 
-    def queue(self, thread_id, parent_id=None):
+    def queue(self, thread_id, parent_id=None, *, authoritative=False):
         from .queue import projection
         if parent_id is not None: self.side_state(parent_id, thread_id)
         else: self.catalog.get(thread_id)
         ipc, generation = self.require()
         cached = None
-        if hasattr(ipc, 'events'):
+        if not authoritative and hasattr(ipc, 'events'):
             with ipc.lock:
                 cached = ipc.events.queues.get(thread_id)
         if cached is None:
@@ -376,15 +376,17 @@ class Bridge:
             if authorize:authorize()
             self.assert_target(thread_id, parent_id, state)
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
-            if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id)
-            if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
-            data={'requestId':request_id,'prompt':prompt}
-            if images:data['images']=images
-            if status=='waiting':
-                data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id)['fingerprint'])
-            else:
-                data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
-            return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id)
+        # Never hold the bridge gate while waiting for a native response: stream
+        # updates, cancellation and approval replies must remain able to proceed.
+        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id)
+        if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
+        data={'requestId':request_id,'prompt':prompt}
+        if images:data['images']=images
+        if status=='waiting':
+            data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id, authoritative=True)['fingerprint'])
+        else:
+            data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
+        return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id)
 
     def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, creation_project=None):
         from .images import validate_images
@@ -407,9 +409,11 @@ class Bridge:
                 if previous["fingerprint"] != fingerprint:
                     raise BridgeError("requestId 已用于不同内容")
                 return previous
-            if any(j["threadId"] == thread_id and j["state"] in (
-                    "preparing", "dispatching", "accepted", "uncertain") for j in self.journal.list()):
-                raise BridgeError("此会话已有未完成或结果待确认的请求，请先核对请求状态")
+            # Protect concurrent turn-start writes, never the lifetime of a task.
+            if any(j['threadId'] == thread_id and j['state'] in ('preparing', 'dispatching')
+                   and j['kind'] in ('message', 'create', 'operation:edit', 'operation:resume', 'operation:compact')
+                   for j in self.journal.list()):
+                raise BridgeError('会话正在提交操作，请稍后重试')
             self.assert_target(thread_id, parent_id)
             job = {"id": request_id, "kind": kind, "threadId": thread_id,
                    "state": "preparing", "created": time.time(), "fingerprint": fingerprint,
@@ -420,8 +424,8 @@ class Bridge:
                 job["expectedTitle"] = "CarryOn · " + prompt[:28] + " [" + request_id[:8] + "]"
                 if creation_project is not None: job['creationProject'] = creation_project
             self.journal.insert(job)
-        threading.Thread(target=self._dispatch, args=(job, prompt, ipc, generation, images, authorize), daemon=True).start()
-        return job
+        self._dispatch(job, prompt, ipc, generation, images, authorize)
+        return self.journal.get(request_id)
 
     def _dispatch(self, job, prompt, ipc, generation, images=None, authorize=None):
         dispatched = False
@@ -465,7 +469,7 @@ class Bridge:
                     write()
 
             turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send, **({"images":images} if images else {}))
-            self.journal.update(job["id"], state="accepted", turnId=turn["id"])
+            self.journal.update(job["id"], state="accepted", turnId=turn["id"], evidence="native-handler-response")
         except Exception as exc:
             uncertain = dispatched and not (isinstance(exc, IPCError) and not exc.uncertain)
             self.journal.update(job["id"], state="uncertain" if uncertain else "failed", error=str(exc))
@@ -504,11 +508,46 @@ class Bridge:
             self.check_generation(ipc, generation)
         return evidence
 
+    def _recover_receipt(self, job):
+        """Recover a lost acknowledgement only from the exact native message ID."""
+        from .operations import turns
+        ipc, generation = self.require()
+        try:
+            self.assert_target(job['threadId'], job.get('sideParentId'))
+            _, state = ipc.snapshot(job['threadId'])
+            identifier = job['clientMessageId']
+            for turn in turns(state):
+                for item in turn.get('items', []):
+                    if item.get('type') not in ('userMessage', 'steeringUserMessage'):
+                        continue
+                    if identifier not in (item.get('id'), item.get('clientUserMessageId'), item.get('clientMessageId'), item.get('clientId')):
+                        continue
+                    rejected = item.get('status') == 'rejected'
+                    with self.lock:
+                        self.check_generation(ipc, generation)
+                        return self.journal.update(job['id'], expected=job,
+                            state='failed' if rejected else ('accepted' if job['kind'] in ('message', 'create') else 'completed'),
+                            turnId=turn.get('turnId'), error='原生端拒绝了此消息' if rejected else None,
+                            evidence='native-message-id')
+            if job['kind'] == 'operation:queue-add':
+                queue = self.queue(job['threadId'], job.get('sideParentId'))
+                if any(item.get('id') == identifier for item in queue['messages']):
+                    with self.lock:
+                        self.check_generation(ipc, generation)
+                        return self.journal.update(job['id'], expected=job, state='completed', error=None,
+                                                   evidence='native-queue-id')
+        except (ValueError, IPCError, BridgeError):
+            pass
+        return self.journal.get(job['id'])
+
     def _refresh_job(self, job_id):
         job = self.journal.get(job_id)
         if job is None:
             raise BridgeError("请求不存在", 404)
-        if job["state"] not in ("accepted", "uncertain") or not job.get("turnId"):
+        if job["state"] == "uncertain" and job.get("clientMessageId"):
+            job = self._recover_receipt(job)
+        # An ordinary receipt records native acceptance, not task execution.
+        if job["kind"] != "create" or job.get("createdThreadId") or job["state"] not in ("accepted", "uncertain") or not job.get("turnId"):
             return job
         try:
             turn = self.turn_evidence(job["threadId"], job["turnId"], **({"parent_id": job["sideParentId"]} if job.get("sideParentId") else {}))
@@ -516,8 +555,6 @@ class Bridge:
             return job  # Unavailable evidence is never interpreted as completion.
         if not turn or turn["status"] not in ("completed", "failed", "interrupted"):
             return job
-        if job["kind"] == "message":
-            return self.journal.update(job_id, expected=job, state=turn["status"])
         # Use the actual native tool result, never a model-generated ID or display
         # title (the app normalizes titles). Reconciliation never resends a turn.
         calls = turn.get("createCalls", [])
@@ -565,4 +602,4 @@ class Bridge:
             if not job or job["state"] != "uncertain":
                 raise BridgeError("只有结果待确认的请求需要人工核对")
             return self.journal.update(job_id, expected=job, state="acknowledged",
-                error="用户已在 Codex App 核对，解除后续发送阻塞；此操作不重发请求")
+                error="用户已在 Codex App 核对；此操作不重发请求")

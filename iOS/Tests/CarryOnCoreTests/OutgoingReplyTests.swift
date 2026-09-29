@@ -36,3 +36,16 @@ private func replyPrompt(answer: String = "允许") throws -> String {
     #expect(!OutgoingMessageProjection.isReflected(item, in: history("message-1", "rejected")))
     #expect(OutgoingMessageProjection.isReflected(item, in: history("message-1", "accepted")))
 }
+
+@Test func nativeReceiptsRemoveTemporaryBubbleWithoutAnyHistory() {
+    let sending: JSONValue = .object(["state": .string("sending"), "prompt": .string("hello")])
+    for state in ["accepted", "completed", "inProgress", "acknowledged"] {
+        #expect(OutgoingMessageProjection.merge(sending, .object(["state": .string(state)])) == nil)
+    }
+    let pending = OutgoingMessageProjection.merge(sending, .object(["state": .string("dispatching")]), live: true)
+    #expect(OutgoingMessageProjection.merge(pending, .object(["state": .string("failed")]))?["state"].text == "failed")
+    #expect(OutgoingMessageProjection.merge(pending, .object(["state": .string("uncertain")]))?["state"].text == "uncertain")
+    #expect(APIError("denied", status: 403).isWriteRejection)
+    #expect(!APIError("timeout", status: 408).isWriteRejection)
+    #expect(!APIError("gateway timeout", status: 504).isWriteRejection)
+}

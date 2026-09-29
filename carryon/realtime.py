@@ -46,7 +46,8 @@ class Realtime:
                     desired.update(session.side_ids)
                 if hasattr(self.bridge,'workspace'):desired.update(self.bridge.workspace.thread_ids())
                 desired.update(j['threadId'] for j in self.bridge.journal.list(limit=100)
-                               if j['state'] in ('accepted', 'uncertain') and j.get('turnId'))
+                               if (j['kind'] == 'create' and not j.get('createdThreadId') and j['state'] == 'accepted' and j.get('turnId')
+                                   or j['state'] == 'uncertain' and (j.get('turnId') or j.get('clientMessageId'))))
             for tid, source in list(self.watched.items()):
                 if tid not in desired or source is not ipc:
                     source.unwatch(tid)
@@ -122,7 +123,8 @@ class Realtime:
             for job in self.bridge.journal.list(limit=100):
                 if self.closed.is_set():
                     return
-                if job['state'] in ('accepted', 'uncertain') and job.get('turnId'):
+                if (job['kind'] == 'create' and not job.get('createdThreadId') and job['state'] == 'accepted' and job.get('turnId')
+                        or job['state'] == 'uncertain' and (job.get('turnId') or job.get('clientMessageId'))):
                     try:
                         self.bridge.refresh_job(job['id'])
                     except (ValueError, OSError, IPCError, BridgeError):
