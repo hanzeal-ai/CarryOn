@@ -1,6 +1,21 @@
 import Foundation
 
 public enum ConversationPresentation {
+    public struct NavigationIndex: Sendable {
+        public let messages: [JSONValue]
+        public let selectionByID: [String: String]
+        public init(_ timeline: [JSONValue]) {
+            messages = ConversationPresentation.navigationMessages(timeline)
+            var selected: String?
+            var selections: [String: String] = [:]
+            for item in timeline {
+                let id = item["id"].string ?? item.formatted
+                if ["userMessage", "steeringUserMessage"].contains(item["type"].text) { selected = id }
+                selections[id] = selected
+            }
+            selectionByID = selections
+        }
+    }
     public static func navigationMessages(_ timeline: [JSONValue]) -> [JSONValue] {
         timeline.filter { ["userMessage", "steeringUserMessage"].contains($0["type"].text) }
     }

@@ -4,7 +4,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from carryon.account_client import request
+from carryon.accounts.account_client import request
 
 
 class AccountTransportTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class AccountTransportTests(unittest.TestCase):
         finally:server.shutdown();server.server_close();worker.join(3)
 
     def test_transport_failure_is_not_retried(self):
-        with patch('carryon.account_client.urllib.request.build_opener') as build:
+        with patch('carryon.routes.http_transport.urllib.request.build_opener') as build:
             build.return_value.open.side_effect=TimeoutError('secret-password')
             with self.assertRaisesRegex(ValueError,'不会自动重试'):
                 request('https://example.test','change',{'password':'secret-password'})
@@ -37,7 +37,7 @@ class AccountTransportTests(unittest.TestCase):
 
     def test_old_console_is_reported_as_needing_upgrade(self):
         import urllib.error
-        with patch('carryon.account_client.urllib.request.build_opener') as build:
+        with patch('carryon.routes.http_transport.urllib.request.build_opener') as build:
             build.return_value.open.side_effect=urllib.error.HTTPError('https://example.test',401,'',{},None)
             with self.assertRaisesRegex(ValueError,'升级云端'):
                 request('https://example.test','status')

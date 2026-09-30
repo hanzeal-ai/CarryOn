@@ -11,7 +11,7 @@ try:
     from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
     AVAILABLE=True
 except ImportError:AVAILABLE=False
-from carryon.apns import APNsSender, APNsError
+from carryon.notifications.apns import APNsSender, APNsError
 
 @unittest.skipUnless(AVAILABLE,'install the apns extra to test provider HTTP/2 and signing')
 class APNsTests(unittest.TestCase):

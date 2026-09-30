@@ -89,7 +89,6 @@ struct ServiceRecord: Identifiable, Equatable {
     @Published var standby = false
     @Published var standbyDescription = ""
     @Published var bindings: [CloudBinding] = []
-    @Published var controller = ""
     @Published var preferences: [String: Bool] = [:]
     @Published var message = ""
     @Published var messageIsError = false
@@ -113,7 +112,7 @@ struct ServiceRecord: Identifiable, Equatable {
     }
     func clearService() {
         running = false; enabled = false; bridgeRequested = false; standby = false; bindings = []; processID = nil
-        controller = ""; preferences = [:]; standbyDescription = ""
+        preferences = [:]; standbyDescription = ""
     }
     func reload() async {
         let target = directory
@@ -164,7 +163,6 @@ struct ServiceRecord: Identifiable, Equatable {
             if let path = service["codexHome"] as? String { codexHome = path }
             processID = service["pid"] as? Int
         }
-        controller = bridge["controllerId"] as? String ?? ""
         preferences = object(notifications.text)?["preferences"] as? [String: Bool] ?? [:]
         applyBindings(cloud)
         if let powerState = object(power.text) {

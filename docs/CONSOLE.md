@@ -2,7 +2,7 @@
 
 云端保存用户账号、工作区授权、短期绑定申请和账号会话。用户通过 iOS 注册、密码登录或账号登录码登录，登录后只能读取自己获授权的工作区。
 
-云端 public URL 应与 `carryon/product.json` 一致，自托管时显式配置对应地址。现有部署使用 `python3 -m carryon.console configure --config 配置路径 --public-url HTTPS地址`；管理员配置与普通用户自助注册分别管理。
+云端 public URL 应与 `carryon/product.json` 一致，自托管时显式配置对应地址。现有部署使用 `python3 -m carryon.cloud.console configure --config 配置路径 --public-url HTTPS地址`；管理员配置与普通用户自助注册分别管理。
 
 ## 用户接口
 

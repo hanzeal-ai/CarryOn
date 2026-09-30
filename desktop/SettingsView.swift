@@ -11,7 +11,6 @@ import AppKit
     @State private var stopping = false
     @State private var removing: CloudBinding?
     @State private var removingWorkspace: ServiceRecord?
-    @State private var controllerInput = ""
     @State private var initializing = false
     @State private var recoveryBindingID: String?
     @State private var nextBindingVerification = Date.distantPast
@@ -85,7 +84,7 @@ import AppKit
                 await refreshSetup()
             }
         }
-        .onChange(of: model.directory) { _ in controllerInput = ""; page = "overview"; setupRequired = false; nextBindingVerification = .distantPast; Task { await refreshSetup() } }
+        .onChange(of: model.directory) { _ in page = "overview"; setupRequired = false; nextBindingVerification = .distantPast; Task { await refreshSetup() } }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -206,15 +205,8 @@ import AppKit
                     if binding.id != model.bindings.last?.id { RowDivider() }
                 }
             }
-            SectionCaption(title: "任务与通知")
+            SectionCaption(title: "通知")
             Paper {
-                DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(model.controller.isEmpty ? "尚未选定控制会话" : model.controller).font(.caption).textSelection(.enabled)
-                        HStack { TextField("已加载的空闲会话 ID", text: $controllerInput); Button("保存") { Task { await model.perform(["controller", "set", "--thread-id", controllerInput]) } }.buttonStyle(QuietButton()).disabled(controllerInput.isEmpty) }
-                    }.padding(14)
-                } label: { Label("创建任务的控制会话", systemImage: "bubble.left.and.bubble.right").font(.system(size: 13)) }.padding(16).disabled(!model.enabled || model.busy)
-                RowDivider()
                 DisclosureGroup {
                     ForEach(["message", "done", "failed", "approval"], id: \.self) { kind in
                         Toggle(["message":"新消息", "done":"任务完成", "failed":"执行失败", "approval":"需要确认"][kind]!, isOn: Binding(get: {model.preferences[kind] ?? true}, set: {v in Task { await model.perform(["notifications", "set", v ? "--"+kind : "--no-"+kind]) } })).toggleStyle(.switch).controlSize(.small).padding(10)

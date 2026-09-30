@@ -2,14 +2,25 @@ import base64
 import unittest
 from unittest.mock import Mock
 import test_cloud
-from carryon.images import validate_images, MAX_IMAGE_BYTES
-from carryon.ipc import DesktopIPC
+from carryon.sessions.images import validate_images, MAX_IMAGE_BYTES
+from carryon.desktop_ipc.ipc import DesktopIPC
 
 PNG='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1cAAAAASUVORK5CYII='
 
 class ImageTests(unittest.TestCase):
+    def test_internal_validation_result_is_immutable_and_not_decoded_twice(self):
+        from unittest.mock import patch
+        import json
+        with patch('carryon.sessions.images.base64.b64decode', wraps=base64.b64decode) as decode:
+            images = validate_images([PNG])
+            self.assertIs(validate_images(images), images)
+            self.assertEqual(decode.call_count, 1)
+        self.assertEqual(json.loads(json.dumps(images)), [PNG])
+        with self.assertRaises(TypeError): images[0] = 'invalid'
+        with self.assertRaises(ValueError): validate_images((PNG,))
+
     def test_validation_rejects_urls_types_count_and_size(self):
-        self.assertEqual(validate_images([PNG]),[PNG])
+        self.assertEqual(tuple(validate_images([PNG])),(PNG,))
         for value in [[PNG]*4,['https://example.test/image.png'],['file:///tmp/image.png'],['data:image/svg+xml;base64,PHN2Zz4='],['data:image/png;base64,YWJj'],['data:image/png;base64,'+base64.b64encode(b'x'*(MAX_IMAGE_BYTES+1)).decode()]]:
             with self.assertRaises(ValueError):validate_images(value)
 
@@ -45,7 +56,7 @@ class ImageCloudTests(unittest.TestCase):
         self.assertEqual(self.request('POST',route,body)[0],403);self.assertFalse(sent)
         self.connect(control=True)
         self.assertEqual(self.request('POST',route,body)[0],202)
-        self.wait(lambda:len(sent)==1);self.assertEqual(sent,[('',[large])])
+        self.wait(lambda:len(sent)==1);self.assertEqual(sent,[('',(large,))])
         self.assertEqual(self.request('POST',route,body)[0],202);self.assertEqual(len(sent),1)
         self.assertNotEqual(self.request('POST',route,{**body,'images':[PNG]})[0],202)
         self.assertNotIn(large,str(self.journal.list()))
@@ -53,7 +64,7 @@ class ImageCloudTests(unittest.TestCase):
     def test_cloud_readonly_can_view_only_known_images_and_bridge_off_revokes(self):
         import tempfile
         from pathlib import Path
-        from carryon.images import image_id
+        from carryon.sessions.images import image_id
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
             self.bridge.history=lambda tid:{'timeline':[{'type':'userMessage','data':{'content':[{'type':'localImage','path':str(path)}]}}]}
@@ -70,8 +81,8 @@ class HistoryImageTests(unittest.TestCase):
     def test_history_scoped_file_reads_and_no_native_mutation(self):
         import tempfile
         from pathlib import Path
-        from carryon.images import read_history_image, image_id
-        from carryon.bridge import snapshot_history
+        from carryon.sessions.images import read_history_image, image_id
+        from carryon.sessions.bridge import snapshot_history
         from carryon.errors import BridgeError
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'image.png';path.write_bytes(base64.b64decode(PNG.split(',')[1]))
@@ -96,7 +107,7 @@ class LocalImageBodyTests(unittest.TestCase):
         import json
         from email.message import Message
         from carryon.server import Handler
-        from carryon.images import MAX_REQUEST_BYTES
+        from carryon.sessions.images import MAX_REQUEST_BYTES
         payload = json.dumps({'prompt': '', 'images': ['data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff' + b'x' * 110000 + b'\xff\xd9').decode()]}).encode()
         for suffix in ('messages', 'compose', 'operations'):
             handler = object.__new__(Handler)
@@ -108,6 +119,6 @@ class LocalImageBodyTests(unittest.TestCase):
             self.assertEqual(handler.body()['prompt'], '')
             handler.headers.replace_header('Content-Length', str(MAX_REQUEST_BYTES + 1))
             with self.assertRaises(ValueError): handler.body()
-        handler.path = '/api/controller'
+        handler.path = '/api/bridge'
         handler.headers.replace_header('Content-Length', str(len(payload)))
         with self.assertRaises(ValueError): handler.body()

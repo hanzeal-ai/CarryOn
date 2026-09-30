@@ -1,274 +1,182 @@
 import json
 import tempfile
+import threading
 import time
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
-from carryon.bridge import Bridge
-from carryon.catalog import Catalog
-from carryon.creation import submit, resolve_project, belongs
+from carryon.owner.integration import OwnerBridge
+from carryon.owner.manager import OwnerManager
+from carryon.sessions.creation import submit, resolve_project
 from carryon.errors import BridgeError
-from carryon.ipc import IPCError
+from carryon.desktop_ipc.ipc import IPCError
 from carryon.store import Journal
-from carryon.workspace import project_identity
-from test_bridge import FakeIPC, THREAD, CHILD
+from carryon.workspaces.workspace import project_identity
+from test_bridge import FakeIPC, CHILD
+from test_owner import Runtime, Bus, state
 
-BUSY='33333333-3333-4333-8333-333333333333'
 
 class ProjectCatalog:
-    def __init__(self, home):
-        self.home=home
-        self.rows=[{'id':BUSY,'cwd':'/project','projectRoot':'/project'}, {'id':THREAD,'cwd':'/project','projectRoot':'/project'}]
-    def get(self, tid):return {'id':tid,'created_at':time.time()}
-    def list(self, *args):return self.rows
+    def __init__(self, home): self.home = home
+    def get(self, tid): return {'id': tid, 'created_at': time.time()}
+    def list(self, *args): return []
 
-class Native(FakeIPC):
-    def __init__(self, path):
-        super().__init__(path);self.prompts=[]
-        self.states={BUSY:{'id':BUSY,'threadRuntimeStatus':{'type':'active'},'requests':[]},
-                     THREAD:{'id':THREAD,'threadRuntimeStatus':{'type':'idle'},'requests':[]}}
-    def current(self, tid):return self.states.get(tid)
+
+class Creator(Runtime):
+    hook = None
+    error = None
+    instances = []
+    def create_thread(self, params, before_send):
+        if self.hook: self.hook()
+        before_send(lambda: self.calls.append(('thread/start', params)))
+        if self.error: raise self.error
+        self.data = state(CHILD)
+        self.data['cwd'] = params['cwd']
+        self.data['turns'] = []
+        meta = {'id': CHILD, 'cwd': params['cwd'], 'projectId': params['projectId'], 'historyMode': 'paginated'}
+        self.data['threadMetadata'] = meta
+        return meta
+
+
+class Follower(FakeIPC):
     def snapshot(self, tid):
-        if tid not in self.states: raise IPCError('no-client-found')
-        return 'owner',self.states[tid]
-    def wake_snapshot(self, tid, *, before_open):
-        before_open()
-        return self.snapshot(tid)
-    sidebar_snapshot=snapshot
+        return self.manager.bus.client_id, self.manager.entries[tid]['runtime'].current(tid)
     def start(self, tid, prompt, owner, message_id, before_send):
-        before_send(lambda:self.prompts.append((tid,prompt)))
-        return {'id':'turn-1'}
+        result = []
+        def send():
+            result.append(self.manager.handle({'method': 'thread-follower-start-turn', 'version': 2,
+                'requestId': 'wire', 'sourceClientId': 'follower', 'params': {'conversationId': tid,
+                'turnStart': {'request': {'threadId': tid, 'clientUserMessageId': message_id,
+                'input': [{'type': 'text', 'text': prompt}]}, 'context': {'inheritThreadSettings': True}}}}))
+        before_send(send)
+        return result[0]['result']['turn']
+
 
 class ProjectCreationTests(unittest.TestCase):
-    def test_native_identity_resolves_shared_root_and_checks_created_membership(self):
-        self.state.write_text(json.dumps({'local-projects':{
-            'bundle':{'name':'Bundle','rootPaths':['/project','/second']},
-            'other':{'rootPaths':['/project']}}}))
-        pid=project_identity('/project',native_id='bundle')[0]
-        project=resolve_project(self.bridge.catalog,pid)
-        self.assertEqual(project,{'id':'bundle','cwd':'/project','groupId':pid})
-        self.assertTrue(belongs({'nativeProjectId':'bundle','cwd':'/second'},project))
-        self.assertFalse(belongs({'cwd':'/project','projectRoot':'/project'},project))
-        self.assertFalse(belongs({'nativeProjectId':'other','cwd':'/project'},project))
-        self.assertFalse(belongs({'nativeProjectId':'bundle','projectless':True},project))
-        with self.assertRaises(BridgeError):resolve_project(self.bridge.catalog,project_identity('/project')[0])
-        with self.assertRaises(BridgeError):resolve_project(self.bridge.catalog,project_identity('/second')[0])
-        self.state.write_text(json.dumps({'local-projects':{'bundle':{'rootPaths':['/second','/second']}}}))
-        self.assertEqual(resolve_project(self.bridge.catalog,project_identity('/second',native_id='bundle')[0])['id'],'bundle')
-
     def setUp(self):
-        directory_state = patch('carryon.creation.Path.is_dir', return_value=True)
-        directory_state.start(); self.addCleanup(directory_state.stop)
-        self.temp=tempfile.TemporaryDirectory();self.home=Path(self.temp.name)
-        self.state=self.home/'.codex-global-state.json'
-        self.state.write_text(json.dumps({'local-projects':{'native-project':{'rootPaths':['/project']}}}))
-        self.project=project_identity('/project',native_id='native-project')[0]
-        self.journal=Journal(self.home/'jobs.sqlite')
-        self.bridge=Bridge('fake',ProjectCatalog(self.home),self.journal,Native);self.bridge.enable()
-    def tearDown(self):self.bridge.disable();self.journal.conn.close();self.temp.cleanup()
+        self.temp = tempfile.TemporaryDirectory(); self.home = Path(self.temp.name)
+        self.state = self.home / '.codex-global-state.json'
+        self.state.write_text(json.dumps({'local-projects': {'native-project': {'rootPaths': [str(self.home)]}}}))
+        self.project = project_identity(str(self.home), native_id='native-project')[0]
+        self.journal = Journal(self.home / 'jobs.sqlite')
+        self.bridge = OwnerBridge('fake', ProjectCatalog(self.home), self.journal,
+                                  owner_directory=self.home / 'owner', ipc_factory=Follower)
+        self.bridge.enable()
+        self.manager = OwnerManager(self.home, self.home / 'owner', self.bridge.catalog,
+                                    runtime_factory=Creator, transport_factory=Bus)
+        self.bridge.owner_service = self.manager
+        self.bridge.ipc.manager = self.manager
+        Creator.instances = []; Creator.hook = None; Creator.error = None
+    def tearDown(self):
+        self.bridge.shutdown(); self.journal.conn.close(); self.temp.cleanup()
     def settled(self, job):
-        for _ in range(100):
-            result=self.journal.get(job['id'])
-            if result['state'] not in ('preparing','dispatching'):return result
+        for _ in range(200):
+            result = self.journal.get(job['id'])
+            if result['state'] not in ('preparing', 'dispatching'): return result
             time.sleep(.01)
         self.fail('job did not settle')
-    def test_selects_idle_project_member_and_passes_prompt_without_global_controller(self):
-        prompt='请修复按钮。\n保留输入内容。'
-        job=submit(self.bridge,'project-create-1',prompt,self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertIsNone(self.bridge.controller)
-        tid,payload=self.bridge.ipc.prompts[0]
-        self.assertEqual(tid,THREAD)
-        self.assertIn(json.dumps(prompt,ensure_ascii=False),payload)
-        self.assertIn('native-project',payload)
-        self.assertIn('list_projects',payload)
-        self.assertIn('environment.type 使用 local',payload)
-        self.assertNotIn('worktree',payload)
-        self.assertNotIn('"type":"projectless"',payload)
-        self.assertEqual(submit(self.bridge,'project-create-1',prompt,self.project)['id'],job['id'])
-        self.assertEqual(len(self.bridge.ipc.prompts),1)
-        with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','different',self.project)
-    def test_rejects_unavailable_project_directory(self):
-        with patch('carryon.creation.Path.is_dir', return_value=False):
-            with self.assertRaises(BridgeError):
-                submit(self.bridge,'project-create-1','hello',self.project)
-        self.assertEqual(self.bridge.ipc.prompts,[])
-
-    def test_rejects_missing_project_busy_and_unowned_candidates(self):
-        with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','hello',project_identity('/other')[0])
-        self.bridge.ipc.states[THREAD]['threadRuntimeStatus']['type']='active'
-        with self.assertRaises(BridgeError):submit(self.bridge,'project-create-2','hello',self.project)
-        self.assertEqual(self.bridge.ipc.prompts,[])
-    def test_old_uncertain_receipt_does_not_override_native_idle(self):
-        self.journal.insert({'id':'pending','kind':'message','fingerprint':'f','threadId':THREAD,'state':'uncertain','created':time.time()})
-        self.assertEqual(submit(self.bridge,'project-create-1','hello',self.project)['state'], 'accepted')
-    def test_revocation_prevents_dispatch(self):
-        def denied():raise BridgeError('revoked',403)
-        with self.assertRaises(BridgeError):submit(self.bridge,'project-create-1','hello',self.project,authorize=denied)
-        self.assertEqual(self.bridge.ipc.prompts,[])
-    def test_state_change_before_native_write_blocks_creation(self):
-        native_start=self.bridge.ipc.start
-        def changed(tid, *args, **kwargs):
-            self.bridge.ipc.states[tid]['threadRuntimeStatus']['type']='active'
-            return native_start(tid,*args,**kwargs)
-        self.bridge.ipc.start=changed
-        job=submit(self.bridge,'project-create-1','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'failed')
-        self.assertEqual(self.bridge.ipc.prompts,[])
-    def test_project_change_before_native_write_blocks_creation(self):
-        native_start=self.bridge.ipc.start
-        def changed(tid, *args, **kwargs):
-            self.bridge.catalog.rows=[]
-            return native_start(tid,*args,**kwargs)
-        self.bridge.ipc.start=changed
-        job=submit(self.bridge,'project-create-1','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'failed')
-        self.assertEqual(self.bridge.ipc.prompts,[])
-    def test_cloud_project_creation_uses_scoped_request_and_preserves_project(self):
-        from carryon.remote_scope import scoped_dispatch, request_key
-        body={'projectId':self.project,'requestId':'cloud-project-1','prompt':'hello'}
-        status,job=scoped_dispatch(self.bridge,'POST','/api/threads',body,True,'binding-a')
-        self.assertEqual(status,202)
-        stored=self.settled({'id':request_key('binding-a','cloud-project-1')})
-        self.assertEqual(stored['sourceBinding'],'binding-a')
-        self.assertEqual(stored['creationProject']['id'],'native-project')
-        self.assertEqual(job['id'],'cloud-project-1')
-    def test_native_creation_result_must_match_project_and_prompt(self):
-        job=submit(self.bridge,'project-create-1','hello',self.project);self.settled(job)
-        call={'status':'completed','arguments':{'prompt':'hello','title':job['expectedTitle'],
-             'target':{'type':'project','projectId':'wrong','environment':{'type':'local'}}},
-             'result':{'content':[{'type':'text','text':json.dumps({'hostId':'local','threadId':CHILD})}]}}
-        self.bridge.turn_evidence=lambda *args:{'status':'completed','createCalls':[call]}
-        self.bridge.catalog.rows.append({'id':CHILD,'cwd':'/project','projectRoot':'/project','nativeProjectId':'native-project'})
-        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
-        call['arguments']['target']['projectId']='native-project'
-        call['arguments']['target']['environment'] = {'type': 'worktree'}
-        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
-        call['arguments']['target']['environment'] = {'type': 'worktree', 'startingState': {'type': 'working-tree'}}
-        self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'uncertain')
-        call['arguments']['target']['environment'] = {'type': 'local'}
-        self.assertEqual(self.bridge.refresh_job(job['id'])['createdThreadId'],CHILD)
-    def test_queued_creation_id_requires_native_binding(self):
-        catalog=Catalog(self.home)
-        with self.assertRaises(ValueError):catalog.created_thread_id({'clientThreadId':THREAD})
-        self.state.write_text(json.dumps({'electron-persisted-atom-state':{'client-thread-bindings-v1':{THREAD:CHILD}}}))
-        self.assertEqual(catalog.created_thread_id({'clientThreadId':THREAD}),CHILD)
-
-    def test_prefixed_queued_creation_id_resolves_only_through_native_binding(self):
-        catalog=Catalog(self.home)
-        client_id='client-new-thread:438ce5fa-14b0-495d-a349-a9b5dc84f50f'
-        with self.assertRaises(ValueError):catalog.created_thread_id({'clientThreadId':client_id})
-        self.state.write_text(json.dumps({'electron-persisted-atom-state':{'client-thread-bindings-v1':{client_id:CHILD}}}))
-        self.assertEqual(catalog.created_thread_id({'clientThreadId':client_id}),CHILD)
-        for invalid in ['client-new-thread:invalid', 'other:'+THREAD, None]:
-            with self.assertRaises(ValueError):catalog.created_thread_id({'clientThreadId':invalid})
-        with self.assertRaises(ValueError):catalog.created_thread_id({'threadId':client_id})
-
-    def add_recent(self, tid=CHILD, updated_at=1, runtime='idle'):
-        self.bridge.catalog.rows.append({'id':tid,'cwd':'/recent','projectless':True,'updated_at':updated_at})
-        self.bridge.ipc.states[tid]={'id':tid,'threadRuntimeStatus':{'type':runtime},'requests':[]}
-
-    def test_recent_projectless_precedes_newer_project_conversation(self):
-        self.add_recent()
-        self.bridge.catalog.rows[1]['updated_at']=100
-        job=submit(self.bridge,'recent-create-1','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],CHILD)
-        self.assertEqual(job['creationProject']['id'],'native-project')
-        self.assertIn('native-project',self.bridge.ipc.prompts[0][1])
-        self.assertIsNone(self.bridge.controller)
-        self.assertEqual(submit(self.bridge,'recent-create-1','hello',self.project)['id'],job['id'])
-        self.assertEqual(len(self.bridge.ipc.prompts),1)
-
-    def test_recent_candidates_use_recency_and_native_runtime(self):
-        self.add_recent(CHILD,updated_at=1)
-        self.add_recent(BUSY,updated_at=3,runtime='active')
-        waiting='44444444-4444-4444-8444-444444444444'
-        self.add_recent(waiting,updated_at=4)
-        self.bridge.ipc.states[waiting]['requests']=[{'id':'approval'}]
-        pending='55555555-5555-4555-8555-555555555555'
-        self.add_recent(pending,updated_at=5)
-        self.journal.insert({'id':'pending','kind':'message','fingerprint':'f','threadId':pending,'state':'uncertain','created':time.time()})
-        job=submit(self.bridge,'recent-create-2','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],pending)
-
-    def test_falls_back_to_other_project_when_recent_is_busy(self):
-        self.add_recent(runtime='active')
-        self.bridge.catalog.rows[1].update(cwd='/other',projectRoot='/other')
-        job=submit(self.bridge,'recent-create-3','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],THREAD)
-        self.assertEqual(job['creationProject']['id'],'native-project')
-
-    def test_unloaded_recent_is_woken_before_loaded_project_candidate(self):
-        self.add_recent(runtime='notLoaded')
-        woke=[]
-        def wake(tid, *, before_open):
-            before_open(); woke.append(tid)
-            self.bridge.ipc.states[tid]['threadRuntimeStatus']={'type':'idle'}
-            return self.bridge.ipc.snapshot(tid)
-        self.bridge.ipc.wake_snapshot=wake
-        job=submit(self.bridge,'recent-create-4','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(woke,[CHILD])
-        self.assertEqual(self.bridge.ipc.prompts[0][0],CHILD)
-
-    def test_woken_busy_or_unknown_recent_is_not_used(self):
-        for status in ['active','unknown']:
-            with self.subTest(status=status):
-                self.add_recent(runtime='notLoaded')
-                def wake(tid, *, before_open):
-                    before_open()
-                    return 'owner',{'id':tid,'threadRuntimeStatus':{'type':status},'requests':[]}
-                self.bridge.ipc.wake_snapshot=wake
-                job=submit(self.bridge,'recent-'+status,'hello',self.project)
-                if status=='active':
-                    self.assertEqual(self.settled(job)['state'],'accepted')
-                    self.assertEqual(self.bridge.ipc.prompts[0][0],THREAD)
-                    self.journal.update(job['id'],state='completed')
-                else:
-                    self.assertEqual(self.settled(job)['state'],'accepted')
-                    self.assertEqual(self.bridge.ipc.prompts[-1][0],THREAD)
-
-    def test_target_project_change_blocks_borrowed_recent(self):
-        self.add_recent()
-        native_start=self.bridge.ipc.start
-        def changed(tid,*args,**kwargs):
-            self.state.write_text(json.dumps({'local-projects':{}}))
-            return native_start(tid,*args,**kwargs)
-        self.bridge.ipc.start=changed
-        job=submit(self.bridge,'recent-create-5','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'failed')
-        self.assertEqual(self.bridge.ipc.prompts,[])
-
-    def test_failed_wake_falls_back_without_sending_to_recent(self):
-        self.add_recent(runtime='notLoaded')
-        def wake(tid, *, before_open):
-            before_open()
-            raise IPCError('load failed')
-        self.bridge.ipc.wake_snapshot=wake
-        job=submit(self.bridge,'recent-create-6','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],THREAD)
-
-    def test_recent_search_timeout_still_searches_other_conversations(self):
-        self.add_recent(runtime='notLoaded')
-        clock=[0]
-        def wake(tid, *, before_open):
-            before_open();clock[0]=20
-            raise IPCError('load timed out')
-        self.bridge.ipc.wake_snapshot=wake
-        with patch('carryon.creation.time.monotonic',side_effect=lambda:clock[0]):
-            job=submit(self.bridge,'recent-create-7','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],THREAD)
-
-    def test_newest_recent_wins_independent_of_catalog_input_order(self):
-        self.add_recent(CHILD,updated_at=1)
-        newest='66666666-6666-4666-8666-666666666666'
-        self.add_recent(newest,updated_at=2)
-        job=submit(self.bridge,'recent-create-8','hello',self.project)
-        self.assertEqual(self.settled(job)['state'],'accepted')
-        self.assertEqual(self.bridge.ipc.prompts[0][0],newest)
+    def test_native_project_identity_and_membership(self):
+        self.assertEqual(resolve_project(self.bridge.catalog, self.project)['id'], 'native-project')
+        with self.assertRaises(BridgeError): resolve_project(self.bridge.catalog, project_identity('/other')[0])
+    def test_create_without_existing_conversations_and_send_exact_prompt_through_owner(self):
+        prompt = '请修复按钮。\n保留输入内容。'
+        job = self.settled(submit(self.bridge, 'project-create-1', prompt, self.project))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(job['threadId'], CHILD)
+        self.assertEqual(job['createdThreadId'], CHILD)
+        runtime = Creator.instances[0]
+        self.assertEqual(runtime.calls[0], ('thread/start', {'cwd': str(self.home), 'projectId': 'native-project', 'historyMode': 'paginated'}))
+        self.assertEqual(runtime.calls[1][0], 'turn/start')
+        self.assertEqual(runtime.calls[1][1]['input'], [{'type': 'text', 'text': prompt}])
+        self.assertTrue(runtime.connected)
+        self.assertIs(self.manager.entries[CHILD]['runtime'], runtime)
+        again = submit(self.bridge, job['id'], prompt, self.project)
+        self.assertEqual(again, job); self.assertEqual(len(Creator.instances), 1)
+        with self.assertRaises(BridgeError): submit(self.bridge, job['id'], 'different', self.project)
+    def test_same_request_concurrently_creates_once(self):
+        entered = threading.Event(); proceed = threading.Event()
+        Creator.hook = lambda _: (entered.set(), proceed.wait(2))
+        first = submit(self.bridge, 'concurrent-create', 'hello', self.project)
+        self.assertTrue(entered.wait(1))
+        second = submit(self.bridge, 'concurrent-create', 'hello', self.project)
+        self.assertEqual(first['id'], second['id'])
+        proceed.set(); self.assertEqual(self.settled(first)['state'], 'completed')
+        self.assertEqual(len(Creator.instances), 1)
+    def test_invalid_project_and_missing_directory_do_not_start_runtime(self):
+        for project in (None, project_identity('/other')[0]):
+            with self.assertRaises((ValueError, BridgeError)): submit(self.bridge, 'bad-project', 'hello', project)
+        with patch('carryon.sessions.creation.Path.is_dir', return_value=False):
+            with self.assertRaises(BridgeError): submit(self.bridge, 'bad-directory', 'hello', self.project)
+        self.assertEqual(Creator.instances, [])
+    def test_revocation_before_create_has_no_native_write(self):
+        allowed = [True]
+        def authorize():
+            if not allowed[0]: raise BridgeError('revoked', 403)
+        Creator.hook = lambda _: allowed.__setitem__(0, False)
+        job = self.settled(submit(self.bridge, 'revoked-create', 'hello', self.project, authorize=authorize))
+        self.assertEqual(job['state'], 'failed'); self.assertEqual(Creator.instances[0].calls, [])
+        self.assertFalse(Creator.instances[0].connected)
+    def test_project_change_before_write_blocks_creation(self):
+        Creator.hook = lambda _: self.state.write_text(json.dumps({'local-projects': {}}))
+        job = self.settled(submit(self.bridge, 'changed-project', 'hello', self.project))
+        self.assertEqual(job['state'], 'failed'); self.assertEqual(Creator.instances[0].calls, [])
+    def test_lost_creation_reply_is_uncertain_and_never_recreated(self):
+        Creator.error = IPCError('lost reply', uncertain=True)
+        job = self.settled(submit(self.bridge, 'lost-create', 'hello', self.project))
+        self.assertEqual(job['state'], 'uncertain'); self.assertFalse(Creator.instances[0].connected)
+        self.assertEqual(submit(self.bridge, job['id'], 'hello', self.project), job)
+        self.assertEqual(len(Creator.instances), 1)
+    def test_native_rejection_is_failed(self):
+        Creator.error = IPCError('project not found')
+        job = self.settled(submit(self.bridge, 'rejected-create', 'hello', self.project))
+        self.assertEqual(job['state'], 'failed'); self.assertFalse(Creator.instances[0].connected)
+    def test_owner_conflict_preserves_id_without_sending(self):
+        self.manager.bus.foreign = 'desktop'
+        job = self.settled(submit(self.bridge, 'conflict-create', 'hello', self.project))
+        self.assertEqual(job['state'], 'uncertain'); self.assertEqual(job['createdThreadId'], CHILD)
+        self.assertEqual(len(Creator.instances[0].calls), 1); self.assertFalse(Creator.instances[0].connected)
+        self.assertEqual(self.manager.entries, {})
+    def test_revoke_after_adoption_releases_idle_runtime_without_sending(self):
+        allowed = [True]
+        def authorize():
+            if not allowed[0]: raise BridgeError('revoked', 403)
+        original = self.bridge.ipc.snapshot
+        def snapshot(tid):
+            result = original(tid); allowed[0] = False; return result
+        self.bridge.ipc.snapshot = snapshot
+        job = self.settled(submit(self.bridge, 'revoke-adopt', 'hello', self.project, authorize=authorize))
+        self.assertEqual(job['state'], 'uncertain'); self.assertEqual(len(Creator.instances[0].calls), 1)
+        self.assertFalse(Creator.instances[0].connected); self.assertEqual(self.manager.entries, {})
+    def test_lost_turn_reply_retains_owner_and_does_not_replay(self):
+        original = self.bridge.ipc.start
+        def start(*args):
+            original(*args); raise IPCError('lost turn', uncertain=True)
+        self.bridge.ipc.start = start
+        job = self.settled(submit(self.bridge, 'lost-turn', 'hello', self.project))
+        self.assertEqual(job['state'], 'uncertain'); self.assertTrue(Creator.instances[0].connected)
+        self.assertEqual(submit(self.bridge, job['id'], 'hello', self.project), job)
+        self.assertEqual(len(Creator.instances[0].calls), 2)
+    def test_explicit_turn_rejection_releases_idle_creator(self):
+        def rejected(*args):
+            args[-1](lambda: None)
+            raise IPCError('turn rejected')
+        self.bridge.ipc.start = rejected
+        job = self.settled(submit(self.bridge, 'rejected-turn', 'hello', self.project))
+        self.assertEqual(job['state'], 'uncertain')
+        self.assertEqual(job['createdThreadId'], CHILD)
+        # Cleanup can finish just after the receipt becomes visible.
+        for _ in range(100):
+            if not Creator.instances[0].connected: break
+            time.sleep(.01)
+        self.assertFalse(Creator.instances[0].connected)
+        self.assertEqual(self.manager.entries, {})
+    def test_cloud_scoping_and_read_only_permission(self):
+        from carryon.routes.remote_scope import scoped_dispatch, request_key
+        body = {'projectId': self.project, 'requestId': 'cloud-project-1', 'prompt': 'hello'}
+        with self.assertRaises(BridgeError): scoped_dispatch(self.bridge, 'POST', '/api/threads', body, False, 'binding-a')
+        status, job = scoped_dispatch(self.bridge, 'POST', '/api/threads', body, True, 'binding-a')
+        self.assertEqual(status, 202); self.assertEqual(job['id'], body['requestId'])
+        stored = self.settled({'id': request_key('binding-a', body['requestId'])})
+        self.assertEqual(stored['sourceBinding'], 'binding-a'); self.assertEqual(stored['state'], 'completed')
+        with self.assertRaises(BridgeError): scoped_dispatch(self.bridge, 'GET', '/api/jobs/' + body['requestId'], None, True, 'binding-b')

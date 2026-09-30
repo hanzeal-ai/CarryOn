@@ -15,9 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from carryon.app_server import AppServer
-from carryon.catalog import Catalog
-from carryon.ipc import IPCError
+from carryon.app_server.app_server import AppServer
+from carryon.sessions.catalog import Catalog
+from carryon.desktop_ipc.ipc import IPCError
 
 
 class Model(BaseHTTPRequestHandler):

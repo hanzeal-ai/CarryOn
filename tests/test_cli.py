@@ -49,21 +49,19 @@ class CLITests(unittest.TestCase):
                (['standby','on'],'/service/standby',{'enabled':True}),
                (['standby','off'],'/service/standby',{'enabled':False}),
                (['cloud','control','--binding-id','binding-b','--read-only'],'/cloud/control',{'id':'binding-b','control':False}),
-               (['cloud','control','--binding-id','binding-a','--allow-control'],'/cloud/control',{'id':'binding-a','control':True}),
-               (['controller','set','--thread-id','thread-id'],'/controller',{'threadId':'thread-id'})]
+               (['cloud','control','--binding-id','binding-a','--allow-control'],'/cloud/control',{'id':'binding-a','control':True})]
         with tempfile.TemporaryDirectory() as temp:
             for arguments,path,body in cases:
                 with self.subTest(arguments=arguments), patch('carryon.services.running',return_value={'port':1234}), \
                         patch('carryon.services.call',return_value={}) as call, redirect_stdout(io.StringIO()):
                     self.assertEqual(main(arguments+['--state-dir',temp]),0)
                     self.assertEqual(call.call_args.args,(Path(temp).resolve(),path,body))
-            for arguments in [['cloud','control'],['controller','set']]:
+            for arguments in [['cloud','control']]:
                 with patch('carryon.services.running',return_value={'port':1234}), patch('carryon.services.call') as call, redirect_stderr(io.StringIO()):
                     self.assertEqual(main(arguments+['--state-dir',temp]),1);call.assert_not_called()
 
     def test_settings_status_is_read_only(self):
-        for arguments,path in [(['bridge','status'],'/status'),(['standby','status'],'/service/standby'),
-                               (['controller','status'],'/status')]:
+        for arguments,path in [(['bridge','status'],'/status'),(['standby','status'],'/service/standby')]:
             with self.subTest(arguments=arguments), patch('carryon.services.running',return_value={'port':1234}), \
                     patch('carryon.services.call',return_value={}) as call, redirect_stdout(io.StringIO()):
                 self.assertEqual(main(arguments),0)

@@ -1,7 +1,7 @@
 import unittest
-from carryon.thread_status import idle_snapshot
+from carryon.sessions.thread_status import idle_snapshot
 from carryon.errors import BridgeError
-from carryon.thread_status import project_status
+from carryon.sessions.thread_status import project_status
 
 
 class ThreadStatusTests(unittest.TestCase):

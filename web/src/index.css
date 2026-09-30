@@ -47,7 +47,6 @@
   .thread.active { color:hsl(var(--foreground)); background:hsl(var(--accent)); }
   .thread strong { font-weight:600; }
   .thread-status.running { color:#5b4a23; background:#f6f1e3; }
-  .controller-box { border-color:hsl(var(--border)); }
   .conversation { padding:0 clamp(22px,3.4vw,52px); background:hsl(var(--background)); }
   .conversation-head { padding:22px 0 14px; border-bottom:0; }
   .conversation-head h2 { font-size:18px; font-weight:600; }
@@ -76,7 +75,7 @@
   #notice { background:hsl(var(--foreground)); border-radius:12px; }
 
 .welcome-icon { color:hsl(var(--foreground)); background:hsl(var(--muted)); box-shadow:none; }
-.welcome .eyebrow, .welcome p, .auth-card .auth-help, .auth-security, .auth-card #auth-description, .auth-story > p, .controller-box > summary { color:hsl(var(--muted-foreground)); }
+.welcome .eyebrow, .welcome p, .auth-card .auth-help, .auth-security, .auth-card #auth-description, .auth-story > p { color:hsl(var(--muted-foreground)); }
 .account-avatar { color:hsl(var(--foreground)); background:hsl(var(--muted)); border-color:hsl(var(--border)); }
 .activity-icon { color:hsl(var(--muted-foreground)); }
 
@@ -124,7 +123,7 @@ dialog { border-radius:20px; }
  .thread-status.error, .error { color:#ff928b; }
  #notice { color:var(--inverse); }
 }
-#search, #controller, #console-device, #token, #login-username, #registration-invite { background:var(--field); color:var(--ink); border-color:var(--hairline); border-radius:14px; }
+#search, #console-device, #token, #login-username, #registration-invite { background:var(--field); color:var(--ink); border-color:var(--hairline); border-radius:14px; }
 #search { min-height:40px; }
 #console-device { min-height:36px; }
 .thread-status.unknown { background:var(--field); color:var(--subtle); }

@@ -35,8 +35,8 @@ class PushConsoleTests(test_console.ConsoleTests):
 
     def test_background_push_uses_device_websocket_without_phone_subscription(self):
         import time
-        from carryon.workspace import Workspace
-        from carryon.push import PushService
+        from carryon.workspaces.workspace import Workspace
+        from carryon.notifications.push import PushService
         from test_workspace import Native
         from test_push import Sender, INSTALL
         from test_cloud import T

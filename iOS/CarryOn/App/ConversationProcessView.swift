@@ -29,24 +29,24 @@ struct ConversationProcessView: View {
                     if !entries.isEmpty { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 10)) }
                     Spacer(minLength: 0)
                 }.font(.subheadline).foregroundStyle(Design.secondary)
-                    .frame(minHeight: 44).contentShape(Rectangle())
+                    .frame(minHeight: 32).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(entries.isEmpty).accessibilityValue(entries.isEmpty ? "" : expanded ? "已展开" : "已收起")
             if expanded && !entries.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(entries.prefix(5)), id: \.stableID) { entry in
                         ProcessContentRow(item: entry, threadID: threadID, anchorID: item.stableID)
                     }
                     if entries.count > 5 {
-                        Button("查看完整过程（\(entries.count) 项）") { showingAll = true }.frame(minHeight: 44)
+                        Button("查看完整过程（\(entries.count) 项）") { showingAll = true }.frame(minHeight: 32)
                     }
-                }.padding(.top, 4)
+                }
                 .sheet(isPresented: $showingAll) {
                     NavigationStack {
-                        ScrollView { LazyVStack(alignment: .leading, spacing: 12) {
+                        ScrollView { LazyVStack(alignment: .leading, spacing: 4) {
                             ForEach(entries, id: \.stableID) { entry in
                                 ProcessContentRow(item: entry, threadID: threadID, anchorID: item.stableID)
                             }
-                        }.padding(20) }
+                        }.padding(.horizontal, 20).padding(.vertical, 8) }
                         .navigationTitle("执行过程").navigationBarTitleDisplayMode(.inline)
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showingAll = false } } }
                     }

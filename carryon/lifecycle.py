@@ -1,8 +1,8 @@
 """Keep a requested local bridge connected; explicit off cancels reconnects."""
 import threading
 
-from .errors import BridgeError
-from .ipc import IPCError
+from carryon.errors import BridgeError
+from carryon.desktop_ipc.ipc import IPCError
 
 
 class BridgeLifecycle:
@@ -32,8 +32,11 @@ class BridgeLifecycle:
     def connect(self):
         try:
             if not self.bridge.status()['enabled']:
-                self.bridge.disable()
-                self.bridge.enable()
+                reconnect = getattr(self.bridge, "reconnect", None)
+                if reconnect: reconnect()
+                else:
+                    self.bridge.disable()
+                    self.bridge.enable()
             self.error = None
         except (BridgeError, IPCError, OSError) as exc:
             self.error = str(exc)
@@ -57,4 +60,5 @@ class BridgeLifecycle:
             self.worker.join(5)
         with self.lock:
             self.requested = False
-            self.bridge.disable()
+            shutdown = getattr(self.bridge, 'shutdown', self.bridge.disable)
+            shutdown()

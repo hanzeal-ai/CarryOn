@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
  try {
   const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   const errors=[],writes=[];let ready=true,publish;
-  const status=()=>({enabled:true,protocol:'codex-app-server',controllerId:null,remoteControl:true,accountReady:ready});
+  const status=()=>({enabled:true,protocol:'codex-app-server',remoteControl:true,accountReady:ready});
   page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
   await page.route('**/console/**',async route=>{

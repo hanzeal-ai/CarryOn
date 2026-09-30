@@ -1,8 +1,8 @@
 import threading
 import unittest
 from unittest.mock import Mock
-from carryon.history_cache import HistoryCache
-from carryon.realtime import packet_signature
+from carryon.sessions.history_cache import HistoryCache
+from carryon.routes.realtime import packet_signature
 
 
 class HistoryCacheTests(unittest.TestCase):

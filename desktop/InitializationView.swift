@@ -44,7 +44,7 @@ import CoreImage.CIFilterBuiltins
                 Toggle("允许手机操作会话", isOn: Binding(get: {allowsControl}, set: {value in permissions = Set(value ? ["view","create","send","stop","edit","files","approve"] : ["view","files"]) }))
                 DisclosureGroup("细分权限", isExpanded: $fineGrained) {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach([("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批")], id: \.0) { key, label in
+                        ForEach([("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批"),("resetQuota","使用额度重置卡")], id: \.0) { key, label in
                             Toggle(label, isOn: Binding(get: {permissions.contains(key)}, set: { value in if value {permissions.insert(key)} else {permissions.remove(key)} }))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }

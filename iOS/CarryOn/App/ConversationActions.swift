@@ -110,6 +110,22 @@ struct ConversationMenu: View {
                                 .disabled(!model.canInteract(.edit) || model.state != "idle" || !model.history["controls"]["requests"].array.isEmpty)
                             Divider().padding(.leading, 60)
                         }
+                        if let thread = model.selectedThread, !model.conversationReadOnly,
+                           model.status["supportsSessionLoading"].bool == true,
+                           !model.canInteract || model.history["executionBackend"].text == "carryon-owner" {
+                            let loaded = model.history["executionBackend"].text == "carryon-owner"
+                            Button {
+                                Task {
+                                    let path = "/api/threads/\(ConsoleAddress.component(thread.id))/session"
+                                    if await model.write(path: path, target: thread.id,
+                                        body: .object(["action": .string(loaded ? "release" : "load")])) {
+                                        model.retryHistory()
+                                    }
+                                }
+                            } label: { SettingRow(icon: "arrow.clockwise", title: loaded ? "释放手机加载的会话" : "加载会话") }
+                                .disabled(!model.canWrite(.send) || model.writing)
+                            Divider().padding(.leading, 60)
+                        }
                         Button { jobs = true } label: { SettingRow(icon: "clock", title: "请求记录", chevron: true) }
                     }
                 }.padding(20)
@@ -141,7 +157,9 @@ struct RequestLogView: View {
                 ForEach(records) { record in
                     DisclosureGroup(record.value["kind"].text + " · " + record.value["state"].text) {
                         Text(record.value.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                        if ["uncertain", "failed"].contains(record.value["state"].text) {
+                        if record.value["kind"].text == "quota-reset", record.value["state"].text == "uncertain" {
+                            Text("请到“我的”额度详情使用原请求核对并重试").font(.caption)
+                        } else if record.value["kind"].text != "quota-reset", ["uncertain", "failed"].contains(record.value["state"].text) {
                             Button("我已在 Codex App 核对结果") { confirmedJob = record }.disabled(!model.canWrite(.send))
                         }
                     }

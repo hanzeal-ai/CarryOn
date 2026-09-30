@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from carryon.api import dispatch
+from carryon.routes.api import dispatch
 from carryon.errors import BridgeError
 from carryon.usage import native_read, project
 
@@ -22,13 +22,37 @@ class UsageTests(unittest.TestCase):
         self.assertIsNone(result['limits'][1]['windows'][0]['usedPercent'])
         self.assertNotIn('private', json.dumps(result))
 
-    def test_legacy_null_invalid_and_clamping(self):
-        self.assertEqual(project({'rateLimits': None})['limits'], [])
-        result = project({'rateLimits': {'primary': {'usedPercent': 105}, 'secondary': {'usedPercent': True, 'resetsAt': -1}}})
+    def test_missing_map_invalid_and_clamping(self):
+        self.assertEqual(project({'rateLimits': {'primary': {'usedPercent': 90}}})['limits'], [])
+        result = project({'rateLimitsByLimitId': {'codex': {'primary': {'usedPercent': 105}, 'secondary': {'usedPercent': True, 'resetsAt': -1}}}})
         self.assertEqual(result['limits'][0]['windows'][0]['usedPercent'], 100)
         self.assertIsNone(result['limits'][0]['windows'][1]['usedPercent'])
         self.assertIsNone(result['limits'][0]['windows'][1]['resetsAt'])
         with self.assertRaises(BridgeError): project([])
+
+    def test_reset_credit_count_is_native_not_detail_length(self):
+        result = project({'rateLimitResetCredits': {'availableCount': 5, 'credits': [
+            {'id': 'card', 'title': 'Quota reset', 'status': 'available',
+             'grantedAt': 1800000000, 'expiresAt': 1900000000, 'secret': 'private'}]}, 'token': 'private'})
+        summary = result['rateLimitResetCredits']
+        self.assertEqual(summary['availableCount'], 5)
+        self.assertEqual(len(summary['credits']), 1)
+        self.assertEqual(summary['credits'][0]['expiresAt'], 1900000000)
+        self.assertEqual(summary['credits'][0]['grantedAt'], 1800000000)
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_reset_credit_unknown_zero_and_partial_details(self):
+        self.assertIsNone(project({})['rateLimitResetCredits'])
+        for details in (None, []):
+            summary = project({'rateLimitResetCredits': {'availableCount': 0, 'credits': details}})['rateLimitResetCredits']
+            self.assertEqual(summary, {'availableCount': 0, 'credits': details})
+        summary = project({'rateLimitResetCredits': {'availableCount': 3}})['rateLimitResetCredits']
+        self.assertEqual(summary, {'availableCount': 3, 'credits': None})
+        for count in (True, -1, 1.5, '2'):
+            summary = project({'rateLimitResetCredits': {'availableCount': count, 'credits': [None,
+                {'id': 'card', 'status': 'unexpected', 'grantedAt': True, 'expiresAt': -2}]}})['rateLimitResetCredits']
+            self.assertIsNone(summary['availableCount'])
+            self.assertEqual(summary['credits'], [{'id': 'card', 'title': None, 'status': 'unknown', 'grantedAt': None, 'expiresAt': None}])
 
     def test_route_is_read_only_and_uses_selected_bridge_home(self):
         home = Path('/workspace-selected/codex')

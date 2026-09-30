@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from carryon.bridge import Bridge
-from carryon.events import Events
-from carryon.queue import message
+from carryon.sessions.bridge import Bridge
+from carryon.desktop_ipc.events import Events
+from carryon.sessions.queue import message
 from carryon.server import Handler, Server
 from carryon.store import Journal
 from test_operations import IPC, T, state

@@ -48,11 +48,6 @@ public enum ConversationProcess {
         return result
     }
 
-    public static func singleActivity(_ group: JSONValue) -> JSONValue? {
-        let items = group["items"].array
-        return items.count == 1 && items[0]["type"].text != "reasoning" ? items[0] : nil
-    }
-
     public static func bodyItems(_ group: JSONValue) -> [JSONValue] {
         group["items"].array.filter { $0["type"].text != "reasoning" }
     }

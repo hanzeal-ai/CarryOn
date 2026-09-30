@@ -1,5 +1,5 @@
-from carryon.workspace_access import CAPABILITIES
-from carryon.console_auth import password_record
+from carryon.workspaces.workspace_access import CAPABILITIES
+from carryon.cloud.console_auth import password_record
 import http.client
 import json
 import tempfile
@@ -8,9 +8,9 @@ import time
 import unittest
 from pathlib import Path
 
-from carryon.console import ConsoleServer, public_url
-from carryon.cloud import CloudConnector
-from carryon.bridge import Bridge
+from carryon.cloud.console import ConsoleServer, public_url
+from carryon.cloud.cloud import CloudConnector
+from carryon.sessions.bridge import Bridge
 from carryon.store import Journal
 from test_cloud import Catalog, IPC, T
 

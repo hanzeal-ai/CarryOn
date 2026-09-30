@@ -9,7 +9,7 @@ from carryon.server import Server, Handler
 class FakeBridge:
     def status(self): return {"enabled":False}
     def require(self):
-        from carryon.bridge import BridgeError
+        from carryon.sessions.bridge import BridgeError
         raise BridgeError("disabled", 403)
 
 
@@ -73,7 +73,7 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(response.status,expected)
 
     def test_browser_cannot_mutate_local_settings_even_with_valid_token(self):
-        for path in ['/api/bridge','/api/controller','/api/service/stop','/api/service/standby',
+        for path in ['/api/bridge','/api/service/stop','/api/service/standby',
                      '/api/notifications/preferences','/api/cloud','/api/cloud/control','/api/cloud/link/start','/api/cloud/link/poll','/api/cloud/pair']:
             for browser in [{'Origin':f'http://127.0.0.1:{self.port}'},{'Sec-Fetch-Site':'same-origin'}, {'Sec-Fetch-Mode':'cors'}]:
                 with self.subTest(path=path,browser=browser):

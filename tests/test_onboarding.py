@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from test_console_auth import AccountTests
-from carryon.console_auth import ConsoleAuth
-from carryon.onboarding import exchange
-from carryon.workspace_access import capability, require
+from carryon.cloud.console_auth import ConsoleAuth
+from carryon.accounts.onboarding import exchange
+from carryon.workspaces.workspace_access import capability, require
 
 
 class BindingTests(AccountTests):
@@ -22,7 +22,7 @@ class BindingTests(AccountTests):
             with self.assertRaises(OSError):invites.cancel(poll)
         self.assertEqual(invites.entries[ident]['state'], 'waiting')
         # The file sync succeeds; the directory sync fails after rename.
-        with patch('carryon.binding_invites.os.fsync', side_effect=[None, OSError('directory sync failed')]):
+        with patch('carryon.accounts.binding_invites.os.fsync', side_effect=[None, OSError('directory sync failed')]):
             with self.assertRaises(OSError):invites.cancel(poll)
         self.assertEqual(invites.entries[ident]['state'], 'cancelled')
         self.assertEqual(self.request('binding/accept', {'id':ident,'secret':secret}, cookie)[0], 400)
@@ -96,7 +96,7 @@ class BindingTests(AccountTests):
         self.assertEqual(self.server.config['devices'], {})
 
     def test_member_invitation_needs_computer_confirmation_and_revocation_closes_stream(self):
-        from carryon.member_management import manage
+        from carryon.accounts.member_management import manage
         import hashlib
         alice = self.register_user('alice'); bob = self.register_user('bob')
         aid = self.request('session',cookie=alice)[1]['account']['id']
@@ -166,7 +166,7 @@ class BindingTests(AccountTests):
         identity=self.request('session',cookie=alice)[1]['account']['id']
         self.server.save_devices({'source':{'deviceToken':'s'*40,'apiToken':'a'*40,'members':{identity:['view']}},
                                   'target':{'deviceToken':'t'*40,'apiToken':'b'*40,'members':{}}})
-        from carryon.member_management import manage
+        from carryon.accounts.member_management import manage
         with self.assertRaises(PermissionError):
             manage(self.server, {'deviceId':'target','token':'t'*40,'action':'grant','accountId':identity,
                    'permissions':['view'], 'source':{'deviceId':'source','token':'s'*40}})
@@ -191,7 +191,7 @@ class BindingTests(AccountTests):
 
 class InitializationTests(unittest.TestCase):
     def test_saved_bindings_remain_visible_when_service_is_stopped(self):
-        from carryon.cloud_manager import CloudManager
+        from carryon.cloud.cloud_manager import CloudManager
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
             config={'enabled':True,'url':'wss://example.test/device','deviceId':'mac','token':'t'*43,'control':False}
@@ -230,7 +230,7 @@ class InitializationTests(unittest.TestCase):
             root = Path(temp); directory = root/'workspace'
             invitation = {'id':'a'*32, 'secret':'b'*43, 'url':'https://example.test/#carryon-bind='+'a'*32+'.'+'c'*43, 'expiresAt':time.time()+300}
             result = {'state':'bound','deviceId':'mac','token':'t'*43,'account':{'id':'alice','username':'Alice'}}
-            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.services.start') as start:
+            with patch.dict('os.environ', {'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.accounts.onboarding.request', side_effect=[invitation,result,{"members":[]}]) as request, patch('carryon.services.start') as start:
                 state = exchange(directory, {'action':'prepare','url':'https://example.test','autoStart':False,'control':False})
                 self.assertEqual(state['state'], 'waiting')
                 self.assertNotIn('secret', state)
@@ -258,10 +258,10 @@ class OnboardingRequestErrorTests(unittest.TestCase):
     def test_native_binding_error_survives_http_transport(self):
         import io
         import urllib.error
-        from carryon.onboarding import request
+        from carryon.accounts.onboarding import request
         error = urllib.error.HTTPError('https://example.test/console/binding/manage',403,'Forbidden',{},
             io.BytesIO(json.dumps({'error':'设备凭证无效'}).encode()))
-        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+        with patch('carryon.routes.http_transport.urllib.request.build_opener') as factory:
             factory.return_value.open.side_effect = error
             with self.assertRaisesRegex(ValueError,'设备凭证无效，请重新绑定'):
                 request('https://example.test','manage',{'action':'list'})
@@ -269,9 +269,9 @@ class OnboardingRequestErrorTests(unittest.TestCase):
     def test_non_json_http_error_keeps_status(self):
         import io
         import urllib.error
-        from carryon.onboarding import request
+        from carryon.accounts.onboarding import request
         error = urllib.error.HTTPError('https://example.test',502,'Bad Gateway',{},io.BytesIO(b'<html>bad gateway</html>'))
-        with patch('carryon.onboarding.urllib.request.build_opener') as factory:
+        with patch('carryon.routes.http_transport.urllib.request.build_opener') as factory:
             factory.return_value.open.side_effect = error
             with self.assertRaisesRegex(ValueError,'HTTP 502'):
                 request('https://example.test','start',{})

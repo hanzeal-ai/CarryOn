@@ -7,10 +7,10 @@ import time
 import unittest
 from pathlib import Path
 
-from carryon.bridge import Bridge
-from carryon.cloud import CloudConnector
-from carryon.cloud_wire import endpoint
-from carryon.gateway import Gateway
+from carryon.sessions.bridge import Bridge
+from carryon.cloud.cloud import CloudConnector
+from carryon.cloud.cloud_wire import endpoint
+from carryon.cloud.gateway import Gateway
 from carryon.store import Journal
 
 T='11111111-1111-4111-8111-111111111111'
@@ -122,7 +122,7 @@ class CloudTests(unittest.TestCase):
             with self.assertRaises(ValueError):endpoint(url,True)
         endpoint('wss://cloud.test/device')
         with self.assertRaises(ValueError):endpoint('ws://127.0.0.1/device')
-        from carryon.cloud_manager import CloudManager
+        from carryon.cloud.cloud_manager import CloudManager
         manager=CloudManager(self.bridge,self.path)
         manager.configure(self.config,start=False)
         self.assertEqual((self.path/'cloud.json').stat().st_mode&0o777,0o600)

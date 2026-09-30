@@ -9,7 +9,7 @@ try{for(const width of [1280,390]){
  const page=await browser.newPage({viewport:{width,height:844}});page.on('pageerror',e=>{errors.push(e.message);console.error('PAGE ERROR',e.message)});let requests=[],mode='idle',delay=0,publish;
  await page.addInitScript(()=>sessionStorage.setItem('carryon-token','fixture-token'));
  await page.route('**/api/**',async route=>{const r=route.request(),path=new URL(r.url()).pathname;let data={};
-  if(path==='/api/status')data={enabled:true,controllerId:P};
+  if(path==='/api/status')data={enabled:true};
   else if(path==='/api/threads')data={threads:[{id:P,title:'主会话'}]};
   else if(path==='/api/projects')data={projects:[],total:0,nextOffset:0};
   else if(path==='/api/activity')data={threads:[],total:0};
@@ -19,7 +19,7 @@ try{for(const width of [1280,390]){
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
  });
  await page.routeWebSocket('**/api/stream',socket=>socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type!=='subscribe')return;
- publish=()=>socket.send(JSON.stringify({type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,controllerId:P},jobs:[],...(m.threadId?{history:history(P)}:{}),...(m.includeSideChats?{sideChats:{chats:[{id:C,title:'侧边一',label:'空闲'},{id:D,title:'侧边二',label:'空闲'}]},sideThreadId:m.sideThreadId,...(m.sideThreadId?{sideHistory:history(m.sideThreadId,mode)}:{})}:{})}));publish();}));
+ publish=()=>socket.send(JSON.stringify({type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true},jobs:[],...(m.threadId?{history:history(P)}:{}),...(m.includeSideChats?{sideChats:{chats:[{id:C,title:'侧边一',label:'空闲'},{id:D,title:'侧边二',label:'空闲'}]},sideThreadId:m.sideThreadId,...(m.sideThreadId?{sideHistory:history(m.sideThreadId,mode)}:{})}:{})}));publish();}));
  await page.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8898/example.html');await page.waitForFunction(()=>typeof selectThread==='function'&&enabled);
  await page.evaluate(id=>selectThread(id),P);await page.locator('#prompt').fill('主会话草稿');
  await page.evaluate(()=>$('open-side').click());await page.locator('#side-select option').filter({hasText:'侧边一'}).waitFor({state:'attached'});

@@ -1,10 +1,31 @@
 import json
 import unittest
-from carryon.bridge import snapshot_history
-from carryon.questions import OPEN, CLOSE, reply_answers
+from carryon.sessions.bridge import snapshot_history
+from carryon.sessions.questions import OPEN, CLOSE, reply_answers
 
 
 class AsyncQuestionTests(unittest.TestCase):
+    def test_pending_questions_match_display_without_full_message_projection(self):
+        from copy import deepcopy
+        from unittest.mock import patch
+        from carryon.sessions.timeline import pending_questions
+        state = self.state()
+        state['turns'].insert(0, {'turnId': 'old', 'status': 'completed', 'items': [
+            {'type': 'userMessage', 'content': [{'type': 'text', 'text': 'ordinary'}]} for _ in range(100)]})
+        original = deepcopy(state)
+        expected = [dict(q, turnId=item['turnId'], itemId=item['nativeId'])
+                    for item in snapshot_history(state)['timeline'] for q in item.get('asyncQuestions', [])
+                    if q['active'] and q['answer'] is None]
+        with patch('carryon.sessions.timeline.project_item', side_effect=AssertionError('display projection is unnecessary')):
+            self.assertEqual(pending_questions(state['turns']), expected)
+        self.assertEqual(state, original)
+        wire = OPEN + json.dumps({'questionItemId': expected[0]['id'], 'question': '方向', 'answer': '窗口'}) + CLOSE
+        reply = {'type': 'steeringUserMessage', 'status': 'rejected', 'input': [{'type': 'text', 'text': wire}]}
+        state['turns'][-1]['items'].append(reply)
+        self.assertEqual(pending_questions(state['turns']), expected)
+        reply['status'] = 'accepted'
+        self.assertEqual(pending_questions(state['turns']), [])
+
     def state(self):
         return {'id': 'thread', 'threadRuntimeStatus': {'type': 'active'}, 'requests': [], 'turns': [
             {'turnId': 'turn', 'status': 'inProgress', 'items': [
@@ -60,7 +81,7 @@ class AsyncQuestionComposeTests(unittest.TestCase):
 
     def test_answer_uses_steering_once_without_interrupt_or_approval(self):
         from test_operations import state, T
-        from carryon.remote_scope import scoped_dispatch
+        from carryon.routes.remote_scope import scoped_dispatch
         from carryon.errors import BridgeError
         native = state('active')
         self.bridge.ipc.snapshot = lambda tid: ('owner', native)

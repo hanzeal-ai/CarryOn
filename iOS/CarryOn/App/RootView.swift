@@ -4,6 +4,9 @@ import CarryOnCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab = 0
+    @State private var projectList = RecordListState()
+    @State private var threadList = RecordListState()
+    @State private var activityList = RecordListState()
     @Namespace private var tabSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("carryon.projectView") private var projectView = true
@@ -18,9 +21,9 @@ struct RootView: View {
                 VStack(spacing: 0) {
                     Group {
                         switch tab {
-                        case 1: ActivityView()
+                        case 1: ActivityView(listState: activityList)
                         case 2: SettingsView()
-                        default: ProjectsView()
+                        default: ProjectsView(listState: projectList, threadListState: threadList)
                         }
                     }.id(model.selectedDevice)
                         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
@@ -38,6 +41,9 @@ struct RootView: View {
                 }
               }
             }
+        }
+        .onChange(of: model.scope + String(model.authenticated)) { _, _ in
+            projectList.reset(); threadList.reset(); activityList.reset()
         }
         .foregroundStyle(Design.ink)
         .background(ImageLightboxPresenter(image: model.previewImage, isPresented: Binding(

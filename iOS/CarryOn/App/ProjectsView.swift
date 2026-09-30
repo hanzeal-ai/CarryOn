@@ -2,6 +2,8 @@ import SwiftUI
 import CarryOnCore
 
 struct ProjectsView: View {
+    @State var listState = RecordListState()
+    @State var threadListState = RecordListState()
     @Environment(AppModel.self) private var model
     @State private var creating = false
     @AppStorage("carryon.projectView") private var projectView = true
@@ -10,7 +12,7 @@ struct ProjectsView: View {
         VStack(spacing: 0) {
             RecordListView(path: projectView ? "/api/projects" : "/api/workspace/threads",
                            key: projectView ? "projects" : "threads", isProjectList: projectView,
-                           create: { creating = true }) { record in
+                           create: { creating = true }, state: projectView ? listState : threadListState) { record in
                 if projectView { model.selectedProject = record } else { model.open(record) }
             }.id(projectView)
         }
@@ -28,6 +30,27 @@ struct ProjectsView: View {
         }.fullScreenCover(isPresented: $creating) { NewConversationView() }
     }
 }
+@MainActor @Observable final class RecordListState {
+    enum LoadKind { case initial, refresh, more, background }
+    var search = ""
+    var filter = "all"
+    var scrollID: String?
+    var loadedQueryIdentity = ""
+    var records: [Record] = []
+    var total = 0
+    var offset = 0
+    var loadKind: LoadKind? = .initial
+    var failure: String?
+    var requestVersion = UUID()
+    var clearing = false
+    var updatedAt = Date.distantPast
+    func reset() {
+        search = ""; filter = "all"; scrollID = nil; loadedQueryIdentity = ""
+        records = []; total = 0; offset = 0; loadKind = .initial
+        failure = nil; requestVersion = UUID(); clearing = false; updatedAt = .distantPast
+    }
+}
+
 struct RecordListView: View {
     @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
     @Environment(AppModel.self) private var model
@@ -38,27 +61,17 @@ struct RecordListView: View {
     var excludedThreadID: String?
     var beforeActivityOpen: (() -> Void)?
     var create: (() -> Void)?
+    @State var state = RecordListState()
     let select: (Record) -> Void
-    @State private var search = ""
-    @State private var filter = "all"
-    @State private var scrollID: String?
-    @State private var loadedQueryIdentity = ""
-    @State private var records: [Record] = []
-    @State private var total = 0
-    @State private var offset = 0
-    private enum LoadKind { case initial, refresh, more, background }
-    @State private var loadKind: LoadKind? = .initial
-    private var loading: Bool { loadKind != nil }
-    @State private var failure: String?
-    @State private var requestVersion = UUID()
-    @State private var clearing = false
-    private var queryIdentity: String { model.scope + path + search + filter + String(showInactiveConversations) + (excludedThreadID ?? "") }
+    private typealias LoadKind = RecordListState.LoadKind
+    private var loading: Bool { state.loadKind != nil }
+    private var queryIdentity: String { model.scope + path + state.search + state.filter + String(showInactiveConversations) + (excludedThreadID ?? "") }
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
-                SearchField(text: $search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
+                SearchField(text: $state.search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
                 if !isProjectList {
-                    Picker("筛选", selection: $filter) {
+                    Picker("筛选", selection: $state.filter) {
                         Text("全部").tag("all")
                         if path != "/api/activity" { Text("执行中").tag("running") }
                         Text("待处理").tag("waiting")
@@ -66,48 +79,56 @@ struct RecordListView: View {
                     }.pickerStyle(.segmented).accessibilityIdentifier("conversation-filter")
                 }
             }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
-            ScrollView {
+            ScrollViewReader { proxy in
+              ScrollView {
                 VStack(spacing: 16) {
-                    if records.isEmpty {
+                    if state.records.isEmpty {
                         if model.selectedDevice.isEmpty { BlankState(text: "请先选择工作区", symbol: "laptopcomputer") }
-                        else if loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
-                        else if let failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
-                        else if loadKind != .refresh {
-                            BlankState(text: search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
+                        else if state.loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
+                        else if let failure = state.failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
+                        else if state.loadKind != .refresh {
+                            BlankState(text: state.search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: state.search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
                         }
-                    } else if let failure {
+                    } else if let failure = state.failure {
                         HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
                     }
                     if isProjectList {
                         LazyVStack(spacing: 12) {
-                            ForEach(records) { record in
+                            ForEach(state.records) { record in
                                 Button { select(record) } label: { Paper { projectRow(record) } }
                                     .buttonStyle(.plain).id(record.id)
                             }
                         }.scrollTargetLayout()
-                    } else if !records.isEmpty {
+                    } else if !state.records.isEmpty {
                         LazyVStack(spacing: 0) {
-                            ForEach(records) { record in
+                            ForEach(state.records) { record in
                                 if path == "/api/activity" {
                                     ActivityRow(record: record, scope: model.scope, dimmed: retainReadActivity && record.value["activityRead"].bool == true, beforeOpen: beforeActivityOpen)
                                         .id(record.id)
                                 } else {
                                     Button { select(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
                                 }
-                                if record.id != records.last?.id { Divider().padding(.leading, 16) }
+                                if record.id != state.records.last?.id { Divider().padding(.leading, 16) }
                             }
                         }.scrollTargetLayout()
                     }
-                    if !records.isEmpty && records.count < total {
-                        Button { Task { await load(reset: false, kind: .more) } } label: { if loadKind == .more { ProgressView("加载更多…") } else { Text("加载更多（\(records.count)/\(total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
+                    if !state.records.isEmpty && state.records.count < state.total {
+                        Button { Task { await load(reset: false, kind: .more) } } label: { if state.loadKind == .more { ProgressView("加载更多…") } else { Text("加载更多（\(state.records.count)/\(state.total)）").font(.caption) } }.frame(minHeight: 44).disabled(loading)
                     }
                 }.padding(.bottom, 8)
-            }.scrollPosition(id: $scrollID, anchor: .top).frame(minHeight: 0, maxHeight: .infinity)
+            }.scrollPosition(id: $state.scrollID, anchor: .top).frame(minHeight: 0, maxHeight: .infinity)
                 .background(isProjectList ? Color.clear : Design.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Design.corner))
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await load(reset: true, kind: .refresh) }
                 .padding(.horizontal, 20).padding(.bottom, 12)
+                .task {
+                    if let anchor = state.scrollID {
+                        await Task.yield()
+                        if !Task.isCancelled { proxy.scrollTo(anchor, anchor: .top) }
+                    }
+                }
+            }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -118,19 +139,23 @@ struct RecordListView: View {
                                 .disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                         } else if retainReadActivity {
                             Button("清空已读") { Task { await clearRead() } }
-                                .disabled(clearing || loading || model.selectedDevice.isEmpty)
+                                .disabled(state.clearing || loading || model.selectedDevice.isEmpty)
                         }
                     }
                 }
             }
             .task(id: queryIdentity) {
-                if loadedQueryIdentity == queryIdentity && !records.isEmpty { return }
-                loadedQueryIdentity = queryIdentity
-                records = []; total = 0; offset = 0; scrollID = nil
-                if let cached = try? RecordPage(model.cachedValue(requestPath(offset: 0)), key: key) {
-                    records = cached.records; total = cached.total; offset = cached.nextOffset
+                if state.loadedQueryIdentity == queryIdentity {
+                    if Date().timeIntervalSince(state.updatedAt) < 30 { return }
+                    await load(reset: true, kind: state.records.isEmpty ? .initial : .background)
+                    return
                 }
-                await load(reset: true, debounce: !search.isEmpty)
+                state.loadedQueryIdentity = queryIdentity
+                state.records = []; state.total = 0; state.offset = 0; state.scrollID = nil
+                if let cached = try? RecordPage(model.cachedValue(requestPath(offset: 0)), key: key) {
+                    state.records = cached.records; state.total = cached.total; state.offset = cached.nextOffset
+                }
+                await load(reset: true, debounce: !state.search.isEmpty)
             }
             .onChange(of: model.connected) { _, connected in
                 if connected { Task { await load(reset: true, kind: .background) } }
@@ -141,12 +166,12 @@ struct RecordListView: View {
             }
     }
     private func clearRead() async {
-        clearing = true; defer { clearing = false }
+        state.clearing = true; defer { state.clearing = false }
         do {
             _ = try await model.deviceRequest("/api/notifications/clear-read", body: .object([:]))
             await load(reset: true, kind: .refresh)
             try await model.refreshActivityCounts()
-        } catch { failure = error.localizedDescription }
+        } catch { state.failure = error.localizedDescription }
     }
     private func projectRow(_ record: Record) -> some View {
         HStack(spacing: 14) {
@@ -171,41 +196,42 @@ struct RecordListView: View {
         if running > 0 { CountPill(text: "\(running) 进行中", color: Design.green) }
         if unread > 0 { CountPill(text: "\(unread) 未读", color: Design.blue) }
     }
-    private func requestPath(offset: Int) -> String {
+    private func requestPath(offset requestedOffset: Int) -> String {
         let excluded = excludedThreadID.map { "&excludeThreadId=" + ConsoleAddress.component($0) } ?? ""
-        return path + "?limit=50&offset=\(offset)&search=\(ConsoleAddress.component(search))&filter=\(filter)&availableOnly=\(!showInactiveConversations)" + excluded + (retainReadActivity ? "&includeRead=true" : "")
+        return path + "?limit=50&offset=\(requestedOffset)&search=\(ConsoleAddress.component(state.search))&filter=\(state.filter)&availableOnly=\(!showInactiveConversations)" + excluded + (retainReadActivity ? "&includeRead=true" : "")
     }
     private func load(reset: Bool, kind: LoadKind = .initial, debounce: Bool = false) async {
         if (kind == .more || kind == .background) && loading { return }
         // Reading a detail may remove its row from the unread query. Keep its sheet alive until dismissed.
         if path == "/api/activity", !model.activitySnapshots.isEmpty { return }
-        guard !model.selectedDevice.isEmpty else { loadKind = nil; return }
-        let version = UUID(); requestVersion = version
-        loadKind = kind; failure = nil
-        defer { if requestVersion == version { loadKind = nil } }
+        guard !model.selectedDevice.isEmpty else { state.loadKind = nil; return }
+        let version = UUID(); state.requestVersion = version
+        state.loadKind = kind; state.failure = nil
+        defer { if state.requestVersion == version { state.loadKind = nil } }
         do {
             if debounce { try await Task.sleep(for: .milliseconds(300)) }
             try Task.checkCancellation()
-            let desired = reset && kind == .background ? max(50, records.count) : 50
-            var next = try RecordPage(try await model.cachedDeviceRequest(requestPath(offset: reset ? 0 : offset), maxAge: kind == .initial ? 30 : 0), key: key)
+            let desired = reset && kind == .background ? max(50, state.records.count) : 50
+            var next = try RecordPage(try await model.cachedDeviceRequest(requestPath(offset: reset ? 0 : state.offset), maxAge: kind == .initial ? 30 : 0), key: key)
             var refreshed = next.records
             while reset && refreshed.count < min(desired, next.total) && !next.records.isEmpty {
-                guard version == requestVersion, !Task.isCancelled else { return }
+                guard version == state.requestVersion, !Task.isCancelled else { return }
                 next = try RecordPage(try await model.cachedDeviceRequest(requestPath(offset: next.nextOffset), maxAge: 0), key: key)
                 refreshed += next.records
             }
-            guard version == requestVersion, !Task.isCancelled else { return }
+            guard version == state.requestVersion, !Task.isCancelled else { return }
             if path == "/api/activity", !model.activitySnapshots.isEmpty { return }
-            let old = reset ? [] : records
+            let old = reset ? [] : state.records
             let ids = Set(old.map(\.id))
-            records = old + refreshed.filter { !ids.contains($0.id) }
-            total = next.total; offset = next.nextOffset
+            state.records = old + refreshed.filter { !ids.contains($0.id) }
+            state.total = next.total; state.offset = next.nextOffset; state.updatedAt = Date()
         } catch {
-            if !Task.isCancelled && version == requestVersion { failure = error.localizedDescription; model.report(error, operation: path == "/api/activity" ? "读取动态" : "读取会话列表", blocking: false) }
+            if !Task.isCancelled && version == state.requestVersion { state.failure = error.localizedDescription; model.report(error, operation: path == "/api/activity" ? "读取动态" : "读取会话列表", blocking: false) }
         }
     }
 }
 struct ActivityView: View {
+    @State var listState = RecordListState()
     @Environment(AppModel.self) private var model
     @State private var links = false
     var body: some View {
@@ -214,7 +240,7 @@ struct ActivityView: View {
                 Button { links = true } label: { SettingRow(icon: "link", title: "连接申请", value: "\(model.requests.count) 项待确认", chevron: true) }
                     .background(Design.surface, in: RoundedRectangle(cornerRadius: Design.corner)).padding(.horizontal, 20).padding(.top, 12)
             }
-            RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true) { model.open($0) }
+            RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true, state: listState) { model.open($0) }
         }.sheet(isPresented: $links) { NavigationStack { ScrollView { WorkspaceBindingRequests().padding(20) }.navigationTitle("连接申请") } }
     }
 }

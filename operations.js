@@ -2,6 +2,8 @@
 const Operations = (() => {
   let selected = null, signature = '', transport, notify, writable=false;
   const seenQuestions=new Set();
+  let modelCatalog=null;
+  const modelWrites=new Set();
   let messageEditor=null, messageEditorKey='';
   const labels = {'interrupt':'停止任务','steer':'补充指令','compact':'压缩上下文','settings':'会话设置',
     'queue-add':'添加排队任务','queue-edit':'编辑排队任务','queue-delete':'删除排队任务','queue-reorder':'调整排队顺序','queue-resume':'恢复排队任务','edit':'编辑最后一轮','clear-queue':'清空排队消息','command-approval':'命令审批',
@@ -9,7 +11,7 @@ const Operations = (() => {
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
   box('question-later').onclick=()=>box('question-dialog').close();
-  function reset() {messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  function reset() {modelCatalog=null;messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
   async function send(target, action, fields, button) {
     if(target!==selected||!writable)return;
     button.disabled=true;
@@ -48,6 +50,67 @@ const Operations = (() => {
     }
     row.append(messageEditor);
   }
+  function renderModelSettings(parent,history,threadId,api,drafts) {
+    const epoch=api.epoch, current=()=>parent.isConnected&&selected===threadId&&transport===api&&api.epoch===epoch;
+    const c=history.controls;
+    const selectedModel=drafts.get('模型')??c.settings.model??history.metadata?.latestModel??'';
+    const selectedEffort=drafts.get('思考强度')??c.settings.effort??history.metadata?.latestReasoningEffort??'';
+    const model=el('select'), effort=el('select'), status=el('small');status.setAttribute('role','status');
+    model.dataset.draftKey='模型';effort.dataset.draftKey='思考强度';
+    model.setAttribute('aria-label','模型');effort.setAttribute('aria-label','思考强度');
+    const modelLabel=el('label','模型'), effortLabel=el('label','思考强度');
+    modelLabel.append(model);effortLabel.append(effort);parent.append(modelLabel,effortLabel,status);
+    model.append(new Option(selectedModel||'未提供',selectedModel));
+    effort.append(new Option(selectedEffort||'未提供',selectedEffort));
+    let choices=[], loading=true;
+    const pendingWrite=()=>[...modelWrites].find(item=>item.api===api&&item.epoch===epoch&&item.threadId===threadId);
+    const choice=()=>choices.find(item=>item.id===model.value);
+    const update=()=>{
+      const saving=!!pendingWrite();
+      model.disabled=!writable||loading||saving||!choices.length;
+      effort.disabled=!writable||loading||saving||!choice()?.efforts.length;
+      save.disabled=!writable||loading||saving||!choice()?.efforts.includes(effort.value);
+    };
+    const syncEfforts=(preferred)=>{
+      const item=choice(), values=item?.efforts||[];
+      const value=preferred??(values.includes(item?.defaultEffort)?item.defaultEffort:values[0])??'';
+      effort.replaceChildren(...values.map(value=>new Option(value,value)));
+      if(!values.includes(value)){const option=new Option(value||'未提供',value);option.disabled=true;effort.prepend(option);}
+      effort.value=value;update();
+    };
+    const save=button(parent,'保存设置',async b=>{
+      if(!current()||pendingWrite()||!choice()?.efforts.includes(effort.value))return;
+      const pending={api,epoch,threadId};modelWrites.add(pending);
+      pending.promise=send(threadId,'settings',{settings:{model:model.value,effort:effort.value}},b).finally(()=>modelWrites.delete(pending));
+      update();await pending.promise;update();
+    });
+    const pending=pendingWrite();
+    if(pending)pending.promise.then(()=>{if(current())update();});
+    model.onchange=()=>syncEfforts();
+    effort.onchange=update;
+    const retry=button(parent,'重新读取模型',()=>{modelCatalog=null;load();});retry.hidden=true;
+    async function load() {
+      loading=true;status.textContent='正在读取模型…';retry.hidden=true;update();
+      try {
+        if(!modelCatalog||modelCatalog.api!==api||modelCatalog.epoch!==epoch||Date.now()-modelCatalog.created>60000){
+          modelCatalog={api,epoch,created:Date.now(),promise:api.request('/models')};
+        }
+        const result=await modelCatalog.promise;
+        if(!current())return;
+        if(!Array.isArray(result.models)||result.models.some(item=>!item||typeof item.id!=='string'||!Array.isArray(item.efforts)||!item.efforts.length||item.efforts.some(value=>typeof value!=='string'||!value)))throw Error('模型目录格式不正确');
+        choices=result.models;
+        model.replaceChildren(...choices.map(item=>new Option(item.name||item.id,item.id)));
+        if(!choices.some(item=>item.id===selectedModel)){const option=new Option(selectedModel||'未提供',selectedModel);option.disabled=true;model.prepend(option);}
+        model.value=selectedModel;
+        loading=false;syncEfforts(selectedEffort);
+        status.textContent=choices.length?'':'本机尚未提供可选模型';retry.hidden=choices.length>0;
+      } catch(error) {
+        if(!current())return;
+        loading=false;status.textContent='模型读取失败：'+error.message;retry.hidden=false;update();
+      }
+    }
+    load();
+  }
   function render(history, threadId, api, notice, canWrite=true) {
     writable=canWrite&&history.access?.canInteract!==false;
     if(history.access?.canInteract===false){reset();return;}
@@ -78,13 +141,7 @@ const Operations = (() => {
     }
     if(['active','idle'].includes(history.runtime?.type)&&(!c.supportedOperations||c.supportedOperations.includes('settings'))){
       const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
-      const model=field(settings,'模型',c.settings.model||history.metadata?.latestModel||'');
-      const effortLabel=el('label','思考强度'), effort=el('select');
-      for(const value of ['', 'none','minimal','low','medium','high','xhigh','max','ultra'])effort.append(new Option(value||'默认',value));
-      const currentEffort=c.settings.effort||history.metadata?.latestReasoningEffort||'';
-      if(![...effort.options].some(o=>o.value===currentEffort))effort.append(new Option(currentEffort,currentEffort));
-      effort.value=currentEffort;effortLabel.append(effort);settings.append(effortLabel);
-      button(settings,'保存设置',b=>send(threadId,'settings',{settings:{model:model.value||null,effort:effort.value||null}},b));
+      renderModelSettings(settings,history,threadId,api,allDrafts);
       const advanced=el('details');advanced.append(el('summary','全部设置'));settings.append(advanced);
       advanced.append(el('p','填写需要修改的字段；未填写的设置保持不变。权限、沙箱和工作目录的更改会影响后续任务。'));
       advanced.append(el('small','支持：model、effort、serviceTier、cwd、approvalPolicy、approvalsReviewer、sandboxPolicy、permissions、activePermissionProfile、collaborationMode、personality、summary'));

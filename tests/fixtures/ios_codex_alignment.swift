@@ -42,7 +42,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
             }
             if path == "/api/threads" {
                 let id = body["requestId"] as? String ?? ""
-                jobs[id] = ["id": id, "threadId": "controller", "kind": "create", "state": "accepted"]
+                jobs[id] = ["id": id, "threadId": "", "kind": "create", "state": "accepted"]
                 return jobs[id]!
             }
             if path == "/api/activity" { return ["threads": [], "total": 0, "nextOffset": 0] }

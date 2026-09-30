@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from carryon.onboarding import DEFAULT_CLOUD_URL, command, exchange
-from carryon.cloud_manager import CloudManager
-from carryon.members_cli import binding
-from carryon.catalog import Catalog
+from carryon.accounts.onboarding import DEFAULT_CLOUD_URL, command, exchange
+from carryon.cloud.cloud_manager import CloudManager
+from carryon.accounts.members_cli import binding
+from carryon.sessions.catalog import Catalog
 from carryon.contracts import settings
 
 
@@ -31,27 +31,27 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_cancel_returns_to_configuration_without_losing_options(self):
         invite = self.invite(DEFAULT_CLOUD_URL)
-        with patch('carryon.onboarding.request', return_value=invite):
+        with patch('carryon.accounts.onboarding.request', return_value=invite):
             exchange(self.root, {'action':'prepare','autoStart':False,'permissions':['view','send']})
-        with patch('carryon.onboarding.request', side_effect=OSError('offline')):
+        with patch('carryon.accounts.onboarding.request', side_effect=OSError('offline')):
             with self.assertRaises(OSError):exchange(self.root, {'action':'cancel'})
         self.assertIn('pending', json.loads((self.root/'onboarding.json').read_text()))
-        with patch('carryon.onboarding.request', return_value={'state':'cancelled'}), patch('carryon.onboarding.save_json', side_effect=OSError('disk full')):
+        with patch('carryon.accounts.onboarding.request', return_value={'state':'cancelled'}), patch('carryon.accounts.onboarding.save_json', side_effect=OSError('disk full')):
             with self.assertRaises(OSError):exchange(self.root, {'action':'cancel'})
         self.assertIn('pending', json.loads((self.root/'onboarding.json').read_text()))
-        with patch('carryon.onboarding.request', return_value={'state':'cancelled'}) as request:
+        with patch('carryon.accounts.onboarding.request', return_value={'state':'cancelled'}) as request:
             state = exchange(self.root, {'action':'cancel'})
             self.assertEqual(request.call_args.args[1], 'cancel')
         self.assertEqual(state['state'], 'configured')
         self.assertIsNone(state['qrURL'])
         self.assertEqual(state['permissions'], ['send','view'])
         self.assertFalse(state['autoStart'])
-        with patch('carryon.onboarding.request', return_value=invite):
+        with patch('carryon.accounts.onboarding.request', return_value=invite):
             self.assertEqual(exchange(self.root, {'action':'prepare','permissions':['view','files']})['state'], 'waiting')
 
     def test_default_init_needs_no_cloud_address(self):
         self.assertEqual(exchange(self.root, {'action':'status'})['url'], DEFAULT_CLOUD_URL)
-        with patch('carryon.onboarding.request', return_value=self.invite(DEFAULT_CLOUD_URL)) as request:
+        with patch('carryon.accounts.onboarding.request', return_value=self.invite(DEFAULT_CLOUD_URL)) as request:
             self.assertEqual(exchange(self.root, {'action':'prepare', 'autoStart':False})['state'], 'waiting')
             self.assertEqual(request.call_args.args[0], DEFAULT_CLOUD_URL)
 
@@ -61,7 +61,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         path.write_text(json.dumps({'version':2, 'bindings':{'a'*32:old}}))
         before = path.read_bytes()
         (self.root/'onboarding.json').write_text(json.dumps({'state':'bound', 'url':'https://old.test'}))
-        with patch('carryon.onboarding.request') as request:
+        with patch('carryon.accounts.onboarding.request') as request:
             state = exchange(self.root, {'action':'status','useDefaultCloud':True})
             self.assertEqual(state['url'], DEFAULT_CLOUD_URL)
             self.assertEqual(state['state'], 'configured')
@@ -72,7 +72,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         initial = {'state':'new', 'url':DEFAULT_CLOUD_URL, 'environment':{'supportedPlatform':True,'backend':'app-server'}}
         bound = {'state':'bound', 'autoStart':False}
         args = SimpleNamespace(state_dir=self.root, input_json=False, url=None, permissions=None)
-        with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout', new_callable=io.StringIO), patch('builtins.input', side_effect=['n','n','']) as inputs, patch('carryon.onboarding.exchange', side_effect=[initial,bound,bound]) as call:
+        with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout', new_callable=io.StringIO), patch('builtins.input', side_effect=['n','n','']) as inputs, patch('carryon.accounts.onboarding.exchange', side_effect=[initial,bound,bound]) as call:
             self.assertEqual(command(args), 0)
             self.assertEqual(inputs.call_count, 3)
             self.assertEqual(call.call_args_list[1].args[1]['url'], DEFAULT_CLOUD_URL)
@@ -83,7 +83,7 @@ class CurrentWorkflowTests(unittest.TestCase):
         path.write_text(json.dumps({'version':2, 'bindings':{'a'*32:old}}))
         (self.root/'onboarding.json').write_text(json.dumps({'state':'bound', 'url':'https://old.test', 'autoStart':False,'deviceId':'mac','requestId':'old'}))
         before = path.read_bytes()
-        with patch('carryon.onboarding.request', return_value=self.invite('https://new.test')) as request:
+        with patch('carryon.accounts.onboarding.request', return_value=self.invite('https://new.test')) as request:
             result = exchange(self.root, {'action':'prepare', 'url':'https://new.test', 'autoStart':False})
             self.assertEqual(result['state'], 'waiting')
             self.assertEqual(request.call_args.args[:2], ('https://new.test', 'start'))
@@ -102,11 +102,11 @@ class CurrentWorkflowTests(unittest.TestCase):
         old = {'enabled':True, 'url':'wss://old.test/device', 'deviceId':'mac', 'token':'t'*43, 'control':False}
         (self.root/'cloud.json').write_text(json.dumps({'version':2, 'bindings':{'a'*32:old}}))
         (self.root/'onboarding.json').write_text(json.dumps({'state':'bound', 'url':'https://old.test', 'autoStart':False}))
-        with patch('carryon.onboarding.request', side_effect=OSError('offline')) as request:
+        with patch('carryon.accounts.onboarding.request', side_effect=OSError('offline')) as request:
             state = exchange(self.root, {'action':'status','verify':False})
             self.assertEqual(state['state'], 'bound')
             request.assert_not_called()
-        with patch('carryon.onboarding.request', return_value=self.invite('https://new.test')) as request:
+        with patch('carryon.accounts.onboarding.request', return_value=self.invite('https://new.test')) as request:
             self.assertEqual(exchange(self.root, {'action':'prepare', 'url':'https://new.test', 'autoStart':False})['state'], 'waiting')
             self.assertEqual(request.call_args.args[0], 'https://new.test')
         with self.assertRaisesRegex(ValueError, '正在进行'):
@@ -124,10 +124,17 @@ class CurrentWorkflowTests(unittest.TestCase):
 
     def test_persisted_history_projects_timeline_for_all_clients(self):
         path = self.root/'history.jsonl'
-        path.write_text('\n'.join(json.dumps({'type':'response_item','payload':{'type':'message','role':role,'phase':phase,'content':[{'type':'text','text':text}]}}) for role,phase,text in [('user',None,'hello'),('assistant','analysis','private'),('assistant','commentary','working'),('assistant','final','done')]))
+        records = [{'type':'event_msg','payload':{'type':'task_started','turn_id':'turn'}}]
+        records.extend({'type':'event_msg','payload':{'type':'item_completed','turn_id':'turn',
+            'item':{'id':str(index),'type':kind,'phase':phase,'content':[{'type':'Text','text':text}]}}}
+            for index,(kind,phase,text) in enumerate([('UserMessage',None,'hello'),
+                ('AgentMessage','analysis','private'),('AgentMessage','commentary','working'),('AgentMessage','final','done')]))
+        path.write_text('\n'.join(json.dumps(record) for record in records) + '\n')
         catalog = Catalog(self.root)
-        with patch.object(catalog, 'get', return_value={'id':'t','title':'title','cwd':'/tmp','rollout_path':str(path)}):
-            history = catalog.history('t')
+        with patch.object(catalog, 'get', return_value={'id':'t','title':'title','cwd':'/tmp','history_mode':'paginated','rollout_path':str(path)}):
+            from carryon.sessions.bridge import snapshot_history
+            history = snapshot_history(catalog.rollout_state('t'))
+            history['timeline'] = [row for row in history['timeline'] if row['type'] != 'turn']
         self.assertEqual([row['text'] for row in history['timeline']], ['hello','working','done'])
         self.assertEqual(history['timeline'][1]['phase'], 'commentary')
         self.assertNotIn('private', json.dumps(history))

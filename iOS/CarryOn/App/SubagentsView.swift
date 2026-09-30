@@ -44,29 +44,6 @@ struct SubagentsView: View {
     }
 }
 
-struct SubagentLinks: View {
-    @Environment(AppModel.self) private var model
-    let item: JSONValue
-    let parentID: String
-    @State private var opening = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-        ForEach(item["subagents"].array, id: \.stableID) { agent in
-            Button {
-                opening = true
-                Task { await model.openSubagent(agent["id"].text, parentID: parentID); opening = false }
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Image("CarryOnLogo").resizable().scaledToFit().frame(width: 14, height: 14)
-                    Text(agent["title"].text)
-                }
-                    .font(.caption).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-            }.buttonStyle(.plain).foregroundStyle(Design.link).disabled(opening || model.selectedThread?.id != parentID)
-        }
-        }
-    }
-}
-
 struct AgentActivityGroup: View {
     @Environment(AppModel.self) private var model
     let items: [JSONValue]
@@ -100,7 +77,7 @@ struct AgentActivityGroup: View {
         }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             if rows.count > 1 {
                 let running = rows.filter { $0.state.tone == .active }.count
                 Text("\(rows.count) 个 Agent" + (running > 0 ? " · \(running) 个执行中" : "")).font(.caption).foregroundStyle(Design.secondary)
@@ -115,7 +92,7 @@ struct AgentActivityGroup: View {
                         Image("CarryOnLogo").resizable().scaledToFit().frame(width: 14, height: 14)
                         Text(row.agent["title"].text + " " + actionLabel(row.state)).lineLimit(1)
                         Spacer(minLength: 0)
-                    }.font(.system(size: 13)).foregroundStyle(row.state.tone == .failure ? .red : Design.secondary).frame(minHeight: 36).contentShape(Rectangle())
+                    }.font(.system(size: 13)).foregroundStyle(row.state.tone == .failure ? .red : Design.secondary).frame(minHeight: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain).disabled(opening || model.selectedThread?.id != parentID)
             }
         }

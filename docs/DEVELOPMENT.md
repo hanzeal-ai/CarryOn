@@ -4,7 +4,7 @@
 
 运行时仅用 Python 标准库。源码入口：`python3 -m carryon start`；开发前台入口：`python3 -m carryon serve --port 8770 --state-dir /tmp/carryon-dev`。隔离目录应保留到所有 uncertain 请求核对完毕，不能拿更换目录当作重试策略。
 
-架构：`cli/paths` 管生命周期与用户数据；`server` 管本地传输；`api.dispatch` 为本地/云端共享路由；`bridge` 执行原生门禁与投递；`cloud` 管出站连接及本机云端授权；`gateway` 是可替换的参考路由端；`realtime` 管订阅与核验。网关不引入第二套任务状态机。
+模块职责和依赖方向见 [项目结构](ARCHITECTURE.md)；会话 Owner 的创建、加载、权限与恢复边界见 [OWNER.md](OWNER.md)。
 
 ## 构建
 
@@ -26,7 +26,9 @@ python3 -m venv .runtime/build-env
 
 ```sh
 python3 -m unittest discover -s tests -v
-node --test tests/test_client.js
+node --test tests/test_*.js
+# 本机 Codex App 升级后，先做只读协议检查：
+python3 scripts/check_native_contracts.py
 python3 -m compileall -q carryon examples tests
 node --check app.js
 node --check client.js
@@ -45,3 +47,16 @@ cloud 测试使用临时网关、临时 SQLite 与模拟原生 IPC，验证真�
 打包后执行 `python3 tests/run_desktop_smoke.py`，使用隔离目录和禁止连接的测试绑定，验证桌面模型经应用内 CLI 修改权限、独立 CLI 读取并改回、桌面刷新看到相同状态。此测试不替代真实桌面窗口点击、云端 HTTPS 配对和人工独立审查。
 
 多工作区回归同样使用 `python3 tests/run_desktop_smoke.py`：启动两个真实隔离实例，验证发现、切换、跨工作区配置隔离、doctor、独立停止以及桌面创建的前台服务退出生命周期。`tests/test_services.py` 覆盖并发登记、规范路径、旧进程认证发现和导入参数保留。
+
+## Web控件样式
+
+页面由现有DOM和事件处理代码拥有；`web/src/control-styles.js`仅应用Tailwind样式，不替换节点或挂载React。模型和操作等动态区域继续由各自模块负责。修改样式后运行：
+
+```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
+cp .runtime/web-build/shadcn-ui.js .runtime/web-build/shadcn.css .
+node tests/check_control_styles.cjs
+```
+
+浏览器检查需要可用的Playwright；可用`PLAYWRIGHT_MODULE`指定已安装模块路径。根目录两个静态文件为打包入口，应与本次构建产物同步。

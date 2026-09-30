@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from carryon.console import ConsoleServer
-from carryon.console_auth import password_record
-from carryon.qr_client import exchange, terminal_qr
+from carryon.cloud.console import ConsoleServer
+from carryon.cloud.console_auth import password_record
+from carryon.accounts.qr_client import exchange, terminal_qr
 
 
 class QRClientTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class QRClientTests(unittest.TestCase):
         self.server.socket=context.wrap_socket(self.server.socket,server_side=True)
         self.worker=threading.Thread(target=self.server.serve_forever,daemon=True);self.worker.start()
         self.trust=ssl.create_default_context(cafile=str(self.cert))
-        self.patch=patch('carryon.qr_client.tls_context',return_value=self.trust);self.patch.start()
+        self.patch=patch('carryon.cloud.cloud_wire.tls_context',return_value=self.trust);self.patch.start()
 
     def tearDown(self):
         self.patch.stop();self.server.shutdown();self.server.server_close();self.worker.join(3);self.state.cleanup()

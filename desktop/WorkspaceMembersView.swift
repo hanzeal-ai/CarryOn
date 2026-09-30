@@ -16,7 +16,7 @@ import CoreImage.CIFilterBuiltins
     @State private var message = ""
     @State private var revoking = false
     @State private var poller: Task<Void, Never>?
-    private let fields = [("view","查看会话"),("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批")]
+    private let fields = [("view","查看会话"),("create","新建会话"),("send","发送消息"),("stop","停止任务"),("edit","编辑会话与设置"),("files","查看和下载文件"),("approve","处理审批"),("resetQuota","使用额度重置卡")]
     private var isMember: Bool { members.contains { ($0["account"] as? [String: Any])?["id"] as? String == selected } }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

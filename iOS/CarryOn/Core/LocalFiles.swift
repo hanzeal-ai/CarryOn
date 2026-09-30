@@ -56,15 +56,27 @@ public final class DraftStore {
     public var images: [String: [String]] = [:] { didSet { scheduleSave() } }
     private let file: URL
     private var activeFile: URL?
-    private var unsaved: [URL: (snapshot: DraftSnapshot, complete: Bool)] = [:]
+    private struct Save: Sendable {
+        let id = UUID()
+        let snapshot: DraftSnapshot
+        let complete: Bool
+    }
+    private var unsaved: [URL: Save] = [:]
+    @ObservationIgnored private var queued: [URL: Save] = [:]
+    @ObservationIgnored private var writer: Task<Void, Never>?
+    @ObservationIgnored private let write: @Sendable (DraftSnapshot, URL) async throws -> Void
+    private var dirty = false
     private let report: (String, String) -> Void
     private var loaded = false
     private var generation = UUID()
     private var pendingSave: Task<Void, Never>?
 
     public init(file: URL = LocalFiles.directory.appendingPathComponent("drafts-v1.json"),
+                write: @escaping @Sendable (DraftSnapshot, URL) async throws -> Void = { snapshot, file in
+                    try await Task.detached(priority: .utility) { try LocalFiles.write(snapshot, to: file) }.value
+                },
                 report: @escaping (String, String) -> Void) {
-        self.file = file; self.report = report
+        self.file = file; self.write = write; self.report = report
     }
     public func load(scope: String) async {
         reset()
@@ -76,6 +88,9 @@ public final class DraftStore {
         loaded = false
         pendingSave?.cancel()
         do {
+            // Finish earlier writes before reading this account again.
+            await writer?.value
+            guard version == generation, !Task.isCancelled else { return }
             let saved = try await Task.detached(priority: .userInitiated) {
                 try LocalFiles.read(DraftSnapshot.self, from: file) ?? DraftSnapshot()
             }.value
@@ -87,7 +102,8 @@ public final class DraftStore {
                 texts = saved.texts; images = saved.images
             }
             loaded = true
-            if unsaved[file] != nil { save() }
+            dirty = unsaved[file] != nil
+            if dirty { save() }
         } catch {
             guard version == generation, !Task.isCancelled else { return }
             texts = unsaved[file]?.snapshot.texts ?? [:]
@@ -97,33 +113,47 @@ public final class DraftStore {
     }
     private func scheduleSave() {
         guard loaded else { return }
+        dirty = true
         pendingSave?.cancel()
         pendingSave = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             self?.save()
         }
     }
-    @discardableResult public func save() -> Bool {
+    /// Queue the latest snapshot. Use flush() when durable completion is required.
+    public func save() {
         pendingSave?.cancel(); pendingSave = nil
-        guard let activeFile else { return false }
+        guard let activeFile else { return }
         var snapshot = DraftSnapshot()
         snapshot.texts = texts; snapshot.images = images
         guard loaded else {
-            if !texts.isEmpty || !images.isEmpty { unsaved[activeFile] = (snapshot, unsaved[activeFile]?.complete ?? false) }
-            return false
+            if !texts.isEmpty || !images.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
+            return
         }
-        do {
-            try LocalFiles.write(DraftSnapshot(texts: texts, images: images), to: activeFile)
-            unsaved.removeValue(forKey: activeFile)
-            return true
-        } catch {
-            unsaved[activeFile] = (snapshot, true)
-            report("草稿未能保存到本机，已暂存在内存中；请恢复存储后重新登录当前账号，退出应用前不要清理进程", "保存草稿")
-            return false
+        guard dirty else { return }
+        dirty = false
+        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images), complete: true)
+        unsaved[activeFile] = save; queued[activeFile] = save
+        guard writer == nil else { return }
+        writer = Task {
+            defer { writer = nil }
+            while let file = queued.keys.first, let save = queued.removeValue(forKey: file) {
+                do {
+                    try await write(save.snapshot, file)
+                    if unsaved[file]?.id == save.id { unsaved.removeValue(forKey: file) }
+                } catch {
+                    report("草稿未能保存到本机，已暂存在内存中；请恢复存储后重新登录当前账号，退出应用前不要清理进程", "保存草稿")
+                }
+            }
         }
     }
+    @discardableResult public func flush() async -> Bool {
+        save()
+        await writer?.value
+        return unsaved.isEmpty
+    }
     public func reset() {
-        save(); loaded = false; activeFile = nil; generation = UUID()
+        save(); loaded = false; dirty = false; activeFile = nil; generation = UUID()
         texts = [:]; images = [:]
     }
 }

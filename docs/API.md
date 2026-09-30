@@ -2,20 +2,20 @@
 
 Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,000 字节；会话消息及云端转发消息请求最多 900,000 字节。
 
-每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/CarryOn/token`）；普通启动日志不输出 Token，`carryon open` 自动配对页面。所有调用方共享一个桥接开关、控制会话选择和请求日志；当前不是多租户 API。
+每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/CarryOn/token`）；普通启动日志不输出 Token，`carryon open` 自动配对页面。所有调用方共享一个桥接开关和请求日志；当前不是多租户 API。
 
-新建会话传入 `/projects` 返回的 `projectId`：服务从该项目中选择可操作、空闲且没有未确认投递的会话，发送一次原生创建请求。输入 `prompt` 作为新任务首条文案；不会在控制会话执行该文案。没有可用会话时返回 409，不改动全局控制会话。新任务身份只依据原生工具结果及工作树绑定确认。旧 CLI/Web 未传 `projectId` 时仍使用已配置控制会话。
+桌面 Codex 工作区新建会话必须传入 `/projects` 返回的 `projectId`。临时 app-server 使用该项目的原生 ID、当前目录和分页历史创建会话，由 Owner 接管同一进程，再通过桌面 IPC 投递原始 `prompt`。无需已有控制会话，也不创建 worktree。`completed` 表示创建及首条任务投递已确认，不代表任务执行结束。创建或投递结果未知时保留原请求编号及已知会话 ID，不自动重发。独立 app-server 工作区仍可不传 `projectId` 创建无项目会话。
 
 ## 路由
 
 | 方法 | 路径 | 输入 | 返回 |
 |---|---|---|---|
-| GET | `/status` | 无 | `enabled, controllerId, protocol, testedDesktopVersion` |
+| GET | `/status` | 无 | `enabled, protocol, testedDesktopVersion` |
 | POST | `/bridge` | `{"enabled":true}` 或 `false` | 同 status |
 | GET | `/threads` | query：`search`、`limit` 1–100、`offset` ≥0 | `{threads:[{id,title,cwd,updated_at,created_at,history_mode}],nextOffset}` |
-| POST | `/controller` | `{"threadId":"UUID"}` | 同 status，需目标已加载且空闲 |
 | GET | `/threads/{id}/history` | `limit`：1–4000，默认 40 | `{thread,timeline,runtime,status,metadata,pendingRequests,coverage,truncated,source}`；原生快照提供扩展字段 |
-| POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案","projectId":"项目列表返回的ID"}` | HTTP 202 + Job；自动选择项目内可用空闲会话 |
+| POST | `/threads` | `{"requestId":"唯一ID","prompt":"新任务文案","projectId":"项目列表返回的ID"}` | HTTP 202 + Job；创建后由 Owner 投递首条任务 |
+| POST | `/threads/{id}/session` | `{"requestId":"唯一ID","action":"load"}` 或 `release` | 可选 owner，HTTP 200 + Job；需 send 权限，见 [OWNER.md](OWNER.md) |
 | POST | `/threads/{id}/messages` | `{"requestId":"唯一ID","prompt":"后续任务"}` | HTTP 202 + Job |
 | GET | `/jobs` | 无 | `{jobs:[Job,...]}`，最近 100 个 |
 | GET | `/jobs/{requestId}` | 无 | Job；查询时刷新执行证据 |
@@ -69,18 +69,18 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 {
   "id":"external-create-0001",
   "kind":"create",
-  "threadId":"控制会话UUID",
+  "threadId":"新会话UUID",
   "state":"completed",
   "created":1789097059.44,
   "updated":1789097070.10,
-  "turnId":"控制会话轮次UUID",
+  "turnId":"首条任务轮次UUID",
   "createdThreadId":"新会话UUID",
-  "evidence":"native-create-thread-result",
+  "evidence":"app-server-create-owner-start",
   "error":null
 }
 ```
 
-Job 还可能包含 fingerprint、clientMessageId、expectedTitle；调用方不要依赖这些内部字段。`turnId` 和 `createdThreadId` 只有得到证据后才返回。
+Job 还可能包含 fingerprint、clientMessageId；调用方不要依赖这些内部字段。`turnId` 和 `createdThreadId` 只有得到证据后才返回。
 
 | state | 意义 |
 |---|---|
@@ -93,11 +93,11 @@ Job 还可能包含 fingerprint、clientMessageId、expectedTitle；调用方不
 | uncertain | 超时、断开或证据不足，可能已经执行；禁止自动补发 |
 | acknowledged | 用户核对后解除后续发送阻塞，不代表成功 |
 
-调用成功的 HTTP 202 仅表示登记。网页通过 WebSocket 接收后续状态，外部 HTTP 客户端也可查询 `/jobs/{id}`。创建还依赖控制会话执行一次模型回合，耗时包含模型与工具执行，不保证秒级完成。
+调用成功的 HTTP 202 仅表示登记。网页通过 WebSocket 接收后续状态，外部 HTTP 客户端也可查询 `/jobs/{id}`。创建确认不等待任务执行结束，耗时包括原生进程启动和 Owner 接管。
 
-相同 ID + 相同类型/目标/文案返回原 Job；相同 ID 不同内容返回 409。每个目标同时最多一个 preparing/dispatching/accepted/uncertain 请求。创建的目标为当时选择的控制会话；重试期间不要切换控制会话。
+相同 ID + 相同类型/目标/文案返回原 Job；相同 ID 不同内容返回 409。新建请求绑定目标项目和完整文案。已有会话在准备和投递阶段串行保护原生写入；已接收或结果未知的回执不独立阻塞后续操作，仍由原生会话状态决定是否可写。
 
-请求日志持久化在 `.runtime/jobs.sqlite`。重启时 preparing/dispatching 标记 uncertain；不会主动重发。已知 turnId 的 uncertain 可通过只读证据重新核验。核验写入会比较完整的读取版本；并发人工确认或更新发生后，旧结果不会覆盖当前状态。同一请求的并发查询复用正在进行的核验，可能先返回当前已保存状态。不要删除日志来“解决”不确定状态，否则会丢失幂等保护。创建通过原生工具调用参数、返回 ID 和数据库创建时间核验，模型输出的 ID 本身不是成功证据。
+请求日志持久化在 `.runtime/jobs.sqlite`。重启时 preparing 标记 failed、dispatching 标记 uncertain；不会主动重发。已知 turnId 的 uncertain 可通过只读证据重新核验。核验写入会比较完整的读取版本；并发人工确认或更新发生后，旧结果不会覆盖当前状态。同一请求的并发查询复用正在进行的核验，可能先返回当前已保存状态。不要删除日志来“解决”不确定状态，否则会丢失幂等保护。桌面工作区创建通过 `thread/start` 原生返回 ID 和 Owner 首轮投递回执核验。
 
 ## Python 外部调用
 
@@ -114,9 +114,10 @@ def call(path, body=None):
         return json.load(response)
 
 call('/bridge', {'enabled': True})
-call('/controller', {'threadId': '替换为已加载的空闲控制会话UUID'})
+projects = call('/projects')['projects']
+project_id = projects[0]['id']  # 选择所需项目的 ID
 request_id = str(uuid.uuid4())  # 在调用前保存；网络失败仍使用这个 ID。
-job = call('/threads', {'requestId': request_id, 'prompt': '仅回复你好'})
+job = call('/threads', {'requestId': request_id, 'projectId': project_id, 'prompt': '仅回复你好'})
 print(job)
 print(call('/jobs/' + request_id))
 ```
@@ -328,14 +329,27 @@ example 支持选择或粘贴图片、预览与移除，浏览器将图片转成
 
 ## 本机配置入口
 
-本机配置由 CLI 和桌面端共享。`POST /api/bridge`、`/api/controller`、`/api/cloud*`、`/api/service*`、`/api/notifications/preferences` 拒绝包含 Origin 或 Sec-Fetch-* 浏览器标记的请求，即使本机 Bearer Token 有效。网页保留会话交互与读取；云端不能选择本机控制会话。
+本机配置由 CLI 和桌面端共享。`POST /api/bridge`、`/api/cloud*`、`/api/service*`、`/api/notifications/preferences` 拒绝包含 Origin 或 Sec-Fetch-* 浏览器标记的请求，即使本机 Bearer Token 有效。网页保留会话交互与读取。
 
 `GET /api/cloud/link/status` 返回当前服务最新申请的安全投影（idle/pending/bound/expired/failed），包含核对码和状态但不含领取秘密或设备 Token。此接口不触发新申请或凭证领取；后台绑定流程仍为唯一执行者。
 
 ### Codex 账号额度
 
-`GET /api/usage`：读取目标工作区本机 `catalog.home` 对应 Codex 登录账号的共享额度。沿用本机连接及云端绑定的只读权限，不需要远程控制授权；不支持写入/重置额度。需本机已有 Codex（优先桌面应用附带程序）。
+`GET /api/usage`：读取目标工作区本机 `catalog.home` 对应 Codex 登录账号的共享额度。沿用本机连接及云端绑定的只读权限，不需要远程控制授权；该GET接口不执行重置。需本机已有 Codex（优先桌面应用附带程序）。
 
-返回 `source: "codex-account"`、`scope: "account"`、`fetchedAt`（Unix 秒）和 `limits` 数组。每个额度池有 `id/name/planType/windows`；每个窗口有 `id/usedPercent/windowDurationMins/resetsAt`。百分比为已用比例，`null` 表示未知，空数组表示暂不可用。优先多额度池数据，兼容原生单池响应；不返回账号标识、邮箱、令牌或充值/重置凭据。
+返回 `source: "codex-account"`、`scope: "account"`、`fetchedAt`（Unix 秒）和 `limits` 数组。每个额度池有 `id/name/planType/windows`；每个窗口有 `id/usedPercent/windowDurationMins/resetsAt`。百分比为已用比例，`null` 表示未知，空数组表示暂不可用。仅读取原生 `rateLimitsByLimitId` 多额度池数据，字段缺失时返回空数组；不返回账号标识、邮箱、令牌或充值/重置操作凭据。
+
+另返回 `rateLimitResetCredits`（缺失时为 `null`）：`availableCount` 使用原生可用卡数量，未知为 `null`，不得用详情数组长度推算；`credits` 为 `null` 表示未提供详情，空数组表示提供了空列表。详情仅包含 `id/title/status/grantedAt/expiresAt`，时间为 Unix 秒，未知或无到期时间为 `null`。原生可能只提供部分卡片详情，数量以 `availableCount` 为准。此GET接口只展示数量和时间。
 
 本机通过短生命周期 `codex app-server` 执行 initialize、account/read（refreshToken=false）、account/rateLimits/read；子进程的 CODEX_HOME 明确绑定到工作区。查询超时 15 秒、最多同时 2 个查询，结束后有界清理进程。未登录 ChatGPT、程序缺失或原生读取失败返回 503，超时 504。额度周期按原生返回值显示，不固定假设一定存在 5 小时/7 天两种窗口。
+
+
+### 使用额度重置卡
+
+`POST /api/usage/reset` 需要工作区 `resetQuota` 权限及本机远程控制授权；现有成员不会自动获得该权限。电脑端“工作区使用者”可单独授予“使用额度重置卡”。云端、本机及iOS须同步更新后使用。
+
+请求：`{requestId, accountKey, confirmed: true, creditId?}`。`accountKey` 来自最新 `GET /api/usage`，是原生账号标识的单向摘要；无法核对账号时不允许兑换。省略 `creditId` 时原生选择下一张可用卡。服务只调用 `account/rateLimitResetCredit/consume`，不会发送任务或购买额度。
+
+沿用Journal返回任务状态，`kind`为`quota-reset`。原生成功回执的`result.outcome`为`reset`、`alreadyRedeemed`、`nothingToReset`或`noCredit`，均表示本次调用有确定结果；后两种不表示额度已重置。发送前失败为`failed`，发送后超时或回执无法识别为`uncertain`。明确重试沿用同一requestId及原生idempotencyKey；云端按绑定隔离requestId。同一账号的未确认请求阻止换ID发起另一次重置；读请求和后台刷新不会兑换，未知结果不能手动标成已核对。原生发出前再次检查桥接代际和云端连接授权。
+
+手机端保存待确认请求标识；确认兑换成功后刷新额度和卡数量。更新失败不撤回已完成兑换；卸载客户端或清空本地请求记录不能作为重试方式。没有新增数据库表或迁移；回退代码须保留Journal及客户端PendingWrites，真实已消费的卡无法由代码回退恢复。

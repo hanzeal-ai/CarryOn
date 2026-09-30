@@ -5,15 +5,15 @@ import time
 import unittest
 from pathlib import Path
 
-from carryon.api import dispatch
-from carryon.bridge import Bridge
-from carryon.catalog import Catalog
+from carryon.routes.api import dispatch
+from carryon.sessions.bridge import Bridge
+from carryon.sessions.catalog import Catalog
 from carryon.errors import BridgeError
-from carryon.history_cache import NativeSnapshot
-from carryon.ipc import IPCError
-from carryon.operations import METHODS
+from carryon.sessions.history_cache import NativeSnapshot
+from carryon.desktop_ipc.ipc import IPCError
+from carryon.sessions.operations import METHODS
 from carryon.store import Journal
-from carryon.timeline import project_item
+from carryon.sessions.timeline import project_item
 
 P = '11111111-1111-4111-8111-111111111111'
 C = '22222222-2222-4222-8222-222222222222'
@@ -33,7 +33,7 @@ class Native:
     def unwatch(self, tid): pass
     def request(self, method, params, version, owner, guard):
         guard(lambda: self.calls.append((method, params)))
-        return {'result': {'ok': True}}
+        return {'result': {'applied': True} if method == 'thread-follower-update-thread-settings' else {'ok': True}}
     def start(self, tid, prompt, owner, message_id, guard, **kw):
         guard(lambda: self.calls.append(('start', tid, prompt)))
         return {'id': 'next-turn'}
@@ -91,7 +91,6 @@ class SubagentTests(unittest.TestCase):
             self.assertEqual(error.exception.status, 403)
         for endpoint in ('compose', 'messages'):
             with self.assertRaises(BridgeError): dispatch(self.bridge, 'POST', f'/api/threads/{R}/{endpoint}', {'requestId': 'readonly-message', 'prompt': 'must not send'})
-        with self.assertRaises(BridgeError): dispatch(self.bridge, 'POST', '/api/controller', {'threadId': R})
         self.assertEqual(self.bridge.ipc.calls, [])
         self.assertEqual(self.journal.list(), [])
         self.assertEqual(self.bridge.history(R)['controls'], {})
@@ -163,7 +162,7 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(self.bridge.history(R, limit=40)['historyWindow']['total'], 2)
 
     def test_http_history_is_bounded_and_validates_limits(self):
-        from carryon.images import image_id
+        from carryon.sessions.images import image_id
         import base64
         artifact = self.home / 'older.txt'
         artifact.write_text('older output')
@@ -223,7 +222,8 @@ class SubagentTests(unittest.TestCase):
         for i in range(4): self.event({'type': 'AgentMessage', 'id': str(i), 'content': [{'type': 'Text', 'text': str(i)}]}, turn=str(i))
         history = self.bridge.history(R, limit=2)
         self.assertEqual(history['historyWindow'], {'limit': 2, 'total': 4, 'hasMore': True, 'unit': 'items'})
-        self.assertEqual(len(self.bridge.history(R, limit=4)['turns']), 4)
+        full = self.bridge.history(R, limit=4)['timeline']
+        self.assertEqual([item['turnId'] for item in full if item['type'] == 'turn'], ['0', '1', '2', '3'])
         with (self.home / (R + '.jsonl')).open('a') as f: f.write('corrupt\n')
         with self.assertRaisesRegex(ValueError, '损坏'): self.bridge.history(R)
 

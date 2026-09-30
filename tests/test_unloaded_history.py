@@ -8,15 +8,60 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from carryon.bridge import Bridge
-from carryon.catalog import Catalog
-from carryon.history_cache import NativeSnapshot
-from carryon.realtime import Realtime, Subscription
+from carryon.sessions.bridge import Bridge
+from carryon.sessions.catalog import Catalog
+from carryon.sessions.history_cache import NativeSnapshot
+from carryon.routes.realtime import Realtime, Subscription
 from carryon.store import Journal
 from test_subagents import Native, P
 
 
 class UnloadedHistoryTests(unittest.TestCase):
+    def test_job_evidence_uses_index_for_paginated_history_and_empty_turns(self):
+        from carryon.desktop_ipc.ipc import IPCError
+        self.bridge.ipc.current = Mock(return_value=None)
+        self.bridge.ipc.snapshot = Mock(side_effect=IPCError('no-client-found'))
+        evidence = self.bridge.turn_evidence(P, 'turn')
+        self.assertEqual(evidence['status'], 'completed')
+        self.append('task_started', turn_id='empty')
+        self.append('task_complete', turn_id='empty')
+        self.assertEqual(self.bridge.turn_evidence(P, 'empty'), {'status': 'completed'})
+        self.assertIsNone(self.bridge.turn_evidence(P, 'missing'))
+        self.assertEqual(self.bridge.turn_evidence(P, 'turn'), evidence)
+        self.assertIn('answer', json.dumps(self.bridge.catalog.rollout_state(P)))
+
+    def test_command_arguments_are_preserved_and_display_is_unambiguous(self):
+        import shlex
+        from carryon.sessions.rollout import native_item
+        from carryon.sessions.timeline import project_item
+        commands = [['printf', 'a b'], ['printf', 'a', 'b'], ['echo', '', "a'b", '$HOME']]
+        rendered = []
+        for command in commands:
+            row = project_item(native_item({'id': 'c', 'type': 'CommandExecution', 'command': command}), {'turnId': 't'}, 0)
+            self.assertEqual(row['data']['commandArgs'], command)
+            self.assertEqual(shlex.split(row['text']), command)
+            rendered.append(row['text'])
+        self.assertNotEqual(rendered[0], rendered[1])
+
+    def test_persisted_public_content_blocks_and_client_identity_survive(self):
+        from carryon.sessions.rollout import native_item
+        from carryon.sessions.timeline import project_item
+        parts = [{'type': 'Text', 'text': 'hello'},
+                 {'type': 'Mention', 'name': 'doc', 'path': '/tmp/doc'},
+                 {'type': 'Skill', 'name': 'review', 'path': '/tmp/SKILL.md'},
+                 {'type': 'LocalImage', 'path': '/tmp/photo.png'},
+                 {'type': 'Audio', 'url': 'data:audio/wav;base64,AAAA'},
+                 {'type': 'LocalAudio', 'path': '/tmp/audio.wav'}]
+        item = native_item({'id': 'u', 'type': 'UserMessage', 'client_id': 'sent',
+                            'content': parts + [{'type': 'PrivateContext', 'text': 'PRIVATE_CONTEXT'}],
+                            'internal_context': 'PRIVATE_CONTEXT'})
+        row = project_item(item, {'turnId': 'turn'}, 0)
+        self.assertEqual([p['type'] for p in row['data']['content']], ['text', 'mention', 'skill', 'localImage', 'audio', 'localAudio'])
+        self.assertEqual(row['clientMessageId'], 'sent')
+        self.assertEqual(row['text'], 'hello')
+        self.assertEqual(row['data']['content'][1]['path'], '/tmp/doc')
+        self.assertNotIn('PRIVATE_CONTEXT', json.dumps(row))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
@@ -102,22 +147,25 @@ class UnloadedHistoryTests(unittest.TestCase):
         self.assertIn('损坏', packet['error'])
         self.assertNotIn('history', packet)
 
-    def test_legacy_history_pages_beyond_old_two_hundred_message_cap(self):
+    def test_unsupported_history_reports_error_without_rewriting_file(self):
         with sqlite3.connect(self.home / 'state_5.sqlite') as db:
             db.execute("UPDATE threads SET history_mode='legacy'")
-        with self.path.open('w') as stream:
-            for index in range(240):
-                stream.write(json.dumps({'type':'response_item','payload':{'type':'message',
-                    'role':'user' if index % 2 == 0 else 'assistant',
-                    'content':[{'type':'input_text' if index % 2 == 0 else 'output_text','text':f'message-{index}'}]}}) + '\n')
+        original = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, '仅支持 paginated'):
+            self.bridge.history(P)
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_paginated_history_pages_beyond_two_hundred_messages(self):
+        for index in range(240):
+            self.item(f'message-{index}', 'AgentMessage' if index % 2 else 'UserMessage', f'message-{index}')
         page = self.bridge.history(P, limit=2)
-        self.assertEqual(page['historyWindow'], {'limit':2,'total':240,'hasMore':True,'unit':'items'})
+        self.assertEqual(page['historyWindow'], {'limit':2,'total':242,'hasMore':True,'unit':'items'})
         self.assertIn('message-238', json.dumps(page['timeline']))
         self.assertNotIn('message-237', json.dumps(page['timeline']))
         full = self.bridge.history(P, limit=300)
         self.assertFalse(full['historyWindow']['hasMore'])
         self.assertIn('message-0', json.dumps(full['timeline']))
-        self.assertEqual(len([i for i in full['timeline'] if i['type'] in ('userMessage','agentMessage')]), 240)
+        self.assertEqual(len([i for i in full['timeline'] if i['type'] in ('userMessage','agentMessage')]), 242)
 
     def test_websocket_reads_local_history_then_switches_to_live(self):
         from test_realtime import WSTests

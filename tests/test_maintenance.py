@@ -127,7 +127,7 @@ class MaintenanceTests(unittest.TestCase):
     def rows(self):
         return [{'directory':str(self.root/name),'port':port,'codexHome':'/original/codex',
                  'service':{'instanceId':name,'version':'0.2.0','pid':123},
-                 'status':{'enabled':enabled,'controllerId':None},'executable':str(self.binary)}
+                 'status':{'enabled':enabled},'executable':str(self.binary)}
                 for name,port,enabled in [('one',8769,True),('two',8770,False)]]
 
     def test_activate_restarts_all_snapshots_with_new_binary(self):
@@ -186,10 +186,10 @@ class MaintenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'stop failed'):m.activate(self.root/'new',self.link,str(self.binary),'0.3.0',[row])
         self.assertEqual(self.link.resolve(),self.binary);start.assert_not_called()
 
-    def test_start_restores_controller_before_disabling_bridge(self):
-        row=self.rows()[1];row['status']['controllerId']='thread-123';Path(row['directory']).mkdir()
+    def test_start_restores_disabled_bridge(self):
+        row=self.rows()[1];Path(row['directory']).mkdir()
         with patch('carryon.services.running',side_effect=[None,{'pid':42,'instanceId':'new','version':'0.3.0'}]), \
                 patch('carryon.services.call',return_value=row['status']) as call,patch.object(m.subprocess,'Popen') as popen:
             popen.return_value.pid=42;m.start_service(row,self.binary,'0.3.0')
         self.assertEqual([(c.args[1],c.args[2]) for c in call.call_args_list[:-1]],
-            [('/bridge',{'enabled':True}),('/controller',{'threadId':'thread-123'}),('/bridge',{'enabled':False})])
+            [('/bridge',{'enabled':False})])

@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from carryon.push import PushService
-from carryon.apns import APNsError
+from carryon.notifications.push import PushService
+from carryon.notifications.apns import APNsError
 
 INSTALL='11111111-1111-4111-8111-111111111111'
 THREAD='22222222-2222-4222-8222-222222222222'
@@ -29,7 +29,7 @@ class Device:
 class PushTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.sender=Sender();self.device=Device()
-        self.server=SimpleNamespace(auth=SimpleNamespace(fingerprint='authority-a'),lock=threading.RLock(),auth_lock=threading.RLock(),sessions={k:time.monotonic()+3600 for k in ('session','new-session','s')},public_url='https://example.com',config={'devices':{'mac':{'members':{'owner':['view']},'ownerUserId':'owner'}}},devices={'mac':self.device})
+        self.server=SimpleNamespace(auth=SimpleNamespace(fingerprint='authority-a', identity=lambda session: 'owner'),lock=threading.RLock(),auth_lock=threading.RLock(),sessions={k:time.monotonic()+3600 for k in ('session','new-session','s')},public_url='https://example.com',config={'devices':{'mac':{'members':{'owner':['view']},'ownerUserId':'owner'}}},devices={'mac':self.device})
         self.push=PushService(self.server,Path(self.temp.name)/'push.sqlite',self.sender)
         self.push.stop.set();self.push.worker.join();self.push.stop.clear()  # deterministic tick
         self.registration={'installationId':INSTALL,'token':'ab'*32,'environment':'sandbox','deviceId':'mac','revision':1}
@@ -62,7 +62,7 @@ class PushTests(unittest.TestCase):
         self.assertEqual([(row['id'], row['owner']) for row in self.push.db.execute('SELECT id,owner FROM installations')], [(other_id, 'b')])
 
     def test_password_rotation_blocks_old_grant_across_restart(self):
-        from carryon.console_auth import ConsoleAuth, password_record
+        from carryon.cloud.console_auth import ConsoleAuth, password_record
         self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)
         self.server.auth.identities['session']='owner'
         self.register()
@@ -88,12 +88,12 @@ class PushTests(unittest.TestCase):
         self.push.tick()
         self.assertEqual(self.sender.sent[-1][2]['aps']['alert']['body'],'New task')
 
-    def test_cookie_expiry_and_same_authority_restart_keep_push(self):
+    def test_cookie_expiry_blocks_push_after_restart(self):
         self.register();self.push.close();self.server.sessions={}
         self.push=PushService(self.server,Path(self.temp.name)/'push.sqlite',self.sender)
         self.push.stop.set();self.push.worker.join();self.push.stop.clear()
         self.event();self.push.tick()
-        self.assertEqual(self.sender.sent[-1][2]['aps']['alert']['body'],'Task')
+        self.assertEqual(self.sender.sent,[])
 
     def test_capacity_applies_to_current_authority_including_reauthorized_ids(self):
         self.register()
@@ -126,7 +126,7 @@ class PushTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(),before)
 
     def test_missing_members_does_not_grant_owner_access(self):
-        from carryon.console_auth import ConsoleAuth, password_record
+        from carryon.cloud.console_auth import ConsoleAuth, password_record
         self.server.auth=ConsoleAuth({'account':password_record('admin','old-password-123')},self.temp.name)
         self.server.auth.identities['session']='owner'
         self.server.config['devices']['mac'].pop('members')
@@ -186,7 +186,7 @@ class PushTests(unittest.TestCase):
             if not release.wait(3):raise RuntimeError('test timeout')
             return original(*args,**kwargs)
         self.device.call=slow
-        self.server.config['devices']['new']={};self.server.devices['new']=Device()
+        self.server.config['devices']['new']={'members':{'owner':['view']},'ownerUserId':'owner'};self.server.devices['new']=Device()
         with ThreadPoolExecutor(max_workers=1) as pool:
             old=pool.submit(self.push.register,self.registration,'session')
             try:
@@ -229,7 +229,7 @@ class PushTests(unittest.TestCase):
 
     def test_failed_prepare_keeps_last_committed_grant_active(self):
         self.register();old=self.push.db.execute('SELECT * FROM installations').fetchone()
-        self.server.config['devices']['new']={}
+        self.server.config['devices']['new']={'members':{'owner':['view']},'ownerUserId':'owner'}
         broken=Device()
         def fail(*args,**kwargs):raise TimeoutError('baseline timeout')
         broken.call=fail;self.server.devices['new']=broken

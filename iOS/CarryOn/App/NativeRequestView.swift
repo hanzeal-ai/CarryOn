@@ -21,7 +21,27 @@ struct NativeRequestView: View {
             RequestSummary(params: request["params"], action: action)
             if submitted { Label("回应已提交，等待同步", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Design.secondary) }
             if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
-            if ["command-approval", "file-approval"].contains(action) {
+            if action == "command-approval" {
+                HStack(spacing: 12) {
+                    if request["decisions"].array.contains(.string("accept")) {
+                        Button { Task { await respond(["decision": .string("accept")]) } } label: {
+                            Text("仅本次允许").font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .foregroundStyle(.white)
+                                .background(.black, in: RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain)
+                    }
+                    if request["decisions"].array.contains(.string("cancel")) {
+                        Button { Task { await respond(["decision": .string("cancel")]) } } label: {
+                            Text("取消并中断").font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .foregroundStyle(.red)
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.red, lineWidth: 1))
+                                .contentShape(RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain)
+                    }
+                }
+            } else if action == "file-approval" {
                 ForEach(Array(request["decisions"].array.enumerated()), id: \.offset) { _, option in
                     Button(decisionLabel(option)) {
                         if option.object != nil { pendingDecision = option }

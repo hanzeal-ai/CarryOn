@@ -16,7 +16,7 @@ const assert=require('node:assert/strict');
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);
    if(path==='/api/threads/t1/compose')data=await new Promise(resolve=>{finishCompose=resolve;});
-   else if(path==='/api/status')data={enabled:true,controllerId:'t2',remoteControl:true};
+   else if(path==='/api/status')data={enabled:true,remoteControl:true};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
    else if(path==='/api/activity')data={threads:[threads[1]],total:1,nextOffset:1};
@@ -28,15 +28,15 @@ const assert=require('node:assert/strict');
  });
  await page.routeWebSocket('**/console/devices/*/ws', socket=>{
   socketCount++;let revision=0;
-  sendWire=body=>socket.send(JSON.stringify({type:"update",revision:++revision,resubscribe:true,subscription:activeSelection.subscription,body:{...body,subscription:activeSelection.subscription,threadId:activeSelection.threadId,status:{enabled:true,controllerId:"t2",remoteControl:true}}}));
-  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')activeSelection=selection;if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
+  sendWire=body=>socket.send(JSON.stringify({type:"update",revision:++revision,resubscribe:true,subscription:activeSelection.subscription,body:{...body,subscription:activeSelection.subscription,threadId:activeSelection.threadId,status:{enabled:true,remoteControl:true}}}));
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')activeSelection=selection;if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true}}}));});
  });
  await page.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8989/example.html');
  await page.locator('#mobile-session-list .project-row').first().click();
  await page.locator('.session').first().click();
  await page.evaluate(async()=>{
   window.fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'重新设计手机端的会话体验，让它更简洁，也更容易使用。'},{id:'a1',type:'agentMessage',text:'我会围绕阅读和回复，重新整理这段体验。\n\n界面会更专注于内容：\n• 消息自然展开，执行细节按需查看\n• 主要操作留在拇指容易触达的位置\n• 需要确认时，再呈现完整上下文'}]};
-  await receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history:fixture,readSequence:2},()=>true);
+  await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:fixture,readSequence:2},()=>true);
  });
  assert.equal(await page.locator('#attach-images').isEnabled(),true,'running conversation accepts image selection');
  await page.locator('#prompt').fill('即时追加验证');await page.locator('#send').click();
@@ -47,7 +47,7 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>{window.originalUserNode=document.querySelector('#messages .message.user');});
  await page.screenshot({path:'.runtime/realtime-fix-pending.png'});
  await page.evaluate(async id=>{
-  await receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,
+  await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,
    jobs:[{id,threadId:'t1',kind:'operation:steer',state:'completed',clientMessageId:'native-added'}],
    history:{...fixture,timeline:[...fixture.timeline,{id:'added',nativeId:'native-added',type:'steeringUserMessage',text:'即时追加验证'}]}},()=>true);
  },sentCompose.body.requestId);
@@ -63,7 +63,7 @@ const assert=require('node:assert/strict');
  await page.evaluate(async()=>{streamDisconnected({});});
  assert.equal(await page.locator('#messages .text').filter({hasText:'即时追加验证'}).count(),1);
  assert(await page.locator('#send').isDisabled());
- await page.evaluate(async()=>receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history:fixture},()=>true));
+ await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:fixture},()=>true));
  const nativeHistory=await page.evaluate(()=>({...fixture,historyRevision:'wire-1',historyWindow:{limit:40,total:80,hasMore:true}}));
  sendWire({type:'update',history:nativeHistory});
  await page.locator('#messages .history-more').filter({hasText:'加载更早记录'}).click();

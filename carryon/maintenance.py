@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from . import __version__
+from carryon import __version__
 
 REPOSITORY = 'hanzeal-ai/CarryOn'
 LATEST = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
@@ -160,8 +160,8 @@ def replace_link(link, target):
 
 
 def service_snapshots():
-    from .services import list_services
-    from .services import call
+    from carryon.services import list_services
+    from carryon.services import call
     snapshots=[]
     for row in list_services()['services']:
         if not row['running']:continue
@@ -177,7 +177,7 @@ def service_snapshots():
 
 
 def stop_service(row, expected):
-    from .services import call, running
+    from carryon.services import call, running
     directory=Path(row['directory']);info=running(directory)
     if not info:return
     if info['instanceId']!=expected:raise ValueError('后台实例已改变：'+str(directory))
@@ -193,7 +193,7 @@ def stop_service(row, expected):
 
 
 def start_service(row, executable, expected_version=None):
-    from .services import call, running
+    from carryon.services import call, running
     directory=Path(row['directory'])
     if running(directory):raise ValueError('已有其他后台启动：'+str(directory))
     with (directory/'server.log').open('ab') as log:
@@ -211,12 +211,9 @@ def start_service(row, executable, expected_version=None):
             if process.poll() is not None or time.monotonic()>=deadline:raise ValueError('后台启动失败：'+str(directory))
             time.sleep(.15)
         status=row['status']
-        if status['enabled'] or status.get('controllerId'):
-            call(directory,'/bridge',{'enabled':True})
-        if status.get('controllerId'):call(directory,'/controller',{'threadId':status['controllerId']})
         call(directory,'/bridge',{'enabled':status['enabled']})
         restored=call(directory,'/status')
-        if restored['enabled']!=status['enabled'] or restored.get('controllerId')!=status.get('controllerId'):
+        if restored['enabled']!=status['enabled']:
             raise ValueError('后台状态恢复失败：'+str(directory))
         return info['instanceId']
     except BaseException:
@@ -229,7 +226,7 @@ def start_service(row, executable, expected_version=None):
 
 
 def activate(target, link, previous, release, rows):
-    from .services import running
+    from carryon.services import running
     touched=[];started={};switched=False
     try:
         for row in rows:

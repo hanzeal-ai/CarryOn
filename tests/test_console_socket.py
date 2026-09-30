@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import test_console
 from test_cloud import T
-from carryon.websocket import WebSocket
+from carryon.routes.websocket import WebSocket
 
 
 class ConsoleSocketTests(test_console.ConsoleTests):
@@ -51,7 +51,7 @@ class ConsoleSocketTests(test_console.ConsoleTests):
     def test_continuous_updates_still_receive_heartbeats(self):
         import threading
         from unittest.mock import patch
-        from carryon import console_socket
+        import carryon.cloud.console_socket as console_socket
         with patch.object(console_socket, 'HEARTBEAT_INTERVAL', .05), patch.object(console_socket, 'READ_TIMEOUT', .25):
             self.connect_device()
             ws, _ = self.subscribed()
@@ -151,15 +151,16 @@ class ConsoleSocketTests(test_console.ConsoleTests):
 
     def test_native_read_pushes_revision_and_clears_remote_projection(self):
         import threading
-        from carryon.events import Events
-        from carryon.workspace import Workspace
+        from carryon.desktop_ipc.events import Events
+        from carryon.workspaces.workspace import Workspace
         from test_workspace import Native
         self.bridge.ipc_factory=Native
         self.connector.binding_id='read-sync-test'
         workspace=Workspace(self.bridge);self.bridge.workspace=workspace
         workspace.catalog_refresh()
         self.connect_device()
-        ipc=self.bridge.ipc;ipc.lock=threading.RLock();ipc.following={};ipc.events=Events(ipc)
+        ipc=self.bridge.ipc;ipc.lock=threading.RLock();ipc.following={T:'owner'};ipc.events=Events(ipc)
+        ipc.snapshot=lambda tid:('owner',ipc.current(tid))
         state={'id':T,'threadRuntimeStatus':{'type':'idle'},'turns':[],
                'requests':[{'id':1,'method':'item/tool/requestUserInput','params':{'questions':[]}}]}
         ipc.states[T]=state;workspace.observe(state)
@@ -170,8 +171,9 @@ class ConsoleSocketTests(test_console.ConsoleTests):
             return sum(project['unread'] for project in body['projects'])
         self.assertEqual(unread(),1)
         ws,initial=self.subscribed();before=initial['body']['workspaceRevision']
-        ipc.events.handle({'method':'thread-read-state-changed','version':2,'sourceClientId':'desktop',
-            'params':{'hostId':'local','conversationId':T,'hasUnreadTurn':False}})
+        ipc.states[T]['hasUnreadTurn']=False
+        ipc.events.handle({'method':'thread-read-state-changed','version':3,'sourceClientId':'desktop',
+            'params':{'hostId':'local','conversationId':T,'hasUnreadTurn':False,'context':{}}})
         packet=ws.receive()
         while packet['body'].get('workspaceRevision',0)<=before: packet=ws.receive()
         self.assertEqual(unread(),0)
@@ -202,9 +204,9 @@ class ConsoleSocketTests(test_console.ConsoleTests):
         self.assertEqual(len(self.server.console_streams),1)
 
     def test_window_and_delta_roundtrip_through_device_gateway_console(self):
-        from carryon.history_cache import NativeSnapshot
-        from carryon.history_wire import HistoryWire
-        from carryon.patches import apply_patches
+        from carryon.sessions.history_cache import NativeSnapshot
+        from carryon.sessions.history_wire import HistoryWire
+        from carryon.desktop_ipc.patches import apply_patches
         from test_performance_protocol import state
         self.connect_device()
         current=[state(1000)]

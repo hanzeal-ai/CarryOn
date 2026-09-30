@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from carryon.onboarding import exchange, InvalidDeviceCredentials
-from carryon.cloud_manager import CloudManager
+from carryon.accounts.onboarding import exchange, InvalidDeviceCredentials
+from carryon.cloud.cloud_manager import CloudManager
 import test_console_auth
 
 
@@ -25,7 +25,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_invalid_credentials_enable_recovery_without_deleting_config(self):
         before = (self.root/'cloud.json').read_bytes()
-        with patch('carryon.onboarding.request',side_effect=InvalidDeviceCredentials('invalid')):
+        with patch('carryon.accounts.onboarding.request',side_effect=InvalidDeviceCredentials('invalid')):
             result = exchange(self.root, {'action':'status'})
         self.assertEqual(result['state'],'configured')
         self.assertEqual(result['url'],'https://example.test')
@@ -34,7 +34,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_network_failure_is_unknown_not_rebind_and_prepare_is_blocked(self):
         before = (self.root/'onboarding.json').read_bytes()
-        with patch('carryon.onboarding.request',side_effect=TimeoutError('offline')):
+        with patch('carryon.accounts.onboarding.request',side_effect=TimeoutError('offline')):
             result = exchange(self.root, {'action':'status'})
             self.assertEqual(result['state'],'unverified')
             with self.assertRaisesRegex(ValueError,'暂时无法验证'):
@@ -44,20 +44,20 @@ class RecoveryTests(unittest.TestCase):
     def test_valid_legacy_saved_config_requires_cloud_validation(self):
         (self.root/'onboarding.json').unlink()
         (self.root/'cloud.json').write_text(json.dumps({'version':2,'bindings':{'a'*32:self.old}}))
-        with patch('carryon.onboarding.request',return_value={'members':[]}) as request:
+        with patch('carryon.accounts.onboarding.request',return_value={'members':[]}) as request:
             self.assertEqual(exchange(self.root, {'action':'status'})['state'],'bound')
         self.assertEqual(request.call_args.args[1],'manage')
 
     def test_ambiguous_multiple_clouds_require_selection_without_network_or_mutation(self):
         (self.root/'onboarding.json').unlink()
         before=(self.root/'cloud.json').read_bytes()
-        with patch('carryon.onboarding.request') as request:
+        with patch('carryon.accounts.onboarding.request') as request:
             result=exchange(self.root,{'action':'status'})
             self.assertEqual(result['state'],'unverified')
             self.assertIn('请选择',result['error'])
             request.assert_not_called()
         self.assertEqual((self.root/'cloud.json').read_bytes(),before)
-        with patch('carryon.onboarding.request',return_value={'members':[]}):
+        with patch('carryon.accounts.onboarding.request',return_value={'members':[]}):
             self.assertEqual(exchange(self.root,{'action':'status','bindingId':'b'*32})['url'],'https://other.test')
 
     def test_explicit_apply_does_not_rebase_without_new_credential_verification(self):
@@ -67,7 +67,7 @@ class RecoveryTests(unittest.TestCase):
         (self.root/'onboarding.json').write_text(json.dumps(state))
         before=(self.root/'cloud.json').read_bytes()
         for failure in (TimeoutError('offline'),InvalidDeviceCredentials('revoked')):
-            with self.subTest(failure=type(failure).__name__), patch('carryon.onboarding.request',side_effect=failure):
+            with self.subTest(failure=type(failure).__name__), patch('carryon.accounts.onboarding.request',side_effect=failure):
                 with self.assertRaises((OSError,ValueError)):
                     exchange(self.root,{'action':'apply-confirmed'})
             self.assertEqual(json.loads((self.root/'onboarding.json').read_text()),state)
@@ -99,7 +99,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((self.root/'cloud.json').read_bytes(),before)
 
     def test_running_install_uses_guarded_replacement_and_stop_failure_preserves_original(self):
-        from carryon.onboarding import install_binding
+        from carryon.accounts.onboarding import install_binding
         from types import SimpleNamespace
         manager=CloudManager(SimpleNamespace(),self.root)
         original=manager.connections['a'*32]
@@ -114,7 +114,7 @@ class RecoveryTests(unittest.TestCase):
         def call(directory,path,body,timeout):
             self.assertEqual(path,'/cloud')
             return manager.configure(body)
-        with patch('carryon.services.running',return_value={'port':1234}), patch('carryon.services.call',side_effect=call), patch('carryon.cloud.CloudConnector.start'), patch('carryon.cloud.CloudConnector.stop'):
+        with patch('carryon.services.running',return_value={'port':1234}), patch('carryon.services.call',side_effect=call), patch('carryon.cloud.cloud.CloudConnector.start'), patch('carryon.cloud.cloud.CloudConnector.stop'):
             install_binding(self.root,updated,replacement)
         self.assertEqual(manager.connections['a'*32].config['deviceId'],'new')
         self.assertEqual(manager.connections['b'*32].config,self.other)
@@ -142,7 +142,7 @@ class RecoveryFlowTests(unittest.TestCase):
             if status==403 and value.get('error')=='设备凭证无效':raise InvalidDeviceCredentials(value['error'])
             if status!=200:raise ValueError(value)
             return value
-        with patch.dict('os.environ',{'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.services.running',return_value=None), patch('carryon.onboarding.request',side_effect=rpc):
+        with patch.dict('os.environ',{'CARRYON_REGISTRY_DIR':str(root/'registry')}), patch('carryon.services.running',return_value=None), patch('carryon.accounts.onboarding.request',side_effect=rpc):
             self.assertEqual(exchange(root,{'action':'status'})['state'],'configured')
             initial=(root/'cloud.json').read_bytes()
             prepared=exchange(root,{'action':'prepare','url':'https://example.test','autoStart':False})

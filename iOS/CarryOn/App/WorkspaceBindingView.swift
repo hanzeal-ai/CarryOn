@@ -12,7 +12,7 @@ struct WorkspaceBindingView: View {
     @State private var failure: String?
     @State private var busy = false
     @State private var waiting = false
-    private let labels = ["view":"查看会话", "create":"新建会话", "send":"发送消息", "stop":"停止任务", "edit":"编辑会话与设置", "files":"查看和下载文件", "approve":"处理审批"]
+    private let labels = ["view":"查看会话", "create":"新建会话", "send":"发送消息", "stop":"停止任务", "edit":"编辑会话与设置", "files":"查看和下载文件", "approve":"处理审批", "resetQuota":"使用额度重置卡"]
     var body: some View {
         NavigationStack {
             ScrollView {

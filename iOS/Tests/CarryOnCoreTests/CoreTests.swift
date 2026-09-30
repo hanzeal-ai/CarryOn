@@ -212,7 +212,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     let body: JSONValue = .object(["projectId": .string("project-a"), "prompt": .string("hello")])
     let id = try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body)
     let other = try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body)
-    try writes.reconcile(scope: "scope", job: .object(["id": .string(id), "threadId": .string("controller"),
+    try writes.reconcile(scope: "scope", job: .object(["id": .string(id), "threadId": .string("new-thread"),
         "state": .string("completed"), "creationProject": .object(["groupId": .string("project-a")])]))
     #expect(try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body) != id)
     #expect(try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body) == other)
@@ -236,6 +236,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     #expect(store.texts.isEmpty)
     #expect(store.images.isEmpty)
     store.save()
+    await store.flush()
     #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).count == 1)
     await store.load(scope: "account-a")
     #expect(store.texts["server\nthread"] == "Pending edit")
@@ -273,6 +274,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     await store.load(scope: "a")
     store.texts["old"] = "saved"
     store.reset()
+    await store.flush()
     let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
     let original = try Data(contentsOf: file)
     try Data("broken".utf8).write(to: file)
@@ -294,6 +296,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     store.texts["thread"] = "old"
     store.images["thread"] = ["image"]
     store.reset()
+    await store.flush()
     let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
     let original = try Data(contentsOf: file)
     try Data("broken".utf8).write(to: file)

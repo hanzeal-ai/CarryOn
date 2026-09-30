@@ -1,5 +1,6 @@
-"""Read account quota through the installed Codex app-server, never through a task."""
+"""Read quota and explicitly redeem reset credits through the native app-server."""
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -10,10 +11,13 @@ import time
 import threading
 from contextlib import suppress
 
-from .errors import BridgeError
+from carryon.errors import BridgeError
 
 
 def executable():
+    current = Path('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')
+    if current.is_file() and os.access(current, os.X_OK):
+        return str(current)
     bundled = Path('/Applications/ChatGPT.app/Contents/Resources/codex')
     if bundled.is_file() and os.access(bundled, os.X_OK):
         return str(bundled)
@@ -35,7 +39,21 @@ def native_read(home):
         _slots.release()
 
 
-def _native_read(home):
+def native_consume(home, account_key, params, before_send):
+    if not _slots.acquire(blocking=False):
+        raise BridgeError('额度操作正在处理，请稍后重试', 503)
+    try:
+        return _native_read(home, (account_key, params), before_send)
+    finally:
+        _slots.release()
+
+
+def account_key(raw):
+    value = raw.get('accountId')
+    return hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) and value else None
+
+
+def _native_read(home, consume=None, before_send=None):
     env = dict(os.environ, CODEX_HOME=str(Path(home).resolve()))
     process = subprocess.Popen([executable(), 'app-server'], cwd=str(home), env=env,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -45,9 +63,11 @@ def _native_read(home):
     def send(value):
         process.stdin.write(json.dumps(value).encode() + b'\n')
         process.stdin.flush()
-    def request(identifier, method, params):
+    def request(identifier, method, params, guard=None):
         nonlocal buffered
-        send({'id': identifier, 'method': method, 'params': params})
+        payload = {'id': identifier, 'method': method, 'params': params}
+        if guard: guard(lambda: send(payload))
+        else: send(payload)
         while True:
             while b'\n' in buffered:
                 line, buffered = buffered.split(b'\n', 1)
@@ -71,12 +91,18 @@ def _native_read(home):
     try:
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
-        request(1, 'initialize', {'clientInfo': {'name': 'carryon_usage', 'version': '1.0'}})
+        request(1, 'initialize', {'clientInfo': {'name': 'carryon_usage', 'version': '1.0'},
+                                  **({'capabilities': {'experimentalApi': True}} if consume is not None else {})})
         send({'method': 'initialized', 'params': {}})
         account = request(2, 'account/read', {'refreshToken': False})
         if not isinstance(account, dict) or not isinstance(account.get('account'), dict) or account['account'].get('type') != 'chatgpt':
             raise BridgeError('本机 Codex 未登录 ChatGPT 账号，暂无订阅额度数据', 503)
-        return request(3, 'account/rateLimits/read', {})
+        usage = request(3, 'account/rateLimits/read', {})
+        if consume is None: return usage
+        expected, params = consume
+        if not isinstance(usage, dict) or account_key(usage) != expected:
+            raise BridgeError('Codex 账号已改变或无法核对，请刷新额度后再操作', 409)
+        return request(4, 'account/rateLimitResetCredit/consume', params, guard=before_send)
     finally:
         if selector is not None:
             with suppress(OSError): selector.close()
@@ -99,11 +125,32 @@ def number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+def reset_credits(value):
+    if not isinstance(value, dict): return None
+    count = value.get('availableCount')
+    count = count if type(count) is int and count >= 0 else None
+    details = value.get('credits')
+    credits = None
+    if isinstance(details, list):
+        credits = []
+        for credit in details:
+            if not isinstance(credit, dict) or not isinstance(credit.get('id'), str): continue
+            row = {'id': credit['id'],
+                   'title': credit.get('title') if isinstance(credit.get('title'), str) else None,
+                   'status': credit.get('status') if credit.get('status') in ('available', 'redeeming', 'redeemed') else 'unknown'}
+            for key in ('grantedAt', 'expiresAt'):
+                timestamp = credit.get(key)
+                row[key] = timestamp if type(timestamp) is int and timestamp >= 0 else None
+            credits.append(row)
+    # Native details may be capped; their length is never the available count.
+    return {'availableCount': count, 'credits': credits}
+
+
 def project(raw):
     if not isinstance(raw, dict):
         raise BridgeError('Codex 额度数据格式不正确', 502)
     mapped = raw.get('rateLimitsByLimitId')
-    entries = list(mapped.items()) if isinstance(mapped, dict) and mapped else [('codex', raw.get('rateLimits'))]
+    entries = mapped.items() if isinstance(mapped, dict) else []
     limits = []
     for key, value in entries:
         if not isinstance(value, dict):
@@ -121,7 +168,8 @@ def project(raw):
             limits.append({'id': str(key), 'name': value.get('limitName') if isinstance(value.get('limitName'), str) else str(key),
                            'planType': value.get('planType') if isinstance(value.get('planType'), str) else None,
                            'windows': windows})
-    return {'limits': limits, 'fetchedAt': time.time(), 'source': 'codex-account', 'scope': 'account'}
+    return {'limits': limits, 'accountKey': account_key(raw), 'rateLimitResetCredits': reset_credits(raw.get('rateLimitResetCredits')),
+            'fetchedAt': time.time(), 'source': 'codex-account', 'scope': 'account'}
 
 
 def read(home):

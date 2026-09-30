@@ -19,7 +19,7 @@ const assert=require('node:assert/strict');
    if(gate?.path===path){const current=gate;gate=null;current.entered();await current.promise;}
    if(path==='/api/projects'){projectCalls++;const searching=body.path.includes('search=missing');const more=new URLSearchParams(body.path.split('?')[1]).get('offset')!=='0';data={projects:searching?[]:[more?{...project,id:'p2',name:'另一个项目'}:project],total:searching?0:2,nextOffset:more?2:1};}
    else if(path==='/api/projects/p/threads'||path==='/api/threads')data={threads:[thread],total:1,nextOffset:1};
-   else if(path==='/api/status')data={enabled:true,remoteControl:true,controllerId:'t'};
+   else if(path==='/api/status')data={enabled:true,remoteControl:true};
    else if(path==='/api/activity')data={threads:[],total:0,nextOffset:0};
    else if(path==='/api/notifications')data={events:[],nextSequence:0};
    else if(path==='/api/notifications/preferences'){
@@ -29,7 +29,7 @@ const assert=require('node:assert/strict');
   }
   await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
  });
- await page.routeWebSocket('**/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,remoteControl:true,controllerId:'t'}}}));});});
+ await page.routeWebSocket('**/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,remoteControl:true}}}));});});
  function hold(path){let release,entered;const promise=new Promise(r=>release=r),started=new Promise(r=>entered=r);gate={path,promise,entered};return {release,started};}
  const base=process.env.CARRYON_UI_URL||'http://127.0.0.1:8989/example.html';
  await page.goto(base);await page.locator('#mobile-session-list .project-row').waitFor();

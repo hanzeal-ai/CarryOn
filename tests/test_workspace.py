@@ -2,10 +2,10 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
-from carryon.bridge import Bridge
+from carryon.sessions.bridge import Bridge
 from carryon.store import Journal
-from carryon.workspace import Workspace,project_identity
-from carryon.remote_scope import scoped_dispatch
+from carryon.workspaces.workspace import Workspace,project_identity
+from carryon.routes.remote_scope import scoped_dispatch
 from test_cloud import IPC,T
 
 U='22222222-2222-4222-8222-222222222222'
@@ -20,6 +20,28 @@ class Native(IPC):
     def current(self,tid):return self.states.get(tid)
 
 class WorkspaceTests(unittest.TestCase):
+    def test_streaming_reuses_immutable_completed_turn_candidates(self):
+        from unittest.mock import patch
+        from carryon.sessions.history_cache import NativeSnapshot
+        import carryon.workspaces.workspace as module
+        completed = [{'turnId': str(i), 'status': 'completed', 'items': [
+            {'id': 'a'+str(i), 'type': 'agentMessage', 'text': 'done'}]} for i in range(1000)]
+        def snapshot(text):
+            return NativeSnapshot({'id': T, 'threadRuntimeStatus': {'type': 'active'}, 'turns': completed + [
+                {'turnId': 'live', 'status': 'inProgress', 'items': [{'id': 'live-a', 'type': 'agentMessage', 'text': text}]}]})
+        self.workspace.observe(snapshot('a'))
+        before = self.workspace.revision
+        with patch.object(module, 'digest', wraps=module.digest) as hashing:
+            self.workspace.observe(snapshot('ab'))
+            self.assertEqual(hashing.call_count, 1)
+        self.assertEqual(self.workspace.revision, before)
+        changed = {**completed[0], 'items': completed[0]['items'] + [
+            {'id': 'late', 'type': 'agentMessage', 'text': 'late persisted message'}]}
+        updated = snapshot('abc')
+        updated['turns'] = [changed] + updated['turns'][1:]
+        self.workspace.observe(updated)
+        self.assertGreater(self.workspace.revision, before)
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.journal=Journal(Path(self.temp.name)/'journal.sqlite')
         self.bridge=Bridge('fake',Catalog(),self.journal,Native);self.bridge.enable()
@@ -31,7 +53,7 @@ class WorkspaceTests(unittest.TestCase):
         self.bridge.ipc.states[tid]=state;self.workspace.observe(state);return state
     def test_active_async_question_is_actionable_without_exposing_running_process(self):
         import json
-        from carryon.questions import OPEN, CLOSE
+        from carryon.sessions.questions import OPEN, CLOSE
         state=self.observe()
         self.assertEqual(self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'],[])
         state=copy.deepcopy(state)
@@ -135,7 +157,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(self.workspace.events('binding:a')['events']),1)
 
     def test_all_sessions_sort_page_search_and_keep_live_status(self):
-        from carryon.api import dispatch
+        from carryon.routes.api import dispatch
         self.observe(T);self.observe(U,status='completed')
         self.workspace.rows[T]['updated_at']=10
         self.workspace.rows[U]['updated_at']=20
@@ -272,7 +294,7 @@ class WorkspaceTests(unittest.TestCase):
             scoped_dispatch(self.bridge,'POST','/api/notifications/clear-read',{},False,'shared')
 
     def test_completion_uses_native_time_not_catalog_update(self):
-        from carryon.timeline import project_turn,completion_time
+        from carryon.sessions.timeline import project_turn,completion_time
         self.observe()
         state=self.observe(status='completed')
         turn=state['turns'][0];turn.update(turnStartedAtMs=1700000000000,durationMs=42000)
@@ -367,14 +389,20 @@ class WorkspaceTests(unittest.TestCase):
 
     def native_read_event(self, **overrides):
         import threading
-        from carryon.events import Events
+        from carryon.desktop_ipc.events import Events
         ipc=self.bridge.ipc
         if not hasattr(ipc,'events'):
-            ipc.lock=threading.RLock();ipc.following={};ipc.events=Events(ipc)
-        packet={'type':'broadcast','method':'thread-read-state-changed','version':2,
-                'sourceClientId':'desktop','params':{'hostId':'local','conversationId':T,'hasUnreadTurn':False}}
+            ipc.lock=threading.RLock();ipc.following={T:'owner'};ipc.events=Events(ipc)
+        ipc.snapshot=lambda tid:('owner',ipc.current(tid))
+        ipc.states[T]['hasUnreadTurn']=False
+        packet={'type':'broadcast','method':'thread-read-state-changed','version':3,
+                'sourceClientId':'desktop','params':{'hostId':'local','conversationId':T,'hasUnreadTurn':False,'context':{}}}
         packet.update(overrides)
         ipc.events.handle(packet)
+        import time
+        deadline=time.monotonic()+1
+        while ipc.events.read_refreshes and time.monotonic()<deadline:time.sleep(.001)
+        self.assertFalse(ipc.events.read_refreshes)
 
     def test_native_read_clears_all_readers_and_survives_restart(self):
         self.observe(request=True)
@@ -408,6 +436,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(self.bridge.ipc.events.flags[T]['hasUnreadTurn'])
         self.workspace.observe(later)  # Cached native false does not consume the new message.
         self.assertTrue(next(t for t in self.workspace.projection('binding:a')[1] if t['id']==T)['unread'])
+
+    def test_new_read_signal_before_cursor_commit_invalidates_old_false(self):
+        self.observe(request=True)
+        self.native_read_event(version=2)  # Prepare fixture without accepting old wire.
+        ipc = self.bridge.ipc
+        original = ipc.on_read
+        def intervening(tid, state, token):
+            ipc.on_read = original
+            ipc.states[tid] = {**state, 'hasUnreadTurn': True}
+            ipc.events.handle({'method':'thread-read-state-changed','version':3,
+                'sourceClientId':'desktop','params':{'hostId':'local','conversationId':tid,
+                    'hasUnreadTurn':True,'context':{'identity':{'accountId':'current'}}}})
+            original(tid, state, token)
+        ipc.on_read = intervening
+        self.native_read_event()
+        self.assertTrue(next(t for t in self.workspace.projection('local')[1] if t['id']==T)['unread'])
+        self.assertTrue(ipc.events.flags[T]['hasUnreadTurn'])
 
     def test_native_read_ignores_invalid_events_and_old_connection(self):
         self.observe(request=True)

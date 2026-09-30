@@ -68,6 +68,7 @@ private struct SideChatConversation: View {
     @State private var failure: String?
     @State private var loading = false
     @State private var submitting = false
+    @State private var interrupting = false
     @State private var showingModel = false
     @State private var disclosureState = ConversationDisclosureState()
     @State private var tableUpdates: TableUpdateTransaction?
@@ -81,12 +82,14 @@ private struct SideChatConversation: View {
         ChatView(messages: messages, didSendMessage: { _ in }, messageBuilder: { params in
             if let item = params.message.customData["entry"] as? JSONValue {
                 ConversationTimelineRow(item: item, threadID: chat.id)
+                    .environment(\.preparedMessageMarkdown, params.message.customData["markdown"] as? ParsedMessageMarkdown)
                     .onLongPressGesture { if !CarryOnMessageAction.menuItems(for: params.message).isEmpty { params.showContextMenuClosure() } }
-                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .padding(.horizontal, 16).padding(.vertical, item["type"].text == "processGroup" ? 2 : 8)
             }
         }, inputViewBuilder: { _ in
             CarryOnChatComposer(text: Binding(get: { model.draftStore.texts[draftKey] ?? "" }, set: { model.draftStore.texts[draftKey] = $0 }),
                 disabled: !writable, sendAllowed: model.allows(.send), stopAllowed: model.allows(.stop), hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
+                submitting: submitting && !interrupting,
                 resuming: history["status"]["state"].text == "idle" && history["controls"]["lastTurnStatus"].text == "interrupted",
                 send: { Task { await send() } },
                 stop: { Task { await send(stopping: true) } },
@@ -140,14 +143,15 @@ private struct SideChatConversation: View {
             if model.sideThreadID == chat.id && value["parentId"].string == parentID { render(value) }
         }
         .onChange(of: model.sideHistoryFailure) { _, value in failure = value }
-        .onDisappear { if model.sideThreadID == chat.id { model.watchSide(nil) } }
+        .onDisappear { renderRevision += 1; if model.sideThreadID == chat.id { model.watchSide(nil) } }
     }
     private func send(stopping: Bool = false) async {
         guard writable, model.allows(stopping ? .stop : .send) else { return }
         let scope = model.scope, key = draftKey, text = model.draftStore.texts[draftKey] ?? ""
         let sentImages = images.wrappedValue
         guard stopping || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !sentImages.isEmpty else { return }
-        submitting = true; defer { submitting = false }
+        submitting = true; interrupting = stopping
+        defer { submitting = false; interrupting = false }
         let destination = target
         let ok: Bool
         if stopping {
@@ -172,13 +176,24 @@ private struct SideChatConversation: View {
             let grouped = await Task.detached(priority: .userInitiated) { ConversationProcess.timeline(timeline) }.value
             guard revision == renderRevision else { return }
             let previous = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let next = grouped.enumerated().map { index, item in
+            var next = grouped.enumerated().map { index, item in
                 if let existing = previous[item.stableID], existing.customData["entry"] as? JSONValue == item { return existing }
                 var message = ExyteChat.Message(id: item.stableID,
                     user: .init(id: "timeline", name: "", avatarURL: nil, type: .system),
                     createdAt: Date(timeIntervalSince1970: Double(index)), attributedText: AttributedString(item["text"].text), customData: ["entry": item])
                 message.triggerRedraw = UUID(); return message
             }
+            // Keep a bounded window of prepared trees, including newly loaded older rows.
+            // Offscreen history remains plain data and parses lazily when its row appears.
+            let prepending = !messages.isEmpty && grouped.first?.stableID != messages.first?.id
+            let preparedRange = prepending ? 0..<min(120, next.count) : max(0, next.count - 120)..<next.count
+            for index in next.indices {
+                if !preparedRange.contains(index) { next[index].customData.removeValue(forKey: "markdown") }
+                else if next[index].customData["markdown"] == nil {
+                    next[index].customData["markdown"] = await MessageMarkdownParser.shared.prepare(grouped[index])
+                }
+            }
+            guard revision == renderRevision else { return }
             if let tableUpdates { await tableUpdates(animationMode: bottomVisible ? .none : .keepStable) {
                 if revision == renderRevision { messages = next }
             } }

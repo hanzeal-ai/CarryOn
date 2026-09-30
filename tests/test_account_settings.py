@@ -13,10 +13,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from carryon.account_client import request
-from carryon.account_settings import AccountSettings
-from carryon.console import ConsoleServer
-from carryon.console_auth import ConsoleAuth, password_record
+from carryon.accounts.account_client import request
+from carryon.accounts.account_settings import AccountSettings
+from carryon.cloud.console import ConsoleServer
+from carryon.cloud.console_auth import ConsoleAuth, password_record
 from carryon.cli import main
 
 PASSWORD = 'initial-password-123'
@@ -159,12 +159,12 @@ class AccountSettingsTests(unittest.TestCase):
     def test_failed_persistence_does_not_change_account_or_consume_token(self):
         token = AccountSettings(self.config, self.directory).bootstrap()
         body = {'setupToken': token, 'username': 'admin', 'password': PASSWORD}
-        with patch('carryon.account_settings.save_json', side_effect=OSError('disk full')):
+        with patch('carryon.accounts.account_settings.save_json', side_effect=OSError('disk full')):
             self.assertEqual(self.http('account/setup', body)[0], 503)
         self.assertIsNone(self.server.auth.account)
         self.assertEqual(self.http('account/setup', body)[0], 200)
         fingerprint = self.server.auth.fingerprint
-        with patch('carryon.account_settings.save_json', side_effect=OSError('disk full')):
+        with patch('carryon.accounts.account_settings.save_json', side_effect=OSError('disk full')):
             self.assertEqual(self.change()[0], 503)
         self.assertEqual(fingerprint, self.server.auth.fingerprint)
 
@@ -179,7 +179,7 @@ class AccountSettingsTests(unittest.TestCase):
             calls.append(is_directory)
             if is_directory:raise OSError('directory sync failed')
             return real_fsync(fd)
-        with patch('carryon.account_settings.os.fsync',side_effect=fsync):
+        with patch('carryon.accounts.account_settings.os.fsync',side_effect=fsync):
             self.assertEqual(self.change()[0],503)
         self.assertEqual(calls,[False,True])
         self.assertEqual(self.http('session',cookie=cookie)[0],401)
@@ -213,7 +213,7 @@ class AccountSettingsTests(unittest.TestCase):
         token = AccountSettings(self.config, self.directory).bootstrap()
         body = {'setupToken': token, 'username': 'admin', 'password': PASSWORD}
         real_request = request
-        with patch('carryon.account_client.request', side_effect=lambda url, action, data=None: real_request(url, action, data, dev_local=True)), \
+        with patch('carryon.accounts.account_client.request', side_effect=lambda url, action, data=None: real_request(url, action, data, dev_local=True)), \
              patch('carryon.services.running', side_effect=AssertionError('local service not required')), \
              patch('sys.stdin', io.StringIO(json.dumps(body))), patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(main(['cloud', 'account', 'setup', '--url', self.url, '--input-json']), 0)
@@ -247,6 +247,6 @@ class AccountClientTLSTests(unittest.TestCase):
                 changed = cli('change', {'currentUsername': 'admin', 'currentPassword': PASSWORD, 'username': 'owner', 'password': NEW_PASSWORD})
                 self.assertEqual(changed.returncode, 0, changed.stderr)
                 self.assertNotIn(NEW_PASSWORD, changed.stdout+changed.stderr)
-                with patch('carryon.account_client.tls_context', return_value=ssl.create_default_context(cafile=str(cert))):
+                with patch('carryon.cloud.cloud_wire.tls_context', return_value=ssl.create_default_context(cafile=str(cert))):
                     with self.assertRaises(ValueError):request(url.replace('localhost','127.0.0.1'), 'status')
             finally:server.shutdown(); server.server_close(); worker.join(3)

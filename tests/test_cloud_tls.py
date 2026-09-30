@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from carryon.cloud_wire import connect, close, tls_context
-from carryon.gateway import Gateway
+from carryon.cloud.cloud_wire import connect, close, tls_context
+from carryon.cloud.gateway import Gateway
 
 
 class TLSTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class TLSTests(unittest.TestCase):
                 with self.assertRaises(ssl.SSLCertVerificationError):
                     connect(f'wss://localhost:{gateway.server_port}/device')
                 trusted=ssl.create_default_context(cafile=str(cert))
-                with patch('carryon.cloud_wire.tls_context',return_value=trusted):
+                with patch('carryon.cloud.cloud_wire.tls_context',return_value=trusted):
                     with self.assertRaises(ssl.SSLCertVerificationError):
                         connect(f'wss://127.0.0.1:{gateway.server_port}/device')
                     ws=connect(f'wss://localhost:{gateway.server_port}/device')
@@ -40,7 +40,7 @@ class TLSTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform=='darwin','macOS trust store')
     def test_system_roots_when_bundled_python_has_no_ca_file(self):
         empty=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        with patch('carryon.cloud_wire.ssl.create_default_context',return_value=empty):
+        with patch('carryon.cloud.cloud_wire.ssl.create_default_context',return_value=empty):
             result=tls_context()
         self.assertGreater(len(result.get_ca_certs()),0)
         self.assertTrue(result.check_hostname)

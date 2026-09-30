@@ -18,10 +18,11 @@ def main():
     for name in ('status', 'enable', 'disable'):
         commands.add_parser(name)
     commands.add_parser('threads').add_argument('--search', default='')
-    for name in ('controller', 'history', 'job'):
+    for name in ('history', 'job'):
         commands.add_parser(name).add_argument('id')
     for name in ('create', 'send'):
         command = commands.add_parser(name)
+        if name == 'create': command.add_argument('--project-id', required=True)
         if name == 'send':
             command.add_argument('id')
         command.add_argument('prompt')
@@ -36,8 +37,6 @@ def main():
         path, body = '/bridge', {'enabled': args.command == 'enable'}
     elif args.command == 'threads':
         path = '/threads?search=' + quote(args.search, safe='')
-    elif args.command == 'controller':
-        path, body = '/controller', {'threadId': args.id}
     elif args.command == 'history':
         path = '/threads/' + quote(args.id, safe='') + '/history'
     elif args.command == 'job':
@@ -45,6 +44,7 @@ def main():
     else:
         path = '/threads' if args.command == 'create' else '/threads/' + quote(args.id, safe='') + '/messages'
         body = {'requestId': args.request_id, 'prompt': args.prompt}
+        if args.command == 'create': body['projectId'] = args.project_id
     request = Request(args.base.rstrip('/') + '/api' + path,
         data=None if body is None else json.dumps(body).encode(),
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})

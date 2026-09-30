@@ -1,4 +1,4 @@
-from carryon.console_auth import password_record
+from carryon.cloud.console_auth import password_record
 """Many-to-many binding using isolated HTTP/WS consoles and a fake native IPC."""
 import http.client
 import json
@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from carryon.bridge import Bridge
-from carryon.cloud import CloudConnector
-from carryon.cloud_manager import CloudManager
-from carryon.console import ConsoleServer
+from carryon.sessions.bridge import Bridge
+from carryon.cloud.cloud import CloudConnector
+from carryon.cloud.cloud_manager import CloudManager
+from carryon.cloud.console import ConsoleServer
 from carryon.errors import BridgeError
 from carryon.paths import save_json
-from carryon.remote_scope import scoped_dispatch, project_packet, request_key
+from carryon.routes.remote_scope import scoped_dispatch, project_packet, request_key
 from carryon.store import Journal
 from test_cloud import Catalog, IPC, T
 
@@ -195,7 +195,7 @@ class MultiCloudTests(unittest.TestCase):
         import subprocess,sys
         with tempfile.TemporaryDirectory() as directory:
             config=Path(directory)/'gateway.json'
-            result=subprocess.run([sys.executable,'-m','carryon.console','configure','--config',str(config),'--public-url','https://console.test','--username','admin'],input='fixture-password-123\nfixture-password-123\n',capture_output=True,text=True)
+            result=subprocess.run([sys.executable,'-m','carryon.cloud.console','configure','--config',str(config),'--public-url','https://console.test','--username','admin'],input='fixture-password-123\nfixture-password-123\n',capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             data=json.loads(config.read_text());self.assertEqual(data['devices'],{})
             self.assertEqual(data['account']['username'],'admin')

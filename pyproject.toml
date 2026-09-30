@@ -15,11 +15,11 @@ apns = ["httpx[http2]>=0.28,<0.29", "cryptography>=44,<47"]
 
 [project.scripts]
 carryon = "carryon.cli:main"
-carryon-gateway = "carryon.gateway:main"
-carryon-console = "carryon.console:main"
+carryon-gateway = "carryon.cloud.gateway:main"
+carryon-console = "carryon.cloud.console:main"
 
-[tool.setuptools]
-packages = ["carryon"]
+[tool.setuptools.packages.find]
+include = ["carryon", "carryon.*"]
 
 [tool.setuptools.package-data]
 carryon = ["native_contracts.json", "product.json", "web/*"]

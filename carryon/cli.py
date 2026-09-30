@@ -1,6 +1,5 @@
 """User-facing lifecycle commands; stop authenticates the service, never a PID."""
 import argparse
-import getpass
 import json
 import os
 import stat
@@ -10,10 +9,10 @@ import time
 import urllib.error
 from pathlib import Path
 
-from . import __version__
-from .paths import default_codex_home, state_dir, private_dir
-from . import services
-from .services import workspace_codex_home, workspace_backend
+from carryon import __version__
+from carryon.paths import default_codex_home, state_dir
+from carryon import services
+from carryon.services import workspace_codex_home, workspace_backend
 
 
 def doctor(args):
@@ -28,7 +27,7 @@ def doctor(args):
         'stateDirectory':str(args.state_dir), 'service':services.running(args.state_dir),
         'testedDesktopVersion':'26.901.51231'}
     if result['backend'] == 'app-server':
-        from .usage import executable
+        from carryon.usage import executable
         try: result['codexExecutable'] = executable()
         except Exception as exc: result['error'] = str(exc)
         bridge = services.call(args.state_dir, '/status') if result['service'] else {}
@@ -59,9 +58,9 @@ def main(argv=None):
     members.add_argument('--state-dir', type=Path, default=state_dir())
     members.add_argument('--binding-id')
     members.add_argument('--account-id')
-    members.add_argument('--permissions', help='逗号分隔：view,create,send,stop,edit,files,approve')
+    members.add_argument('--permissions', help='逗号分隔：view,create,send,stop,edit,files,approve,resetQuota')
     members.add_argument('--input-json', action='store_true')
-    for name in ('start','serve','open','status','stop','doctor','cloud','bridge','standby','controller','notifications','services'):
+    for name in ('start','serve','open','status','stop','doctor','cloud','bridge','standby','notifications','services'):
         p = sub.add_parser(name)
         p.add_argument('--state-dir', type=Path, default=state_dir())
         if name in ('start','serve','doctor'):
@@ -74,9 +73,6 @@ def main(argv=None):
             p.add_argument('action',choices=['list','create','remove','login','auth-status','auth-start'])
             p.add_argument('--name')
         if name in ('bridge','standby'):p.add_argument('action',choices=['on','off','status'])
-        if name == 'controller':
-            p.add_argument('action',choices=['set','status'])
-            p.add_argument('--thread-id')
         if name == 'notifications':
             p.add_argument('action',choices=['status','set'])
             for kind in ('message','done','failed','approval'):p.add_argument('--'+kind,action=argparse.BooleanOptionalAction)
@@ -99,16 +95,16 @@ def main(argv=None):
     if hasattr(args,'state_dir'):args.state_dir = args.state_dir.expanduser().resolve()
     try:
         if args.command == 'init':
-            from .onboarding import command as initialize
+            from carryon.accounts.onboarding import command as initialize
             return initialize(args)
         if args.command == 'invate':
-            from .invite_cli import command as invite_command
+            from carryon.accounts.invite_cli import command as invite_command
             return invite_command(args)
         if args.command == 'members':
-            from .members_cli import command as manage_members
+            from carryon.accounts.members_cli import command as manage_members
             return manage_members(args)
         if args.command in ('start', 'serve', 'doctor'):
-            from .services import records
+            from carryon.services import records
             saved = records().get(str(args.state_dir), {})
             args.codex_home = (args.codex_home or Path(saved.get('codexHome', default_codex_home()))).expanduser().resolve()
             if hasattr(args, 'port') and args.port is None:
@@ -116,19 +112,19 @@ def main(argv=None):
         elif hasattr(args, 'codex_home'):
             args.codex_home = workspace_codex_home(args.state_dir, args.codex_home)
         if args.command=='services':
-            from .services import list_services, register, remove
+            from carryon.services import list_services, remove
             if args.action=='create':
-                from .workspaces import create
+                from carryon.workspaces.workspaces import create
                 result=create(args.name or '新工作区')
                 if sys.stdin.isatty():
                     from types import SimpleNamespace
-                    from .onboarding import command as initialize
+                    from carryon.accounts.onboarding import command as initialize
                     return initialize(SimpleNamespace(state_dir=Path(result['directory']), input_json=False, url=None, permissions=None))
             elif args.action in ('auth-start','auth-status'):
                 result=services.call(args.state_dir, '/codex-account', {} if args.action == 'auth-start' else None, timeout=25)
             elif args.action=='login':
-                from .services import records
-                from .usage import executable
+                from carryon.services import records
+                from carryon.usage import executable
                 row=records().get(str(args.state_dir), {})
                 if row.get('backend') != 'app-server': raise ValueError('请在 Codex App 登录默认工作区')
                 return subprocess.call([executable(), 'login', '--device-auth'], env=dict(os.environ, CODEX_HOME=row['codexHome']), cwd=row['codexHome'])
@@ -136,26 +132,26 @@ def main(argv=None):
             else:result=list_services(args.state_dir)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command in ('update','uninstall'):
-            from .maintenance import update, uninstall
+            from carryon.maintenance import update, uninstall
             return update(args.package,args.check) if args.command=='update' else uninstall()
         if args.command == 'start': return services.start(args)
         if args.command == 'serve':
-            from .server import run
+            from carryon.server import run
             run(args.port,args.codex_home,args.state_dir); return 0
         if args.command == 'doctor': return doctor(args)
         if args.command=='cloud' and args.action=='qr':
             if not args.url:
-                from .product import cloud_url
+                from carryon.product import cloud_url
                 args.url=cloud_url()
-            from .qr_client import command as qr_command
+            from carryon.accounts.qr_client import command as qr_command
             return qr_command(args)
         if args.command=='cloud' and args.action=='account':
             if not args.account_action or not args.url:raise ValueError('使用 carryon cloud account status|setup|change --url HTTPS地址')
-            from .account_client import command as account_command
+            from carryon.accounts.account_client import command as account_command
             return account_command(args)
         info = services.running(args.state_dir)
         if not info and args.command == 'cloud' and args.action == 'status':
-            from .cloud_manager import CloudManager
+            from carryon.cloud.cloud_manager import CloudManager
             print(json.dumps(CloudManager.saved_status(args.state_dir), ensure_ascii=False, indent=2)); return 0
         if args.command == 'status':
             print(json.dumps({'running':bool(info),'service':info,
@@ -167,14 +163,10 @@ def main(argv=None):
             result=services.call(args.state_dir,'/notifications/preferences')
             if args.action=='set':result=services.call(args.state_dir,'/notifications/preferences',{**result['preferences'],**updates})
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
-        if args.command in ('bridge','standby','controller'):
-            if args.command=='controller':
-                if args.action=='set' and not args.thread_id:raise ValueError('需要 --thread-id 指定控制会话')
-                result=services.call(args.state_dir,'/controller',{'threadId':args.thread_id}) if args.action=='set' else services.call(args.state_dir,'/status')
-            else:
-                path='/bridge' if args.command=='bridge' else '/service/standby'
-                if args.action=='status':result=services.call(args.state_dir,'/status' if args.command=='bridge' else path)
-                else:result=services.call(args.state_dir,path,{'enabled':args.action=='on'},timeout=20)
+        if args.command in ('bridge','standby'):
+            path='/bridge' if args.command=='bridge' else '/service/standby'
+            if args.action=='status':result=services.call(args.state_dir,'/status' if args.command=='bridge' else path)
+            else:result=services.call(args.state_dir,path,{'enabled':args.action=='on'},timeout=20)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command == 'open': services.open_console(args.state_dir,info);return 0
         if args.command == 'stop':

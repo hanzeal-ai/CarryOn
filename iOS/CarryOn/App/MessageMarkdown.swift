@@ -5,6 +5,7 @@ import CarryOnCore
 
 struct MessageMarkdown: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.preparedMessageMarkdown) private var prepared
     let text: String
     @ScaledMetric(relativeTo: .body) private var bodySize = 17
     var artifacts: [JSONValue] = []
@@ -12,11 +13,23 @@ struct MessageMarkdown: View {
     var resolveCreatedThreads = false
     @State private var threadTitles: [String: String] = [:]
     @State private var openingThread = false
-    private var createdIDs: [String] { resolveCreatedThreads ? CreatedThreadReference.threadIDs(in: text) : [] }
+    @State private var parsed: ParsedMessageMarkdown?
+    @State private var refresh = ConversationRefreshQueue()
+    @State private var generation = UUID()
+    private var input: MessageMarkdownInput { .init(text: text, resolveThreads: resolveCreatedThreads, titles: threadTitles) }
+    private var displayed: ParsedMessageMarkdown? {
+        if parsed?.input == input { return parsed }
+        if prepared?.input == input { return prepared }
+        // Title lookup may lag, but never display content from a different message.
+        return [parsed, prepared].compactMap { $0 }.first {
+            $0.input.text == input.text && $0.input.resolveThreads == input.resolveThreads
+        }
+    }
+    private var createdIDs: [String] { displayed?.threadIDs ?? [] }
     @State private var selectedArtifact: JSONValue?
     @State private var previewID = UUID()
     var body: some View {
-        Markdown(resolveCreatedThreads ? CreatedThreadReference.render(text, titles: threadTitles) : text)
+        Markdown(displayed?.content ?? MarkdownContent {})
             .markdownImageProvider(AttachmentImageProvider())
             .markdownInlineImageProvider(AttachmentInlineImageProvider())
             .markdownTextStyle { FontSize(bodySize); ForegroundColor(Design.ink) }
@@ -26,6 +39,10 @@ struct MessageMarkdown: View {
                     .markdownMargin(top: 8, bottom: 8)
             }
             .textSelection(.enabled)
+            .onAppear { refreshMarkdown() }
+            .onChange(of: input) { _, _ in refreshMarkdown() }
+            .onChange(of: prepared?.input) { _, _ in refreshMarkdown() }
+            .onDisappear { generation = UUID() }
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "carryon-artifact", let ref = artifacts.first(where: { url.absoluteString == "carryon-artifact:" + $0["id"].text }) {
                     selectedArtifact = ref; previewID = UUID(); return .handled
@@ -53,6 +70,67 @@ struct MessageMarkdown: View {
                     ArtifactView(ref: selectedArtifact, threadID: threadID, openOnLoad: true).id(previewID)
                 }
             }
+    }
+    private func refreshMarkdown() {
+        let request = input, version = generation
+        guard displayed?.input != request else { return }
+        refresh.request {
+            guard generation == version else { return }
+            let result = await MessageMarkdownParser.shared.render(request)
+            if generation == version { parsed = result }
+        }
+    }
+}
+
+struct MessageMarkdownInput: Hashable, Sendable {
+    let text: String
+    let resolveThreads: Bool
+    let titles: [String: String]
+}
+
+// MarkdownUI's parsed tree contains immutable value types but does not declare Sendable.
+struct ParsedMessageMarkdown: @unchecked Sendable {
+    let input: MessageMarkdownInput
+    let content: MarkdownContent
+    let threadIDs: [String]
+}
+
+private struct PreparedMarkdownKey: EnvironmentKey {
+    static let defaultValue: ParsedMessageMarkdown? = nil
+}
+extension EnvironmentValues {
+    var preparedMessageMarkdown: ParsedMessageMarkdown? {
+        get { self[PreparedMarkdownKey.self] }
+        set { self[PreparedMarkdownKey.self] = newValue }
+    }
+}
+
+actor MessageMarkdownParser {
+    static let shared = MessageMarkdownParser()
+    private var cache: [MessageMarkdownInput: ParsedMessageMarkdown] = [:]
+    private var order: [MessageMarkdownInput] = []
+    private var bytes = 0
+    func prepare(_ item: JSONValue) -> ParsedMessageMarkdown? {
+        let kind = item["type"].text
+        guard ["userMessage", "steeringUserMessage", "agentMessage"].contains(kind) else { return nil }
+        let user = kind != "agentMessage"
+        let text = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
+        return render(.init(text: text, resolveThreads: !user, titles: [:]))
+    }
+    func render(_ input: MessageMarkdownInput) -> ParsedMessageMarkdown {
+        if let cached = cache[input] { return cached }
+        let rendered = input.resolveThreads ? CreatedThreadReference.render(input.text, titles: input.titles) : input.text
+        let result = ParsedMessageMarkdown(input: input, content: MarkdownContent(rendered),
+            threadIDs: input.resolveThreads ? CreatedThreadReference.threadIDs(in: input.text) : [])
+        let size = input.text.utf8.count
+        if size <= 2 * 1024 * 1024 {
+            cache[input] = result; order.append(input); bytes += size
+            while order.count > 32 || bytes > 2 * 1024 * 1024 {
+                let removed = order.removeFirst()
+                cache.removeValue(forKey: removed); bytes -= removed.text.utf8.count
+            }
+        }
+        return result
     }
 }
 

@@ -17,7 +17,7 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
   else if(u.pathname.endsWith('/link/pending'))data={requests:[]};
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);
-   if(path==='/api/status')data={enabled:true,controllerId:'t2',remoteControl:true};
+   if(path==='/api/status')data={enabled:true,remoteControl:true};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
    else if(path==='/api/activity')data={threads:[threads[1]],total:1,nextOffset:1};
@@ -30,11 +30,11 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  });
  await page.routeWebSocket('**/console/devices/*/ws', socket=>{
   let revision=0;
-  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true}}}));});
  });
  await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html'));
  await page.locator(width<761?'#mobile-session-list .project-row':'#threads button').first().waitFor();
- await page.evaluate(async()=>receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected},()=>true));
+ await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected},()=>true));
 
  const prefix='.runtime/web-style/'+width+'-'+colorScheme;
  await page.screenshot({path:prefix+'-projects.png'});
@@ -51,7 +51,7 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  }
  await page.evaluate(async()=>{
   const history={thread:{id:selected},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'统一网页端的风格，保留现有功能。'},{id:'a1',type:'agentMessage',text:'已统一页面的视觉层级。\n\n- 移动网页保持与手机端一致\n- 桌面网页适配宽屏和鼠标操作\n\n```swift\nlet theme = Color.primary\nprint("CarryOn")\n```'}]};
-  await receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history,readSequence:2},()=>true);
+  await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history,readSequence:2},()=>true);
  });
  await page.screenshot({path:prefix+'-chat.png'});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chat stays within viewport');

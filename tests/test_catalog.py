@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from contextlib import closing
 from unittest.mock import patch
-from carryon.catalog import Catalog
+from carryon.sessions.catalog import Catalog
 
 
 class CatalogTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class CatalogTests(unittest.TestCase):
             (Path(home)/'.codex-global-state.json').write_text(json.dumps(state))
             db.execute('CREATE TABLE threads(id,project_id)')
             rows=[{'id':'unassigned','cwd':'/worktree/branch'}]
-            with patch('carryon.catalog.subprocess.run') as run:
+            with patch('carryon.sessions.catalog.subprocess.run') as run:
                 run.return_value.returncode=0
                 run.return_value.stdout='/repo/.git\n'
                 Catalog(home).classify_projects(db,rows)

@@ -2,12 +2,12 @@ import json
 import os
 import unittest
 from unittest.mock import Mock
-from carryon.websocket import mask_payload
-from carryon.patches import apply_patches
-from carryon.history_cache import HistoryCache, NativeSnapshot, TurnCache
-from carryon.bridge import snapshot_history
-from carryon.history_wire import HistoryWire
-from carryon.gateway import Device
+from carryon.routes.websocket import mask_payload
+from carryon.desktop_ipc.patches import apply_patches
+from carryon.sessions.history_cache import HistoryCache, NativeSnapshot, TurnCache
+from carryon.sessions.bridge import snapshot_history
+from carryon.sessions.history_wire import HistoryWire
+from carryon.cloud.gateway import Device
 
 
 def state(turns=100):
@@ -103,7 +103,7 @@ class PerformanceProtocolTests(unittest.TestCase):
     def test_persisted_history_switches_to_native_without_syncing_forever(self):
         import threading
         from types import SimpleNamespace
-        from carryon.realtime import Subscription
+        from carryon.routes.realtime import Subscription
         native=Mock();native.current.return_value=None
         bridge=SimpleNamespace(lock=threading.RLock(),status=lambda:{'enabled':True},require=lambda:(native,1),
             journal=SimpleNamespace(list=lambda limit=None:[]),

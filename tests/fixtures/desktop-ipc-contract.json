@@ -1,0 +1,29 @@
+{
+  "appVersion": "26.924.22138",
+  "versions": {
+    "ipc-connection-reset": 1,
+    "thread-archived": 2,
+    "thread-follower-command-approval-decision": 1,
+    "thread-follower-compact-thread": 1,
+    "thread-follower-edit-last-user-turn": 2,
+    "thread-follower-file-approval-decision": 1,
+    "thread-follower-interrupt-turn": 4,
+    "thread-follower-load-complete-history": 1,
+    "thread-follower-permissions-request-approval-response": 1,
+    "thread-follower-set-queued-follow-ups-state": 1,
+    "thread-follower-start-turn": 2,
+    "thread-follower-steer-turn": 1,
+    "thread-follower-submit-mcp-server-elicitation-response": 1,
+    "thread-follower-submit-user-input": 1,
+    "thread-follower-update-daybreak": 1,
+    "thread-follower-update-thread-settings": 2,
+    "thread-owner-discovery": 1,
+    "thread-queued-followups-changed": 2,
+    "thread-read-state-changed": 3,
+    "thread-stream-following-changed": 1,
+    "thread-stream-following-status-requested": 1,
+    "thread-stream-state-changed": 11,
+    "thread-unarchived": 1
+  },
+  "source": "app.asar/.vite/build shared transport version table; captured 2026-09-29"
+}

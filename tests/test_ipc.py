@@ -4,7 +4,7 @@ import struct
 import threading
 import unittest
 from unittest.mock import patch, Mock
-from carryon.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
 
 
 class ProtocolTests(unittest.TestCase):
@@ -43,8 +43,10 @@ class ProtocolTests(unittest.TestCase):
         client,peer=socket.socketpair();ipc=DesktopIPC('unused');ipc.sock=client
         ipc.following[tid]='owner';changed=threading.Event();ipc.on_change=changed.set
         reader=threading.Thread(target=ipc._reader,args=(client,),daemon=True);reader.start()
-        data=json.dumps({'type':'broadcast','method':'thread-read-state-changed','version':2,
-            'sourceClientId':'owner','params':{'hostId':'local','conversationId':tid,'hasUnreadTurn':True}}).encode()
+        ipc.snapshots[tid]=(1,{'id':tid,'hasUnreadTurn':True})
+        ipc.snapshot=lambda target:('owner',ipc.current(target))
+        data=json.dumps({'type':'broadcast','method':'thread-read-state-changed','version':3,
+            'sourceClientId':'owner','params':{'hostId':'local','conversationId':tid,'hasUnreadTurn':True,'context':{}}}).encode()
         try:
             peer.sendall(struct.pack('<I',len(data))+data)
             self.assertTrue(changed.wait(1))
@@ -96,8 +98,8 @@ class SnapshotConcurrencyTests(unittest.TestCase):
 
 
 class WakeSnapshotTests(unittest.TestCase):
-    @patch('carryon.ipc.sys.platform', 'darwin')
-    @patch('carryon.ipc.subprocess.run')
+    @patch('carryon.desktop_ipc.ipc.sys.platform', 'darwin')
+    @patch('carryon.desktop_ipc.ipc.subprocess.run')
     def test_opens_existing_thread_and_reads_native_idle_state(self, run):
         tid='11111111-1111-4111-8111-111111111111'
         ipc=DesktopIPC('unused')
@@ -110,8 +112,8 @@ class WakeSnapshotTests(unittest.TestCase):
         self.assertGreaterEqual(guard.call_count,2)
         ipc._snapshot.assert_called_once_with(tid,'owner')
 
-    @patch('carryon.ipc.sys.platform', 'darwin')
-    @patch('carryon.ipc.subprocess.run')
+    @patch('carryon.desktop_ipc.ipc.sys.platform', 'darwin')
+    @patch('carryon.desktop_ipc.ipc.subprocess.run')
     def test_revoked_authorization_or_invalid_id_never_opens(self, run):
         ipc=DesktopIPC('unused')
         denied=Mock(side_effect=PermissionError('revoked'))
@@ -120,8 +122,8 @@ class WakeSnapshotTests(unittest.TestCase):
         with self.assertRaises(ValueError):ipc.wake_snapshot('bad/id',before_open=Mock())
         run.assert_not_called()
 
-    @patch('carryon.ipc.sys.platform', 'darwin')
-    @patch('carryon.ipc.subprocess.run', side_effect=OSError('unavailable'))
+    @patch('carryon.desktop_ipc.ipc.sys.platform', 'darwin')
+    @patch('carryon.desktop_ipc.ipc.subprocess.run', side_effect=OSError('unavailable'))
     def test_open_failure_remains_failure(self, run):
         ipc=DesktopIPC('unused')
         with self.assertRaises(IPCError):
@@ -140,3 +142,45 @@ class ReceiptErrorTests(unittest.TestCase):
                 ipc.request('thread-follower-start-turn', {})
             self.assertEqual(caught.exception.uncertain, uncertain)
             self.assertEqual(ipc.pending, {})
+
+class OwnerWireTests(unittest.TestCase):
+    def test_owner_uncertain_response_survives_socket_wire(self):
+        left, right = socket.socketpair()
+        follower, owner = DesktopIPC('unused'), DesktopIPC('unused')
+        follower.sock, owner.sock = left, right
+        owner.request_handler = Mock()
+        owner.request_handler.can_handle.return_value = True
+        owner.request_handler.handle.side_effect = IPCError('app-server reply lost', uncertain=True)
+        readers = [threading.Thread(target=ipc._reader, args=(sock,), daemon=True)
+                   for ipc, sock in ((follower, left), (owner, right))]
+        for reader in readers: reader.start()
+        try:
+            with self.assertRaises(IPCError) as caught:
+                follower.request('thread-follower-start-turn', {}, version=2, timeout_ms=500)
+            self.assertTrue(caught.exception.uncertain)
+            owner.request_handler.handle.assert_called_once()
+        finally:
+            follower.close(); owner.close()
+            for reader in readers: reader.join(1)
+
+class IncomingResponseLifetimeTests(unittest.TestCase):
+    def test_request_stays_in_flight_until_response_write_finishes_or_fails(self):
+        for fail in (False, True):
+            with self.subTest(write_fails=fail):
+                ipc = DesktopIPC('unused'); ipc.request_handler = Mock()
+                entered, proceed, done = threading.Event(), threading.Event(), threading.Event()
+                def write(_message):
+                    entered.set(); proceed.wait(2)
+                    if fail: raise IPCError('socket gone')
+                ipc._write = write
+                release = ipc.request_slots.release
+                ipc.request_slots = Mock(wraps=ipc.request_slots)
+                def finish(): release(); done.set()
+                ipc.request_slots.release.side_effect = finish
+                ipc._incoming_request({'requestId': 'one', 'method': 'test'})
+                try:
+                    self.assertTrue(entered.wait(1))
+                    self.assertEqual(ipc.requests_in_flight, 1)
+                finally: proceed.set()
+                self.assertTrue(done.wait(1))
+                self.assertEqual(ipc.requests_in_flight, 0)

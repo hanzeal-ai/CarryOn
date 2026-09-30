@@ -5,9 +5,9 @@ import time
 import unittest
 from pathlib import Path
 
-from carryon.bridge import Bridge, BridgeError
-from carryon.ipc import IPCError
-from carryon.operations import METHODS, REQUEST_METHODS, build, controls, digest, submit
+from carryon.sessions.bridge import Bridge, BridgeError
+from carryon.desktop_ipc.ipc import IPCError
+from carryon.sessions.operations import METHODS, REQUEST_METHODS, build, controls, digest, submit
 from carryon.store import Journal
 
 T = '11111111-1111-4111-8111-111111111111'
@@ -140,7 +140,7 @@ class IPC:
     def request(self, method, params, version, owner, guard):
         guard(lambda: self.calls.append((method, params, version, owner)))
         if self.error: raise self.error
-        return {'result': {'ok': True}}
+        return {'result': {'applied': True} if method == 'thread-follower-update-thread-settings' else {'ok': True}}
 
 
 class DeliveryTests(unittest.TestCase):
@@ -158,6 +158,17 @@ class DeliveryTests(unittest.TestCase):
             if j['state'] not in ('preparing', 'dispatching'): return j
             time.sleep(.01)
         self.fail('operation stuck')
+    def test_settings_v2_requires_explicit_application_receipt(self):
+        for index, (result, expected) in enumerate([({'applied': True}, 'completed'), ({'applied': False}, 'failed'), ({'ok': True}, 'uncertain')]):
+            def request(method, params, version, owner, guard):
+                self.assertEqual((method, version), ('thread-follower-update-thread-settings', 2))
+                guard(lambda: None)
+                return {'result': result}
+            self.bridge.ipc.request = request
+            rid = 'settings-' + str(index)
+            submit(self.bridge, T, {'action': 'settings', 'requestId': rid, 'settings': {'effort': 'high'}})
+            self.assertEqual(self.wait(rid)['state'], expected)
+
     def test_duplicate_never_resends_and_conflict_rejected(self):
         d = {'action': 'compact', 'requestId': 'operation-1'}
         submit(self.bridge, T, d); self.assertEqual(self.wait()['state'], 'completed')

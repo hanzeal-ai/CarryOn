@@ -20,7 +20,7 @@ ConversationView 编译优化接受；当前整批变动按 R2 评估，结论�
 
 ### P1：重设管理员密码没有撤销旧 APNs 授权
 
-位置：`carryon/console_auth.py:40-49`、`carryon/push.py:103-129`。
+位置：`carryon/cloud/console_auth.py:40-49`、`carryon/notifications/push.py:103-129`。
 
 账号指纹改变会使旧持久登录会话失效，但 push.sqlite 中的安装登记没有绑定账号授权代次；重启后继续使用原登记投递。若旧密码泄露期间曾注册通知设备，重设密码后该设备仍可能收到任务标题、threadId 等元数据，直至原安装显式注销、工作区撤销或登记到期。
 

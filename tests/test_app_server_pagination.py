@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
-from carryon.app_server_bridge import AppServerCatalog
+from carryon.app_server.app_server_bridge import AppServerCatalog
 
 
 def row(ident, name='Task', **extra):

@@ -16,7 +16,7 @@ const assert=require('node:assert/strict');
   else if(u.pathname.endsWith('/link/pending'))data={requests:[]};
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);
-   if(path==='/api/status')data={enabled:true,controllerId:'t2',remoteControl:true};
+   if(path==='/api/status')data={enabled:true,remoteControl:true};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
    else if(path==='/api/activity')data={threads:[threads[1]],total:1,nextOffset:1};
@@ -29,7 +29,7 @@ const assert=require('node:assert/strict');
  });
  await page.routeWebSocket('**/console/devices/*/ws', socket=>{
   let revision=0;
-  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true}}}));});
  });
 
  await page.goto('http://127.0.0.1:8923/example.html');
@@ -41,7 +41,7 @@ const assert=require('node:assert/strict');
       {id:'turn1',type:'turn',turnId:'turn1',status:'completed'},
       {id:'result',type:'agentMessage',turnId:'turn1',text:'动态对应的结果'},
       {id:'later',type:'commandExecution',turnId:'turn1',title:'后续记录',data:{command:'pwd'}}]};
-   await receiveUpdate({status:{enabled:true,controllerId:'t2',remoteControl:true},subscription,threadId:selected,history:navigationFixture},()=>true);
+   await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:navigationFixture},()=>true);
  });
  await page.waitForFunction(()=>document.querySelector('.conversation-navigator button.active')?.dataset.anchor==='result');
  async function assertRailCentered(){const delta=await page.locator('.conversation-navigator').evaluate(n=>{const r=n.getBoundingClientRect(),v=(document.querySelector('#messages').closest('.mobile-chat-scroll')||document.querySelector('#messages')).getBoundingClientRect();return Math.abs(r.y+r.height/2-v.y-v.height/2);});assert(delta<2,'navigation rail must be centered: '+delta);}

@@ -2,10 +2,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from carryon.bridge import Bridge, BridgeError
+from carryon.sessions.bridge import Bridge, BridgeError
 from carryon.store import Journal
-from carryon.api import dispatch
-from carryon.ipc import IPCError
+from carryon.routes.api import dispatch
+from carryon.desktop_ipc.ipc import IPCError
 
 PARENT='11111111-1111-4111-8111-111111111111'
 CHILD='22222222-2222-4222-8222-222222222222'
@@ -97,7 +97,7 @@ class SideChatTests(unittest.TestCase):
         self.assertEqual(self.bridge.refresh_job(job['id'])['state'],'accepted')
 
     def test_cloud_side_job_is_scoped_and_can_be_polled(self):
-        from carryon.remote_scope import scoped_dispatch, request_key
+        from carryon.routes.remote_scope import scoped_dispatch, request_key
         self.discover();self.bridge.ipc.state.update(threadRuntimeStatus={'type':'idle'}, requests=[])
         self.bridge.ipc.state['turns'][0]['status']='completed'
         route=f'/api/side-chats/{CHILD}/compose'

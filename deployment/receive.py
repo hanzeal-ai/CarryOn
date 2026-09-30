@@ -29,7 +29,7 @@ def validate_wheel(data):
             or (entry.external_attr>>16)&0o170000==0o120000 or entry.filename in names):
             raise ValueError('Unsafe wheel member')
         names.add(entry.filename)
-    if 'carryon/gateway.py' not in names:raise ValueError('Gateway missing')
+    if 'carryon/cloud/gateway.py' not in names:raise ValueError('Gateway missing')
     return archive
 
 def switch(target):
@@ -68,7 +68,7 @@ def main():
             (temporary/'release.env').write_text('CARRYON_RELEASE='+release+'\n')
             for path in temporary.rglob('*'):path.chmod(0o755 if path.is_dir() else 0o644)
             temporary.chmod(0o755)
-            subprocess.run(['/usr/bin/python3.11','-B','-c','import carryon.gateway'],cwd=temporary,check=True,timeout=15)
+            subprocess.run(['/usr/bin/python3.11','-B','-c','import carryon.cloud.gateway'],cwd=temporary,check=True,timeout=15)
             temporary.rename(destination)
         finally:
             if temporary.exists():shutil.rmtree(temporary)

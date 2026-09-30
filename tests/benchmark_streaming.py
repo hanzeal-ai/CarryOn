@@ -2,11 +2,11 @@
 import json
 import statistics
 import time
-from carryon.bridge import snapshot_history
-from carryon.history_cache import HistoryCache, NativeSnapshot
-from carryon.history_wire import HistoryWire
-from carryon.patches import apply_patches
-from carryon.websocket import mask_payload
+from carryon.sessions.bridge import snapshot_history
+from carryon.sessions.history_cache import HistoryCache, NativeSnapshot
+from carryon.sessions.history_wire import HistoryWire
+from carryon.desktop_ipc.patches import apply_patches
+from carryon.routes.websocket import mask_payload
 
 
 def median(fn, count=9):

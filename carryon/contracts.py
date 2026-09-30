@@ -1,6 +1,7 @@
 """Validate the pinned native schemas; no third-party runtime dependency."""
 import hashlib
 import json
+import re
 from pathlib import Path
 
 SCHEMAS = json.loads(Path(__file__).with_name('native_contracts.json').read_text())
@@ -101,7 +102,13 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def text(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > 16000:
+def text(value, *, allow_empty=False):
+    if not isinstance(value, str) or (not value.strip() and not allow_empty) or len(value) > 16000:
         raise ValueError('请输入 1–16000 字符的内容')
     return value.strip()
+
+
+def validate_request_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', value):
+        raise ValueError('requestId 必须为 8–100 位字母、数字、横线或下划线')
+    return value

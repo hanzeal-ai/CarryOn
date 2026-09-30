@@ -1,9 +1,14 @@
 import json
 import unittest
-from carryon.bridge import snapshot_history
+from carryon.sessions.bridge import snapshot_history
 
 
 class TimelineTests(unittest.TestCase):
+    def test_history_does_not_build_unused_turn_summary(self):
+        history = self.history([{'type': 'agentMessage', 'id': 'a', 'text': 'answer'}])
+        self.assertNotIn('turns', history)
+        self.assertEqual(history['timeline'][1]['text'], 'answer')
+
     def test_delegated_first_prompt_remains_a_user_message(self):
         output='<codex_delegation><input>Original task</input></codex_delegation>'
         result=snapshot_history({'id':'thread','turns':[{'turnId':'t','status':'completed',
@@ -79,7 +84,7 @@ class TimelineTests(unittest.TestCase):
 
 class UserRowIdentityTests(unittest.TestCase):
     def test_placeholder_and_native_message_keep_identity_without_losing_native_id(self):
-        from carryon.timeline import project_turn
+        from carryon.sessions.timeline import project_turn
         turn = {'turnId': 't', 'params': {'input': [{'type': 'text', 'text': 'hi'}]}, 'items': []}
         placeholder = project_turn(turn, 0)[0][1]
         turn['items'] = [{'id': 'native-user', 'type': 'userMessage', 'content': turn['params']['input']}]

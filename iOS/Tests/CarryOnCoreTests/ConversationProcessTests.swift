@@ -94,12 +94,9 @@ private func entry(_ id: String, _ type: String, phase: String? = nil, turn: Str
     #expect(ConversationProcess.summary(rows[2]) == "运行 swift test")
 }
 
-@Test func singleCallHasNoDuplicateStageHeaderAndMultipleCallsHaveReadableSummary() {
+@Test func multipleCallsHaveReadableSummary() {
     let command = entry("cmd", "commandExecution")
     let group: JSONValue = .object(["items": .array([command])])
-    #expect(ConversationProcess.singleActivity(group) == command)
     let multiple = group.setting("items", .array([command, entry("file", "fileChange")]))
-    #expect(ConversationProcess.singleActivity(multiple) == nil)
     #expect(ConversationProcess.summary(multiple) == "运行命令、修改文件")
-    #expect(ConversationProcess.singleActivity(group.setting("items", .array([entry("reason", "reasoning")]))) == nil)
 }

@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -7,10 +6,9 @@ from unittest.mock import patch
 
 from carryon.services import workspace_backend, workspace_codex_home
 from carryon.services import register, records
-from carryon.workspace_seed import seed
-from carryon.app_server import AppServer
-from carryon.ipc import IPCError
-from carryon.operations import controls
+from carryon.app_server.app_server import AppServer
+from carryon.desktop_ipc.ipc import IPCError
+from carryon.sessions.operations import controls
 
 
 class WorkspaceBackendTests(unittest.TestCase):
@@ -37,7 +35,7 @@ class WorkspaceBackendTests(unittest.TestCase):
         self.assertNotEqual(records()[str(a)]['codexHome'], records()[str(b)]['codexHome'])
 
     def test_first_custom_workspace_uses_registered_desktop_identity(self):
-        from carryon.workspaces import initialize
+        from carryon.workspaces.workspaces import initialize
         directory = self.root / 'first-custom'
         entry = initialize(directory)
         self.assertEqual(entry['backend'], 'desktop-ipc')
@@ -54,46 +52,6 @@ class WorkspaceBackendTests(unittest.TestCase):
         b=self.root/'b'; b.mkdir(); (b/'codex-home').symlink_to(target, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, '不能链接'):
             workspace_codex_home(b)
-
-    def test_seed_copies_only_login_and_model_configuration_once(self):
-        source=self.root/'desktop-codex'; source.mkdir()
-        (source/'auth.json').write_text('{"test_token":"synthetic"}')
-        (source/'config.toml').write_text('model="test-model"\napproval_policy="never"\nnotify=["external"]\n[model_providers.test]\nbase_url="http://example.invalid"\n[projects."/private"]\ntrust_level="trusted"\n')
-        (source/'state_5.sqlite').write_text('must not copy')
-        (source/'sessions').mkdir()
-        home=self.root/'a/codex-home'; seed(home)
-        import tomllib
-        copied=tomllib.loads((home/'config.toml').read_text())
-        self.assertEqual(set(copied), {'model','model_providers'})
-        self.assertEqual(json.loads((home/'auth.json').read_text()), {'test_token':'synthetic'})
-        self.assertFalse((home/'sessions').exists()); self.assertFalse((home/'state_5.sqlite').exists())
-        self.assertEqual((home/'auth.json').stat().st_mode&0o777, 0o600)
-        (source/'auth.json').write_text('{"test_token":"changed"}')
-        (home/'config.toml').write_text('model="workspace"')
-        seed(home)
-        self.assertEqual((home/'config.toml').read_text(),'model="workspace"')
-        self.assertEqual(json.loads((home/'auth.json').read_text())['test_token'],'synthetic')
-
-    def test_existing_credentials_are_preserved_and_bad_source_is_not_partially_published(self):
-        source=self.root/'desktop-codex';source.mkdir()
-        (source/'config.toml').write_text('model="inherited"')
-        (source/'auth.json').write_text('{broken')
-        home=self.root/'new'
-        with self.assertRaises(ValueError):seed(home)
-        self.assertFalse((home/'config.toml').exists())
-        (home/'auth.json').write_text('{"owned":true}')
-        seed(home)
-        self.assertEqual(json.loads((home/'auth.json').read_text()),{'owned':True})
-
-    def test_shared_configuration_links_are_rejected_even_after_initialization(self):
-        source=self.root/'desktop-codex';source.mkdir()
-        (source/'auth.json').write_text('{"token":"fixture"}')
-        for hardlink in (False, True):
-            home=self.root/str(hardlink);seed(home)
-            (home/'auth.json').unlink()
-            if hardlink: os.link(source/'auth.json',home/'auth.json')
-            else: (home/'auth.json').symlink_to(source/'auth.json')
-            with self.assertRaisesRegex(ValueError, '不能使用链接'):seed(home)
 
     def test_stream_preserves_old_snapshots_and_pending_requests(self):
         app=AppServer(self.root/'a')

@@ -16,7 +16,7 @@ window.WorkspaceBinding=(()=>{
     content.replaceChildren(node('p','','正在读取工作区…'));actions.replaceChildren(close);
     try{
       const code=parse(raw),details=await client.consoleRequest('binding/inspect',code);if(!current())return;
-      const labels={view:'查看会话',create:'新建会话',send:'发送消息',stop:'停止任务',edit:'编辑会话与设置',files:'查看和下载文件',approve:'处理审批'};
+      const labels={view:'查看会话',create:'新建会话',send:'发送消息',stop:'停止任务',edit:'编辑会话与设置',files:'查看和下载文件',approve:'处理审批',resetQuota:'使用额度重置卡'};
       content.replaceChildren(node('h3','',details.name),node('p','','当前账号：'+(details.account?.username||'')),node('p','',(details.permissions||[]).map(p=>labels[p]||p).join('、')));
       const accept=button('确认绑定',async()=>{
         if(!current())return;

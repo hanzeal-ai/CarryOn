@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import patch
 
 from test_console_auth import AccountTests
-from carryon.console_auth import ConsoleAuth, password_record
-from carryon import cli, invite_cli
-from carryon.account_client import request as account_request
+from carryon.cloud.console_auth import ConsoleAuth, password_record
+from carryon import cli; import carryon.accounts.invite_cli as invite_cli
+from carryon.accounts.account_client import request as account_request
 
 
 class RegistrationInvitesTests(AccountTests):
@@ -63,7 +63,7 @@ class RegistrationInvitesTests(AccountTests):
 
 class InvitePersistenceTests(unittest.TestCase):
     def test_authorization_configuration_replaces_only_issuer(self):
-        from carryon.console import main
+        from carryon.cloud.console import main
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'console.json'
             original = {'publicUrl':'https://test.invalid', 'devices':{}, 'accountSetup':True}
@@ -95,7 +95,7 @@ class InvitePersistenceTests(unittest.TestCase):
             auth = ConsoleAuth(config, directory)
             invite = auth.create_registration_invite()
             body = {'username':'alice', 'password':'a long password 123', **invite}
-            with patch('carryon.console_auth.save_json', side_effect=OSError('disk full')):
+            with patch('carryon.cloud.console_auth.save_json', side_effect=OSError('disk full')):
                 with self.assertRaises(OSError): auth.register(body)
             def register(index):
                 try:
@@ -108,7 +108,7 @@ class InvitePersistenceTests(unittest.TestCase):
             self.assertEqual(len(json.loads((Path(directory) / 'users.json').read_text())), 1)
 
     def test_cli_uses_one_private_credential_and_never_prints_it(self):
-        with tempfile.TemporaryDirectory() as directory, patch('carryon.invite_cli.Path.home', return_value=Path(directory)):
+        with tempfile.TemporaryDirectory() as directory, patch('carryon.accounts.invite_cli.Path.home', return_value=Path(directory)):
             with patch('sys.stdout', new_callable=io.StringIO) as output:
                 self.assertEqual(cli.main(['invate', '--setup']), 0)
                 fingerprint = json.loads(output.getvalue())['issuerHash']
@@ -117,7 +117,7 @@ class InvitePersistenceTests(unittest.TestCase):
             self.assertEqual(invite_cli.issuer_token(), token)
             path = Path(directory) / 'Library/Application Support/CarryOn/invite-issuer/credential.json'
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            with patch('carryon.invite_cli.request', return_value={'inviteCode':'a'*32}) as request, patch('sys.stdout', new_callable=io.StringIO) as output:
+            with patch('carryon.accounts.invite_cli.request', return_value={'inviteCode':'a'*32}) as request, patch('sys.stdout', new_callable=io.StringIO) as output:
                 self.assertEqual(cli.main(['invate', '--url', 'https://test.invalid']), 0)
                 self.assertNotIn(token, output.getvalue())
                 request.assert_called_once_with('https://test.invalid', 'invite', {'issuerToken':token})

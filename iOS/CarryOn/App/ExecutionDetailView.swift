@@ -87,7 +87,7 @@ struct ExecutionActivityRow: View {
                 if state.tone == .failure { Text("失败").foregroundStyle(.red) }
                 Spacer(minLength: 0)
             }.font(.system(size: 13)).foregroundStyle(Design.secondary)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).contentShape(Rectangle())
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
         }.buttonStyle(.plain)
             .sheet(isPresented: $details) { LiveExecutionDetail(item: item, threadID: threadID) }
     }

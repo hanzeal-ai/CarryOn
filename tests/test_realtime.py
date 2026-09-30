@@ -10,10 +10,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from carryon.ipc import DesktopIPC
-from carryon.patches import apply_patches
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.desktop_ipc.patches import apply_patches
 from carryon.server import Server, Handler
-from carryon.websocket import WebSocket
+from carryon.routes.websocket import WebSocket
 
 THREAD = '01a08062-8ff1-75c1-a426-299b4c0a31f7'
 
@@ -60,13 +60,13 @@ class FakeIPC:
     def unwatch(self, tid): pass
     def current(self, tid): return self.states.get(tid)
     def snapshot(self, tid):
-        from carryon.ipc import IPCError
+        from carryon.desktop_ipc.ipc import IPCError
         raise IPCError('no-client-found')
     sidebar_snapshot = snapshot
 
 
 class FakeBridge:
-    from carryon.bridge import Bridge
+    from carryon.sessions.bridge import Bridge
     open_stream = Bridge.open_stream
     def __init__(self):
         self.events = threading.Condition()
@@ -81,7 +81,7 @@ class FakeBridge:
         with self.events:
             self.event_revision += 1
             self.events.notify_all()
-    def status(self): return {'enabled':self.enabled,'controllerId':None}
+    def status(self): return {'enabled':self.enabled}
     def require(self): return self.ipc, 1
     def check_generation(self, ipc, generation):
         if not self.enabled: raise ValueError('disabled')
@@ -196,7 +196,7 @@ class WSTests(unittest.TestCase):
     def test_cross_origin_rejected_before_upgrade(self):
         c,h=self.connect('https://evil.example');self.assertIn(b'403',h)
     def test_coordination_events_push_flags_and_queue(self):
-        from carryon.events import Events
+        from carryon.desktop_ipc.events import Events
         bridge=self.server.bridge;ipc=bridge.ipc
         ipc.lock=threading.RLock();ipc.following={THREAD:'owner'};ipc.on_change=bridge.notify
         ipc.events=Events(ipc)
@@ -209,13 +209,18 @@ class WSTests(unittest.TestCase):
         def event(method,version,**params):
             ipc.events.handle({'method':method,'version':version,'sourceClientId':'owner',
                 'params':{'hostId':'local','conversationId':THREAD,**params}})
-        event('thread-read-state-changed',2,hasUnreadTurn=True)
+        ipc.states[THREAD]['hasUnreadTurn']=True
+        ipc.snapshot=lambda tid:('owner',ipc.current(tid))
+        event('thread-read-state-changed',3,hasUnreadTurn=True,context={})
         self.until(c,lambda d:d.get('threadFlags',{}).get(THREAD,{}).get('hasUnreadTurn') is True)
+        ipc.states[THREAD] = {**ipc.states[THREAD], 'hasUnreadTurn': False}
+        bridge.notify()
+        self.until(c,lambda d:d.get('threadFlags',{}).get(THREAD,{}).get('hasUnreadTurn') is False)
         event('thread-archived',2)
         self.until(c,lambda d:d.get('catalogRevision')==1 and d['threadFlags'][THREAD]['archived'])
         event('thread-unarchived',1)
         self.until(c,lambda d:d.get('catalogRevision')==2 and not d['threadFlags'][THREAD]['archived'])
-        event('thread-queued-followups-changed',1,messages=[{'id':'q1','text':'queued','context':{}}])
+        event('thread-queued-followups-changed',2,messages=[{'id':'q1','text':'queued','context':{}}])
         self.until(c,lambda d:d.get('history',{}).get('queue')==[{'id':'q1','text':'queued','context':{}}])
     def test_unmasked_frame_rejected(self):
         c,h=self.connect();c.sendall(b'\x81\x02{}');self.assertEqual(c.recv(1),b'')
@@ -234,7 +239,7 @@ class WSTests(unittest.TestCase):
 
     def test_heartbeat_continues_while_history_is_loading(self):
         from unittest.mock import patch
-        from carryon import websocket
+        import carryon.routes.websocket as websocket
         entered=threading.Event();release=threading.Event()
         original=self.server.bridge.history
         def history(tid):

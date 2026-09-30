@@ -9,7 +9,7 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
-from .paths import private_dir, save_json, state_dir, default_codex_home, command
+from carryon.paths import private_dir, save_json, state_dir, default_codex_home, command
 
 
 def catalog_directory():
@@ -154,7 +154,7 @@ def open_console(directory, info):
 
 
 def start(args):
-    from .workspaces import initialize
+    from carryon.workspaces.workspaces import initialize
     directory = private_dir(args.state_dir)
     initialize(directory)
     args.codex_home = workspace_codex_home(directory, args.codex_home)

@@ -8,8 +8,8 @@ import time
 import unittest
 from urllib.parse import urlsplit
 
-from carryon.console import ConsoleServer
-from carryon.console_auth import ConsoleAuth, SESSION_SECONDS, password_record
+from carryon.cloud.console import ConsoleServer
+from carryon.cloud.console_auth import ConsoleAuth, SESSION_SECONDS, password_record
 
 
 class AccountTests(unittest.TestCase):
@@ -134,7 +134,7 @@ class AccountTests(unittest.TestCase):
 
     def test_configure_sets_owner_without_changing_devices(self):
         from unittest.mock import patch
-        from carryon.console import main
+        from carryon.cloud.console import main
         config=Path(self.temp.name)/'gateway.json'
         devices={'mac':{'deviceToken':'d'*40,'apiToken':'a'*40}}
         config.write_text(json.dumps({'accountSetup':True,'devices':devices}))

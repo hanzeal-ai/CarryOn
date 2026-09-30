@@ -16,7 +16,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   await page.addInitScript(()=>sessionStorage.setItem('carryon-token','fixture-token'));
   await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;let data={};
    if(path.endsWith('/subagents')){if(delay)await new Promise(r=>setTimeout(r,delay));if(fail){await route.fulfill({status:500,contentType:'application/json',body:'{"error":"fixture unavailable"}'});return;}data={threads:children};}
-   else if(path==='/api/status')data={enabled:true,controllerId:P};
+   else if(path==='/api/status')data={enabled:true};
    else if(path==='/api/threads')data={threads:[{id:P,title:'Main conversation'}]};
    else if(path==='/api/projects')data={projects:[],total:0,nextOffset:0};
    else if(path==='/api/activity')data={threads:[],total:0};
@@ -24,7 +24,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
    else if(path==='/api/notifications')data={events:[],nextSequence:0};
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
   });
-  await page.routeWebSocket('**/api/stream',socket=>socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,controllerId:P},...(m.threadId?{history:history(m.threadId)}:{})}));}));
+  await page.routeWebSocket('**/api/stream',socket=>socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true},...(m.threadId?{history:history(m.threadId)}:{})}));}));
   await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8897/example.html'));
   await page.waitForFunction(()=>typeof selectThread==='function'&&enabled);
   const parent=async()=>{await page.evaluate(id=>selectThread(id),P);await page.locator('#messages .subagent-links button').waitFor({state:'attached'});await page.locator('#messages details.activity-group > summary').click();};
@@ -70,7 +70,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   else if(path.endsWith('/link/pending'))data={requests:[]};
   else if(path.endsWith('/request')){const api=request.postDataJSON().path.split('?')[0];
    if(api.endsWith('/subagents')){await new Promise(r=>setTimeout(r,200));data={threads:rows};}
-   else if(api==='/api/status')data={enabled:true,controllerId:P,remoteControl:true};
+   else if(api==='/api/status')data={enabled:true,remoteControl:true};
    else if(api==='/api/projects')data={projects:[],total:0};
    else if(api==='/api/threads')data={threads:[{id:P,title:'Main'}]};
    else if(api==='/api/jobs')data={jobs:[]};
@@ -78,7 +78,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   }
   await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
  });
- await cloud.routeWebSocket('**/console/devices/*/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,controllerId:P,remoteControl:true},...(m.threadId?{history:history(m.threadId)}:{})}}));});});
+ await cloud.routeWebSocket('**/console/devices/*/ws',socket=>{let revision=0;socket.onMessage(raw=>{const m=JSON.parse(raw);if(m.type==='subscribe')socket.send(JSON.stringify({type:'update',resubscribe:true,revision:++revision,subscription:m.subscription,body:{type:'update',threadId:m.threadId,subscription:m.subscription,status:{enabled:true,remoteControl:true},...(m.threadId?{history:history(m.threadId)}:{})}}));});});
  await cloud.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8897/example.html');await cloud.waitForFunction(()=>enabled);
  await cloud.evaluate(id=>selectThread(id),P);await cloud.locator('#messages .subagent-links button').waitFor({state:'attached'});
  await cloud.evaluate(()=>{subagentNavigation.show();$('console-device').value='two';$('console-device').dispatchEvent(new Event('change'));});

@@ -1,13 +1,11 @@
-import json
-import hashlib
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 
-from carryon.bridge import Bridge, BridgeError, snapshot_history
-from carryon.ipc import IPCError
+from carryon.sessions.bridge import Bridge, BridgeError, snapshot_history
+from carryon.desktop_ipc.ipc import IPCError
 from carryon.store import Journal
 
 THREAD = "11111111-1111-4111-8111-111111111111"
@@ -104,17 +102,10 @@ class BridgeTests(unittest.TestCase):
             proceed.set(); worker.join(3)
         self.assertEqual(self.await_job("request-123")["state"], "failed")
         self.assertEqual(FakeIPC.sends, 0)
-    def test_controller_required(self):
+    def test_creation_requires_project_api(self):
         self.bridge.enable()
-        with self.assertRaises(BridgeError):
+        with self.assertRaises(ValueError):
             self.bridge.submit("create", "request-123", "hello")
-    def test_unconfirmed_creation_is_not_success(self):
-        self.bridge.enable()
-        self.journal.insert({"id": "request-123", "fingerprint": "f", "kind": "create",
-            "threadId": THREAD, "created": time.time(), "state": "accepted", "turnId": "turn-1",
-            "expectedTitle": "test"})
-        self.bridge.turn_evidence = lambda *_: {"status": "completed", "text": "done"}
-        self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
     def test_restart_marks_dispatch_uncertain(self):
         self.journal.insert({"id": "request-123", "fingerprint": "f", "kind": "message",
             "threadId": THREAD, "created": time.time(), "state": "dispatching"})
@@ -123,32 +114,6 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(other.get("request-123")["state"], "uncertain")
         finally:
             other.conn.close()
-    def test_creation_requires_native_matching_tool_evidence(self):
-        self.bridge.enable()
-        fingerprint = hashlib.sha256(json.dumps(["create", THREAD, "hello"], ensure_ascii=False).encode()).hexdigest()
-        self.journal.insert({"id":"request-123", "fingerprint":fingerprint, "kind":"create",
-            "threadId":THREAD, "created":time.time(), "state":"accepted", "turnId":"turn-1",
-            "expectedTitle":"title that the app may normalize"})
-        call = {"status":"completed", "arguments":{"target":{"type":"projectless"},
-            "prompt":"hello", "title":"title that the app may normalize"},
-            "result":{"content":[{"type":"text","text":json.dumps({"threadId":CHILD,"hostId":"local"})}]}}
-        turn = {"status":"completed", "text":"", "createCalls":[call]}
-        self.bridge.turn_evidence = lambda *_: turn
-        call["arguments"]["prompt"] = "wrong prompt"
-        self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
-        call["arguments"]["prompt"] = "hello"
-        result = self.bridge.refresh_job("request-123")
-        self.assertEqual(result["state"], "completed")
-        self.assertEqual(result["createdThreadId"], CHILD)
-        self.assertEqual(FakeIPC.sends, 0)  # Reconciliation is read-only.
-    def test_fabricated_final_marker_is_not_creation_evidence(self):
-        self.bridge.enable()
-        self.journal.insert({"id":"request-123", "fingerprint":"f", "kind":"create",
-            "threadId":THREAD, "created":time.time(), "state":"accepted", "turnId":"turn-1",
-            "expectedTitle":"test"})
-        self.bridge.turn_evidence = lambda *_: {"status":"completed",
-            "text":'CARRYON_RESULT '+json.dumps({"requestId":"request-123","threadId":CHILD})}
-        self.assertEqual(self.bridge.refresh_job("request-123")["state"], "uncertain")
     def test_canonical_history_uses_native_order_and_final(self):
         turn = {"turnId": "t", "status": "completed", "params": {"input": [{"type":"text","text":"hello"}]},
                 "items": [{"type":"agentMessage","id":"m","text":"你好","phase":"final_answer"}]}
@@ -156,22 +121,23 @@ class BridgeTests(unittest.TestCase):
             "isComplete": True, "entitiesByKey":{"k":turn}, "islands":[{"entries":[{"value":"k"}]}]}}}
         result = snapshot_history(state)
         self.assertEqual([m["text"] for m in result["timeline"] if m["type"] in ("userMessage", "agentMessage")], ["hello", "你好"])
-        self.assertEqual(result["turns"]["t"]["text"], "你好")
+        final = next(item for item in result['timeline'] if item['type'] == 'agentMessage')
+        self.assertEqual((final['turnId'], final['phase'], final['text']), ('t', 'final_answer', '你好'))
 
     def test_acknowledgement_survives_inflight_reconciliation(self):
         self.bridge.enable()
         self.journal.insert({"id":"request-race", "fingerprint":"f", "kind":"create",
-            "threadId":THREAD, "created":time.time(), "state":"uncertain", "turnId":"t"})
+            "threadId":THREAD, "created":time.time(), "state":"uncertain", "turnId":"t", "clientMessageId":"message-id"})
         entered, resume = threading.Event(), threading.Event()
         results, errors = [], []
-        def evidence(*_):
+        def evidence(job):
             entered.set()
             if not resume.wait(3): raise RuntimeError('test timed out')
-            return {'status': 'completed', 'createCalls': []}
+            return self.journal.update(job['id'], expected=job, state='completed')
         def refresh():
             try: results.append(self.bridge.refresh_job('request-race'))
             except Exception as exc: errors.append(exc)
-        self.bridge.turn_evidence = evidence
+        self.bridge._recover_receipt = evidence
         worker = threading.Thread(target=refresh)
         worker.start()
         try:
@@ -197,7 +163,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.journal.update('request-cas', state='completed'), result)
         self.assertEqual(self.bridge.event_revision, before)
 
-    def test_approval_flags_block_controller_and_delivery(self):
+    def test_approval_flags_block_delivery(self):
         class Waiting(FakeIPC):
             def snapshot(self, tid):
                 owner, state = super().snapshot(tid)
@@ -205,7 +171,6 @@ class BridgeTests(unittest.TestCase):
                 return owner, state
         self.bridge.ipc_factory = Waiting
         self.bridge.enable()
-        with self.assertRaises(BridgeError): self.bridge.select_controller(THREAD)
         self.bridge.submit('message', 'request-wait', 'hello', THREAD)
         self.assertEqual(self.await_job('request-wait')['state'], 'failed')
         self.assertEqual(FakeIPC.sends, 0)

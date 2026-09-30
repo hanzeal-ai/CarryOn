@@ -2,7 +2,7 @@ import Foundation
 
 /// Client projection of carryon/workspace_access.py; the console remains authoritative.
 public enum WorkspaceCapability: String, CaseIterable, Sendable {
-    case view, create, send, stop, edit, files, approve
+    case view, create, send, stop, edit, files, approve, resetQuota
 
     public func isGranted(in permissions: JSONValue) -> Bool {
         let values = permissions.array.compactMap(\.string)
@@ -23,6 +23,8 @@ public enum WorkspaceCapability: String, CaseIterable, Sendable {
         let path = String(path.prefix { $0 != "?" && $0 != "#" })
         guard let body else { return path.contains("/images/") || path.contains("/artifacts/") ? .files : .view }
         if path.hasSuffix("/streams") || path.contains("/streams/") || path.contains("/notifications/") { return .view }
+        if path == "/api/usage/reset" { return .resetQuota }
+        if path.hasSuffix("/session") { return .send }
         if path.hasSuffix("/threads") { return .create }
         if path.hasSuffix("/messages") || path.hasSuffix("/compose") || path.hasSuffix("/acknowledge") { return .send }
         if path.hasSuffix("/operations") { return operation(body["action"].text) }

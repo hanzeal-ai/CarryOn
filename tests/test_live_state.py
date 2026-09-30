@@ -1,6 +1,4 @@
 """Concurrency contracts using real Bridge/Journal and isolated native evidence."""
-import hashlib
-import json
 import tempfile
 import threading
 import time
@@ -9,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from carryon.bridge import Bridge, BridgeError
+from carryon.sessions.bridge import Bridge, BridgeError
 from carryon.store import Journal
 
 T = '11111111-1111-4111-8111-111111111111'
@@ -58,34 +56,30 @@ class LiveStateTests(unittest.TestCase):
         self.assertTrue(second.owner.closed.is_set())
 
     def test_slow_job_reconciliation_does_not_block_two_streams_or_repeat_reads(self):
-        fingerprint = hashlib.sha256(json.dumps(['create', T, 'prompt'], ensure_ascii=False).encode()).hexdigest()
-        self.bridge.catalog = SimpleNamespace(get=lambda tid: {'id': tid, 'created_at': time.time()})
-        self.journal.insert({'id':'request-slow', 'fingerprint':fingerprint, 'kind':'create', 'expectedTitle':'title',
-            'threadId':T, 'created':time.time(), 'state':'accepted', 'turnId':'turn'})
+        self.journal.insert({'id':'request-slow', 'fingerprint':'fixture', 'kind':'create',
+            'threadId':T, 'created':time.time(), 'state':'uncertain', 'clientMessageId':'native-message'})
         entered = threading.Event()
-        def evidence(*_):
+        def evidence(job):
             entered.set()
             if not self.release.wait(3): raise RuntimeError('test timeout')
-            return {'status': 'completed', 'createCalls': [{'status': 'completed',
-                'arguments': {'target': {'type': 'projectless'}, 'prompt': 'prompt', 'title': 'title'},
-                'result': {'content': [{'type': 'text', 'text': json.dumps({'hostId': 'local', 'threadId': 'child'})}]}}]}
-        self.bridge.turn_evidence = Mock(side_effect=evidence)
+            return self.journal.update(job['id'], expected=job, state='completed')
+        self.bridge._recover_receipt = Mock(side_effect=evidence)
         first, second = self.open(), self.open()
         self.assertTrue(entered.wait(2))
         for index, session in enumerate((first, second)):
             session.subscribe({'type':'subscribe', 'threadIds':[T], 'subscription':str(index)})
             # A slow reconciliation is still pending, but a live projection is ready.
             packet = session.update()[0]
-            self.assertEqual(packet['jobs'][0]['state'], 'accepted')
+            self.assertEqual(packet['jobs'][0]['state'], 'uncertain')
             self.assertEqual(packet['threadStatuses'][T]['state'], 'idle')
-        self.assertEqual(self.bridge.refresh_job('request-slow')['state'], 'accepted')
-        self.bridge.turn_evidence.assert_called_once_with(T, 'turn')
+        self.assertEqual(self.bridge.refresh_job('request-slow')['state'], 'uncertain')
+        self.bridge._recover_receipt.assert_called_once()
         self.release.set()
         deadline = time.monotonic() + 2
         while self.journal.get('request-slow')['state'] != 'completed' and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertEqual(second.update()[0]['jobs'][0]['state'], 'completed')
-        self.bridge.turn_evidence.assert_called_once_with(T, 'turn')
+        self.bridge._recover_receipt.assert_called_once()
 
     def test_stale_subscription_and_revoked_snapshot_are_never_delivered(self):
         session = self.open()

@@ -19,8 +19,8 @@ const assert=require('node:assert/strict');
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);else reads.push(body.path);
    if(body.method==='POST'&&path.endsWith('/compose'))data={id:body.body.requestId,state:'accepted'};
-   else if(body.method==='POST'&&path.endsWith('/operations'))data={id:body.body.requestId,state:failOperation?'failed':'completed',error:failOperation?'fixture failure':undefined};
-   else if(path==='/api/status')data={enabled:true,controllerId:'t2',remoteControl:true};
+   else if(body.method==='POST'&&path.endsWith('/operations'))data={id:body.body.requestId,state:typeof failOperation==='string'?failOperation:failOperation?'failed':'completed',error:failOperation?'fixture failure':undefined};
+   else if(path==='/api/status')data={enabled:true,remoteControl:true};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/workspace/threads'||path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
    else if(path==='/api/activity')data={threads:[threads[1]],total:1,nextOffset:1};
@@ -35,7 +35,7 @@ const assert=require('node:assert/strict');
  });
  await page.routeWebSocket('**/console/devices/*/ws', socket=>{
   let revision=0;
-  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,controllerId:'t2',remoteControl:true}}}));});
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true}}}));});
  });
 
  await page.goto('http://127.0.0.1:8923/example.html');
@@ -70,14 +70,16 @@ const assert=require('node:assert/strict');
  await page.getByRole('button',{name:'提交回答',exact:true}).click();await page.waitForTimeout(40);
  assert.equal(await page.getByLabel('fixture question',{exact:true}).inputValue(),'answer fixture');
  const first=writes.at(-1).body;assert.equal(first.requestFingerprint,'question-fingerprint');assert.deepEqual(first.answers,{answer:['answer fixture']});
+ failOperation='uncertain';await page.getByRole('button',{name:'提交回答',exact:true}).click();await page.waitForTimeout(40);
+ const uncertain=writes.at(-1).body;assert.notEqual(uncertain.requestId,first.requestId);
  failOperation=false;await page.getByRole('button',{name:'提交回答',exact:true}).click();await page.waitForTimeout(40);
- assert.equal(writes.at(-1).body.requestId,first.requestId);
+ assert.equal(writes.at(-1).body.requestId,uncertain.requestId);
  await page.evaluate(async()=>{await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:{...operationHistory,historyRevision:'readonly',source:'local-rollout',access:{canInteract:false,nativeReady:false},controls:{},status:{state:'notLoaded'}}},()=>true);});
  assert(await page.locator('#send').isDisabled());assert.equal(await page.locator('#requests button').count(),0);
  const count=writes.length;await page.evaluate(()=>$('composer').requestSubmit());await page.waitForTimeout(30);assert.equal(writes.length,count);
  await page.screenshot({path:'.runtime/web-operations-'+width+'.png'});
  assert.deepEqual(errors,[]);await page.close();
  }
- console.log('PASS desktop/mobile: stop expected turn, queue fingerprint, approval confirmation/native request, failed question retains answer and retry identity, readonly denies writes. Mock transport only.');
+ console.log('PASS desktop/mobile: stop expected turn, queue fingerprint, approval confirmation/native request, failed question retains answer, known failure retries with new ID, uncertain retry preserves ID, readonly denies writes. Mock transport only.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

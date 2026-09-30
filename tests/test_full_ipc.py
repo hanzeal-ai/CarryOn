@@ -5,12 +5,12 @@ import threading
 import unittest
 from pathlib import Path
 
-from carryon.catalog import Catalog
+from carryon.sessions.catalog import Catalog
 from carryon.contracts import SCHEMAS, settings, validate
-from carryon.events import VERSIONS
-from carryon.ipc import DesktopIPC
-from carryon.operations import build, controls, digest
-from carryon.queue import message, projection, transform
+from carryon.desktop_ipc.events import VERSIONS
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.sessions.operations import build, controls, digest
+from carryon.sessions.queue import message, projection, transform
 from test_operations import state, T
 
 
@@ -115,18 +115,51 @@ class EventTests(unittest.TestCase):
         m=[message('hello',state())]
         self.event('thread-queued-followups-changed',source='wrong',messages=m)
         self.assertEqual(self.ipc.events.queues,{})
-        self.ipc.events.handle({'method':'thread-queued-followups-changed','version':1,'sourceClientId':'owner','params':{'conversationId':T,'messages':m}})
+        self.ipc.events.handle({'method':'thread-queued-followups-changed','version':2,'sourceClientId':'owner','params':{'hostId':'local','conversationId':T,'messages':m}})
         self.assertEqual(self.ipc.events.queues[T],m)
         self.event('thread-queued-followups-changed',messages='invalid')
         self.assertNotIn(T,self.ipc.events.queues)
     def test_read_archive_unarchive_and_versions(self):
-        self.event('thread-read-state-changed',hasUnreadTurn=True)
+        self.ipc.snapshots[T]=(1,{'id':T,'hasUnreadTurn':True})
+        self.ipc.snapshot=lambda tid:('owner',self.ipc.current(tid))
+        done=threading.Event();self.ipc.on_change=done.set
+        self.event('thread-read-state-changed',hasUnreadTurn=True,context={})
+        self.assertTrue(done.wait(1))
         self.assertTrue(self.ipc.events.flags[T]['hasUnreadTurn'])
         self.event('thread-archived',version=1)
         self.assertEqual(self.ipc.events.catalog_revision,0)
         self.event('thread-archived');self.assertTrue(self.ipc.events.flags[T]['archived'])
         self.event('thread-unarchived');self.assertFalse(self.ipc.events.flags[T]['archived'])
         self.assertEqual(self.ipc.events.catalog_revision,2)
+    def test_read_broadcast_is_only_an_invalidation(self):
+        done = threading.Event()
+        self.ipc.on_change = done.set
+        self.ipc.on_read = lambda *args: self.fail('stale broadcast cleared unread state')
+        self.ipc.snapshots[T] = (1, {'id': T, 'hasUnreadTurn': True})
+        self.ipc.snapshot = lambda tid: ('owner', self.ipc.current(tid))
+        self.event('thread-read-state-changed', hasUnreadTurn=False, context={'identity': {'accountId': 'old'}})
+        self.assertTrue(done.wait(1))
+        self.assertTrue(self.ipc.events.flags[T]['hasUnreadTurn'])
+
+    def test_read_refresh_from_retired_connection_is_discarded(self):
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def snapshot(tid):
+            entered.set(); release.wait(1)
+            return 'owner', {'id': tid, 'hasUnreadTurn': False}
+        original = self.ipc.events._refresh_read
+        def refresh(*args):
+            try: original(*args)
+            finally: finished.set()
+        self.ipc.events._refresh_read = refresh
+        self.ipc.snapshot = snapshot
+        self.ipc.on_read = lambda *args: self.fail('retired refresh cleared cursor')
+        self.event('thread-read-state-changed', hasUnreadTurn=False, context={})
+        self.assertTrue(entered.wait(1))
+        self.ipc.events.clear()
+        release.set()
+        self.assertTrue(finished.wait(1))
+        self.assertEqual(self.ipc.events.flags, {})
+
     def test_reset_invalidates_history_queue_and_pending_requests(self):
         self.ipc.snapshots[T]=(1,state());self.ipc.events.queues[T]=[]
         waiter={'event':threading.Event()};self.ipc.pending['request']=waiter

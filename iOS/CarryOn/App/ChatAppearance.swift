@@ -25,23 +25,6 @@ extension EnvironmentValues {
     }
 }
 
-struct ConversationDisclosureGroup<Content: View, Label: View>: View {
-    @Environment(\.conversationDisclosureState) private var state
-    @State private var localExpanded = false
-    let key: String
-    @ViewBuilder var content: Content
-    @ViewBuilder var label: Label
-    var body: some View {
-        DisclosureGroup(isExpanded: Binding(get: {
-            state?.expanded.contains(key) ?? localExpanded
-        }, set: { value in
-            if let state {
-                if value { state.expanded.insert(key) } else { state.expanded.remove(key) }
-            } else { localExpanded = value }
-        })) { content } label: { label }
-    }
-}
-
 extension ChatView {
     func carryOnChatAppearance() -> some View {
         localization(.init(inputPlaceholder: "继续对话…", signatureText: "添加说明", cancelButtonText: "取消",
@@ -60,8 +43,10 @@ struct OutgoingMessageStatusView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
-            let labels = ["sending": "发送中…", "preparing": "发送中…", "dispatching": "发送中…", "failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
-            Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
+            if !["sending", "preparing", "dispatching"].contains(item["state"].text) {
+                let labels = ["failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
+                Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
+            }
             if ["uncertain", "failed"].contains(item["state"].text) {
                 HStack {
                     Button(checking ? "核对中…" : "核对结果") {
@@ -85,14 +70,15 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var stopAllowed = true
     var hasImages = false
     var stopping = false
+    var submitting = false
     var resuming = false
     let send: () -> Void
     var stop: (() -> Void)?
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
-    private var action: ComposerAction { .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
-    private var actionDisabled: Bool { disabled || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
-    private var buttonLabel: String { action == .pause ? "停止执行" : action == .restart ? "继续执行" : stopping ? "立即补充" : "发送" }
+    private var action: ComposerAction { submitting ? .pause : .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
+    private var actionDisabled: Bool { disabled || submitting || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
+    private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : stopping ? "立即补充" : "发送" }
     var body: some View {
         ComposerLayout(lineHeight: lineHeight) {
             HStack(spacing: 0) { accessories }
@@ -109,12 +95,18 @@ struct CarryOnChatComposer<Accessories: View>: View {
                     }.disabled(disabled || !stopAllowed).accessibilityLabel("停止执行")
                 }
                 Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
-                    Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(Design.onAccent)
-                        .frame(width: 36, height: 36).background(theme.colors.sendButtonBackground, in: Circle())
+                    ZStack {
+                        if submitting {
+                            ComposerLoadingRing()
+                                .accessibilityHidden(true)
+                        }
+                        Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
+                            .font(.system(size: submitting ? 9 : 17, weight: .semibold))
+                            .foregroundStyle(Design.onAccent)
+                    }.frame(width: 36, height: 36).background(theme.colors.sendButtonBackground, in: Circle())
                         .frame(width: 44, height: 44)
                 }.disabled(actionDisabled)
-                    .opacity(actionDisabled ? 0.35 : 1)
+                    .opacity(actionDisabled && !submitting ? 0.35 : 1)
                     .accessibilityLabel(buttonLabel)
             }
         }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: text)
@@ -122,6 +114,22 @@ struct CarryOnChatComposer<Accessories: View>: View {
             .padding(.horizontal, 6).padding(.vertical, 4)
             .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 24))
             .padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
+    }
+}
+
+private struct ComposerLoadingRing: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rotating = false
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Design.onAccent.opacity(0.18), lineWidth: 1.75)
+            Circle().trim(from: 0, to: 0.72)
+                .stroke(Design.onAccent, style: StrokeStyle(lineWidth: 1.75, lineCap: .round))
+                .rotationEffect(.degrees(reduceMotion ? -90 : rotating ? 270 : -90))
+                .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: rotating)
+        }.frame(width: 24, height: 24)
+            .onAppear { rotating = true }
     }
 }
 

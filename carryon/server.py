@@ -8,17 +8,16 @@ import signal
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit
 
-from .bridge import Bridge
-from .errors import BridgeError
-from .catalog import Catalog
-from .ipc import IPCError
-from .store import Journal
-from .websocket import upgrade, serve
+from carryon.errors import BridgeError
+from carryon.sessions.catalog import Catalog
+from carryon.desktop_ipc.ipc import IPCError
+from carryon.store import Journal
+from carryon.routes.websocket import upgrade, serve
 
-from .paths import default_codex_home, assets, state_dir, save_json
-from . import __version__
+from carryon.paths import default_codex_home, assets, state_dir, save_json
+from carryon import __version__
 
 ROOT = assets()
 
@@ -65,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("不支持 Transfer-Encoding")
         length = int(self.headers.get("Content-Length", "0"))
-        from .images import MAX_REQUEST_BYTES
+        from carryon.sessions.images import MAX_REQUEST_BYTES
         limit=MAX_REQUEST_BYTES if urlsplit(self.path).path.endswith(("/messages", "/compose", "/operations")) else 100000
         if not 0 < length <= limit:
             raise ValueError("请求体为空或过大")
@@ -98,7 +97,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.stream_slots.release()
                 return
             self.auth()
-            if method=='POST' and (path.startswith('/api/cloud') or path.startswith('/api/service') or path in ('/api/codex-account','/api/bridge','/api/controller','/api/notifications/preferences')):
+            if method=='POST' and (path.startswith('/api/cloud') or path.startswith('/api/service') or path in ('/api/codex-account','/api/bridge','/api/notifications/preferences')):
                 if self.headers.get('Origin') is not None or any(key.lower().startswith('sec-fetch-') for key in self.headers):
                     raise BridgeError('本机配置仅支持 CLI 或桌面端',403)
             bridge = self.server.bridge
@@ -128,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/cloud' and method == 'POST':
                 self.reply(200, self.server.cloud.configure(data))
                 return
-            from .api import dispatch
+            from carryon.routes.api import dispatch
             status, result = dispatch(bridge, method, self.path, data)
             self.reply(status, result)
         except BridgeError as exc:
@@ -153,14 +152,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(port, codex_home, directory):
-    from .cloud_manager import CloudManager
+    from carryon.cloud.cloud_manager import CloudManager
     import fcntl
     import uuid
-    from .paths import private_dir
-    from .services import workspace_codex_home, workspace_backend
+    from carryon.paths import private_dir
+    from carryon.services import workspace_codex_home, workspace_backend
     os.umask(0o077)
     private_dir(directory)
-    from .workspaces import initialize
+    from carryon.workspaces.workspaces import initialize
     initialize(directory)
     codex_home = workspace_codex_home(directory, codex_home)
     lock = (directory / 'server.lock').open('a+')
@@ -169,7 +168,7 @@ def run(port, codex_home, directory):
     except BlockingIOError:
         lock.close()
         raise ValueError('这个状态目录已有 CarryOn 实例运行')
-    from .services import records
+    from carryon.services import records
     if records().get(str(directory), {}).get('removed'):
         lock.close(); raise ValueError('工作区已删除，未启动服务')
     token_file = directory / 'token'
@@ -183,20 +182,22 @@ def run(port, codex_home, directory):
     journal = Journal(directory / 'jobs.sqlite')
     ipc_lock = None
     if workspace_backend(directory) == 'app-server':
-        from .services import records
+        from carryon.services import records
         if Path(records()[str(directory)]['codexHome']).resolve() != codex_home.resolve():
             raise ValueError('独立工作区必须使用创建时分配的 Codex 目录')
-        from .app_server_bridge import AppServerBridge
+        from carryon.app_server.app_server_bridge import AppServerBridge
         bridge = AppServerBridge(codex_home, journal)
     else:
-        from .services import catalog_directory
+        from carryon.services import catalog_directory
         ipc_lock = (private_dir(catalog_directory())/'ipc-workspace.lock').open('a+')
         try: fcntl.flock(ipc_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             ipc_lock.close(); raise ValueError('本机已有运行中的 Codex App 工作区') from None
-        bridge = Bridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal)
+        from carryon.owner.integration import OwnerBridge
+        bridge = OwnerBridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal,
+                             owner_directory=directory / 'owner')
     bridge.workspace_directory = directory
-    from .lifecycle import BridgeLifecycle
+    from carryon.lifecycle import BridgeLifecycle
     bridge.lifecycle = BridgeLifecycle(bridge)
     server = Server(('127.0.0.1', port), Handler)
     bridge.listener_info = {"listenHost": server.server_address[0], "port": server.server_port}
@@ -204,10 +205,10 @@ def run(port, codex_home, directory):
     server.allowed_hosts = {f'127.0.0.1:{server.server_port}', f'localhost:{server.server_port}'}
     server.service_info = {'instanceId':str(uuid.uuid4()), 'pid':os.getpid(), 'port':server.server_port,
                            'version':__version__, 'codexHome':str(codex_home), 'backend':workspace_backend(directory)}
-    from .standby import RemoteStandby
+    from carryon.workspaces.standby import RemoteStandby
     server.standby = RemoteStandby(directory)
     bridge.standby=server.standby
-    from .workspace import Workspace
+    from carryon.workspaces.workspace import Workspace
     bridge.workspace=Workspace(bridge)
     server.cloud = CloudManager(bridge, directory)
     save_json(directory/'service.json', server.service_info)
@@ -218,7 +219,7 @@ def run(port, codex_home, directory):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
-        from .services import register
+        from carryon.services import register
         register(directory,port=server.server_port,codex_home=codex_home)
         bridge.lifecycle.start()
         bridge.workspace.start()

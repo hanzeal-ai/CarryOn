@@ -5,11 +5,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from carryon.api import dispatch as api
-from carryon.bridge import BridgeError
+from carryon.routes.api import dispatch as api
+from carryon.sessions.bridge import BridgeError
 from carryon.contracts import digest
-from carryon.ipc import DesktopIPC, IPCError
-from carryon.operations import submit
+from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.sessions.operations import submit
 from carryon.store import Journal
 import test_bridge as message_fixture
 from test_bridge import FakeIPC, THREAD

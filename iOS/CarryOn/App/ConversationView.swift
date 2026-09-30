@@ -10,7 +10,6 @@ struct ConversationView: View {
     @State private var menu = false
     @State private var activity = false
     @State private var modelInfo = false
-    @State private var changes = false
     @State private var newMessages = false
     @State private var lastTimelineItem: JSONValue?
     @State private var selectionText: String?
@@ -26,6 +25,7 @@ struct ConversationView: View {
     @State private var submitting = false
     private var actionTarget: ConversationActionTarget { .init(scope: model.scope, threadID: thread.id) }
     @State private var timeline: [JSONValue] = []
+    @State private var navigationIndex = ConversationPresentation.NavigationIndex([])
     @State private var projectedHistoryRevision = -1
     @State private var chatMessages: [ExyteChat.Message] = []
     @State private var tableUpdates: TableUpdateTransaction?
@@ -53,16 +53,19 @@ struct ConversationView: View {
             let revision = model.historyRevision
             if projectedHistoryRevision != revision {
                 let source = model.history["timeline"].array
-                let grouped = await Task.detached(priority: .userInitiated) {
-                    ConversationProcess.timeline(source)
+                let (grouped, navigation) = await Task.detached(priority: .userInitiated) {
+                    let grouped = ConversationChanges.timeline(ConversationProcess.timeline(source), source: source)
+                    return (grouped, ConversationPresentation.NavigationIndex(grouped))
                 }.value
                 guard isCurrent() else { return }
                 if !bottomVisible, let lastTimelineItem, grouped.last != lastTimelineItem,
                    grouped.contains(where: { $0.stableID == lastTimelineItem.stableID }) { newMessages = true }
                 lastTimelineItem = grouped.last
                 timeline = grouped; projectedHistoryRevision = revision
+                navigationIndex = navigation
             }
-            let next = projectedMessages()
+            let next = await projectedMessages()
+            guard isCurrent() else { return }
             guard next != chatMessages else { applyNavigation(); return }
             if let tableUpdates {
                 // Serialize snapshots: overlapping transactions can consume each other's animation mode.
@@ -74,7 +77,7 @@ struct ConversationView: View {
         }
     }
 
-    private func projectedMessages() -> [ExyteChat.Message] {
+    private func projectedMessages() async -> [ExyteChat.Message] {
         let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let rows = Array(timeline.suffix(visibleCount))
         let supplemental: JSONValue = .object([
@@ -92,7 +95,7 @@ struct ConversationView: View {
             statusMessage.triggerRedraw = UUID()
         }
         statusMessage.createdAt = Date(timeIntervalSince1970: Double(rows.count))
-        return rows.enumerated().map { index, item in
+        var messages = rows.enumerated().map { index, item in
             let date = Date(timeIntervalSince1970: Double(index))
             if var message = previous[item.stableID], message.customData["entry"] as? JSONValue == item,
                message.customData["canEdit"] as? Bool == TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) {
@@ -104,7 +107,11 @@ struct ConversationView: View {
                 createdAt: date, attributedText: AttributedString(item["text"].text), customData: ["entry": item, "canEdit": TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly)])
             message.triggerRedraw = UUID()
             return message
-        } + [statusMessage]
+        }
+        for index in messages.indices where messages[index].customData["markdown"] == nil {
+            messages[index].customData["markdown"] = await MessageMarkdownParser.shared.prepare(rows[index])
+        }
+        return messages + [statusMessage]
     }
     private var transactionBinding: Binding<TableUpdateTransaction?> {
         Binding(get: { tableUpdates }, set: { transaction in
@@ -216,28 +223,6 @@ struct ConversationView: View {
             do { try await model.refreshActivityCounts() }
             catch { model.report(error, operation: "刷新其他会话角标", blocking: false) }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 4) {
-                HStack(spacing: 8) {
-                    ConversationStatusLabel(state: .session(model.history, connected: model.connected && model.status["enabled"].bool == true, readFailed: model.historyFailure != nil))
-                    if model.conversationReadOnly { Text("只读").font(.caption) }
-                    if ConversationChanges.hasChanges(model.history) {
-                        Button("查看改动") { changes = true }.font(.caption)
-                    }
-                }
-                if let message = ConversationConnection.message(networkAvailable: model.connectivity.available,
-                    deviceOnline: model.device?.value["online"].bool, connected: model.connected,
-                    bridgeEnabled: model.status["enabled"].bool, hasHistory: model.history != .null,
-                    localHistory: model.history["source"].text == "local-rollout", readFailure: model.historyFailure) {
-                    Text(message).font(.caption2).multilineTextAlignment(.center)
-                    if !model.connected, let time = model.historyUpdatedAt[thread.id] {
-                        Text("上次状态：" + ConversationState.session(model.history, connected: true).label + " · " + time.formatted(date: .omitted, time: .standard))
-                            .font(.caption2)
-                    }
-                }
-            }.foregroundStyle(Design.secondary).padding(6)
-        }
-        .sheet(isPresented: $changes) { ConversationChangesView(threadID: thread.id) }
         .sheet(isPresented: $menu) { ConversationMenu() }
         .sheet(isPresented: $modelInfo) { ModelInformationView(target: actionTarget) }
         .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
@@ -271,16 +256,24 @@ struct ConversationView: View {
         }
     }
     private func messageRow(_ params: MessageBuilderParameters) -> some View {
-        Group {
+        let isProcess = (params.message.customData["entry"] as? JSONValue)?["type"].text == "processGroup"
+        return Group {
             if let item = params.message.customData["entry"] as? JSONValue {
-                ConversationTimelineRow(item: item, threadID: thread.id)
+                Group {
+                    if item["type"].text == "changesSummary" {
+                        ConversationChangesCard(history: item["history"], projection: .init(item["history"]), threadID: thread.id)
+                    } else {
+                        ConversationTimelineRow(item: item, threadID: thread.id)
+                    }
+                }
+                    .environment(\.preparedMessageMarkdown, params.message.customData["markdown"] as? ParsedMessageMarkdown)
                     .onLongPressGesture {
                         if !CarryOnMessageAction.menuItems(for: params.message).isEmpty { params.showContextMenuClosure() }
                     }
             } else if let snapshot = params.message.customData["supplemental"] as? JSONValue {
                 supplementalRows(snapshot)
             }
-        }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(.horizontal, 16).padding(.vertical, isProcess ? 2 : 8).frame(maxWidth: .infinity, alignment: .leading)
             .background(ConversationNavigationMarker(id: params.message.id, tracker: navigationTracker))
     }
     private func navigate(to anchor: String) {
@@ -309,10 +302,9 @@ struct ConversationView: View {
             abs($0.value.midY - center) < abs($1.value.midY - center)
         }) { navigationAnchor = nearest.key }
     }
-    private var navigationItems: [JSONValue] { ConversationPresentation.navigationMessages(timeline) }
+    private var navigationItems: [JSONValue] { navigationIndex.messages }
     private var navigationSelection: String? {
-        guard let anchor = navigationAnchor, let index = timeline.firstIndex(where: { $0.stableID == anchor }) else { return nil }
-        return ConversationPresentation.navigationMessages(Array(timeline.prefix(index + 1))).last?.stableID
+        navigationAnchor.flatMap { navigationIndex.selectionByID[$0] }
     }
     private func navigationText(_ item: JSONValue) -> String {
         let text = item["displayText"].string ?? item["text"].text
@@ -410,7 +402,7 @@ struct ConversationView: View {
             disabled: !(model.canCompose || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting,
             sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.canInteract(.stop),
-            hasImages: !images.isEmpty, stopping: model.state == "running",
+            hasImages: !images.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             send: submitMessage,
             stop: interruptTurn,
@@ -479,8 +471,6 @@ struct ConversationView: View {
             ForEach(snapshot["outgoing"].array, id: \.stableID) { item in
                 OutgoingMessageStatusView(item: item) { model.outgoing.removeValue(forKey: item["id"].text) }
             }
-
-
         }
     }
     private var composerAccessories: some View {
@@ -493,7 +483,7 @@ struct ConversationView: View {
                 }
                 ConversationActionBar(target: actionTarget)
             }
-            if loadingImages || submitting { ProgressView().controlSize(.small) }
+            if loadingImages { ProgressView().controlSize(.small) }
             if !model.conversationReadOnly && !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 12) {
