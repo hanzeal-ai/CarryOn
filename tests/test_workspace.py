@@ -16,6 +16,9 @@ class Catalog:
     def get(self,tid):return {'id':tid,'cwd':'/one/same'}
 
 class Native(IPC):
+    from carryon.desktop_ipc.ipc import DesktopIPC
+    confirmed_read = DesktopIPC.confirmed_read
+    queue_snapshot = DesktopIPC.queue_snapshot
     def __init__(self,path):super().__init__(path);self.states={}
     def current(self,tid):return self.states.get(tid)
 

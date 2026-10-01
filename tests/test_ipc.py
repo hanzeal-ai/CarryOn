@@ -55,6 +55,64 @@ class ProtocolTests(unittest.TestCase):
 
 
 class SnapshotConcurrencyTests(unittest.TestCase):
+    def test_resync_failure_keeps_other_threads_and_connection(self):
+        for error in (IPCError('no-client-found'), IPCError('history-timeout', uncertain=True)):
+            with self.subTest(error=str(error)):
+                ipc = DesktopIPC('unused')
+                left, right = socket.socketpair(); ipc.sock = left
+                ipc.following = {'lost': 'owner-a', 'healthy': 'owner-b'}
+                ipc.snapshots = {'healthy': (1, {'id': 'healthy'})}
+                ipc.events.queues['lost'] = []; ipc.events.flags['lost'] = {'hasUnreadTurn': False}
+                ipc._snapshot = Mock(side_effect=error)
+                try:
+                    ipc._resync('lost')
+                    self.assertTrue(ipc.connected)
+                    self.assertEqual(ipc.current('healthy'), {'id': 'healthy'})
+                    self.assertEqual(ipc.following, {'healthy': 'owner-b'})
+                    self.assertNotIn('lost', ipc.events.queues)
+                    self.assertNotIn('lost', ipc.events.flags)
+                    right.settimeout(1)
+                    size = struct.unpack('<I', DesktopIPC._exact(right, 4))[0]
+                    message = json.loads(DesktopIPC._exact(right, size))
+                    self.assertEqual(message['targetClientIds'], ['owner-a'])
+                    self.assertEqual(message['params'], {'hostId': 'local',
+                        'conversationId': 'lost', 'following': False})
+                finally: ipc.close(); right.close()
+
+    def test_owner_disconnect_does_not_interrupt_other_owner_response(self):
+        left, right = socket.socketpair(); ipc = DesktopIPC('unused'); ipc.sock = left
+        ipc.following = {'a': 'owner-a', 'b': 'owner-b'}
+        ipc.snapshots = {'a': (1, {'id': 'a'}), 'b': (1, {'id': 'b'})}
+        a = {'event': threading.Event(), 'target': 'owner-a'}
+        b = {'event': threading.Event(), 'target': 'owner-b'}
+        ipc.pending = {'a-request': a, 'b-request': b}
+        reader = threading.Thread(target=ipc._reader, args=(left,)); reader.start()
+        def send(message):
+            payload = json.dumps(message).encode()
+            right.sendall(struct.pack('<I', len(payload)) + payload)
+        try:
+            send({'type': 'broadcast', 'method': 'client-status-changed',
+                  'params': {'status': 'disconnected', 'clientId': 'owner-a'}})
+            self.assertTrue(a['event'].wait(1)); self.assertIn('error', a)
+            send({'type': 'response', 'requestId': 'b-request', 'resultType': 'success', 'result': {}})
+            self.assertTrue(b['event'].wait(1)); self.assertNotIn('error', b)
+            self.assertTrue(ipc.connected); self.assertEqual(ipc.current('b'), {'id': 'b'})
+            self.assertIsNone(ipc.current('a'))
+        finally: ipc.close(); right.close(); reader.join(1)
+
+    def test_queue_projection_is_detached_and_read_confirmation_expires(self):
+        ipc = DesktopIPC('unused'); token = object(); state = {'id': 'a', 'hasUnreadTurn': False}
+        ipc.snapshots['a'] = (1, state); ipc.events.read_refreshes['a'] = token
+        ipc.events.queues['a'] = [{'text': 'original'}]
+        ipc.queue_snapshot('a')[0]['text'] = 'modified'
+        self.assertEqual(ipc.events.queues['a'][0]['text'], 'original')
+        with ipc.confirmed_read('a', state, token) as confirmed: self.assertTrue(confirmed)
+        ipc.events.read_dirty.add('a')
+        with ipc.confirmed_read('a', state, token) as confirmed: self.assertFalse(confirmed)
+        ipc.events.read_dirty.clear(); ipc._owner_left('owner-a')
+        ipc.following['a'] = 'owner-a'; ipc._owner_left('owner-a')
+        with ipc.confirmed_read('a', state, token) as confirmed: self.assertFalse(confirmed)
+
     def test_slow_thread_does_not_block_another_thread(self):
         ipc = DesktopIPC('unused')
         entered, release, fast = threading.Event(), threading.Event(), threading.Event()

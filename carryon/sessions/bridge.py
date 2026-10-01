@@ -101,11 +101,8 @@ class Bridge:
                 return
             # Same lock order as dispatch: bridge, then IPC. No later snapshot or
             # read invalidation can overtake validation and cursor advancement.
-            with ipc.lock:
-                if (token is None or state is None or ipc.current(tid) is not state
-                        or state.get('hasUnreadTurn') is not False
-                        or ipc.events.read_refreshes.get(tid) is not token
-                        or tid in ipc.events.read_dirty):
+            with ipc.confirmed_read(tid, state, token) as confirmed:
+                if not confirmed:
                     return
                 if workspace.desktop_reads() is not None:
                     # Desktop-owned persistence, not an owner's default false,
@@ -311,9 +308,8 @@ class Bridge:
         else: self.catalog.get(thread_id)
         ipc, generation = self.require()
         cached = None
-        if not authoritative and hasattr(ipc, 'events'):
-            with ipc.lock:
-                cached = ipc.events.queues.get(thread_id)
+        if not authoritative and hasattr(ipc, 'queue_snapshot'):
+            cached = ipc.queue_snapshot(thread_id)
         if cached is None:
             result = projection(self.catalog.queued(thread_id), 'desktop-persisted')
         else:

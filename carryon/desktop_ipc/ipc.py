@@ -13,6 +13,8 @@ import threading
 import time
 import uuid
 import weakref
+from copy import deepcopy
+from contextlib import contextmanager
 
 from carryon.desktop_ipc.patches import apply_patches
 from carryon.sessions.history_cache import NativeSnapshot
@@ -77,19 +79,19 @@ class DesktopIPC:
             self.close()
             raise
 
-    def _write(self, message):
+    def _write(self, message, expected=None):
         payload = json.dumps(message, ensure_ascii=False).encode()
         if len(payload) > self.MAX_FRAME:
             raise IPCError("请求过大")
         with self.write_lock:
             sock = self.sock
-            if sock is None:
+            if sock is None or (expected is not None and sock is not expected):
                 raise IPCError("Codex socket 已断开")
             sock.sendall(struct.pack("<I", len(payload)) + payload)
 
     def request(self, method, params, version=0, target=None, before_send=None, timeout_ms=15000):
         request_id = str(uuid.uuid4())
-        waiter = {"event": threading.Event()}
+        waiter = {"event": threading.Event(), "target": target}
         with self.lock:
             self.pending[request_id] = waiter
         message = {"type": "request", "requestId": request_id,
@@ -269,11 +271,8 @@ class DesktopIPC:
                     self._incoming_request(message)
                 elif kind == "broadcast" and message.get("method") == "client-status-changed":
                     params = message.get("params", {})
-                    with self.lock:
-                        owner_left = (params.get("status") == "disconnected"
-                                      and params.get("clientId") in self.following.values())
-                    if owner_left:
-                        raise IPCError("会话所属客户端已断开，请重新开启桥接")
+                    if params.get("status") == "disconnected":
+                        self._owner_left(params.get("clientId"))
                 elif kind == "broadcast" and message.get("method") == "thread-stream-state-changed":
                     params = message.get("params", {})
                     thread_id = params.get("conversationId")
@@ -333,6 +332,43 @@ class DesktopIPC:
             snapshot = self.snapshots.get(thread_id)
             return snapshot[1] if snapshot else None
 
+    def queue_snapshot(self, thread_id):
+        with self.lock:
+            return deepcopy(self.events.queues.get(thread_id))
+
+    @contextmanager
+    def confirmed_read(self, thread_id, state, token):
+        # Keep validation and cursor advancement indivisible with invalidation.
+        with self.lock:
+            yield (token is not None and state is not None and self.current(thread_id) is state
+                   and state.get('hasUnreadTurn') is False
+                   and self.events.read_refreshes.get(thread_id) is token
+                   and thread_id not in self.events.read_dirty)
+
+    def _forget_thread(self, thread_id):
+        # Caller holds self.lock. Other subscriptions and transport waiters survive.
+        self.snapshots.pop(thread_id, None)
+        self.following.pop(thread_id, None)
+        self.events.queues.pop(thread_id, None)
+        self.events.flags.pop(thread_id, None)
+        self.events.read_refreshes.pop(thread_id, None)
+        self.events.read_dirty.discard(thread_id)
+
+    def _owner_left(self, owner):
+        if not isinstance(owner, str):
+            return
+        with self.changed:
+            affected = [tid for tid, source in self.following.items() if source == owner]
+            for tid in affected:
+                self._forget_thread(tid)
+            for waiter in self.pending.values():
+                if waiter.get('target') == owner:
+                    waiter['error'] = '会话所属客户端已断开；请求结果可能未知'
+                    waiter['event'].set()
+            self.changed.notify_all()
+        if affected:
+            self.on_change()
+
     def _change(self, message, params, thread_id, change):
         resync = False
         with self.changed:
@@ -372,9 +408,24 @@ class DesktopIPC:
 
     def _resync(self, thread_id):
         try:
-            self.snapshot(thread_id)
-        except (IPCError, OSError):
-            self.close()
+            with self._snapshot_lock(thread_id):
+                sock = self.sock
+                try:
+                    self._snapshot(thread_id)
+                except (IPCError, OSError):
+                    with self.changed:
+                        owner = self.following.get(thread_id) if self.sock is sock else None
+                        if self.sock is sock:
+                            self._forget_thread(thread_id)
+                            self.changed.notify_all()
+                    if owner and sock is not None:
+                        try:
+                            self._write({"type": "broadcast", "method": "thread-stream-following-changed",
+                                "sourceClientId": self.client_id, "version": self.FOLLOW_VERSION,
+                                "targetClientIds": [owner], "params": {"hostId": "local",
+                                    "conversationId": thread_id, "following": False}}, expected=sock)
+                        except (IPCError, OSError):
+                            pass
         finally:
             with self.lock:
                 self.resyncing.discard(thread_id)

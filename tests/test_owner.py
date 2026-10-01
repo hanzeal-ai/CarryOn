@@ -3,7 +3,7 @@ import threading
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from carryon.owner.manager import OwnerManager
 from carryon.owner.requests import forward
 from carryon.desktop_ipc.ipc import IPCError
@@ -60,6 +60,140 @@ class OwnerTests(unittest.TestCase):
     def envelope(self, method='thread-owner-discovery', version=1, tid=T, **params):
         return {'method': method, 'version': version, 'requestId': 'wire-1', 'sourceClientId': 'desktop',
                 'params': {'hostId': 'local', 'conversationId': tid, **params}}
+
+    def test_shutdown_during_connect_closes_late_connection(self):
+        entered, unblock = threading.Event(), threading.Event()
+        connect = self.manager.bus.connect
+        def slow_connect():
+            entered.set(); unblock.wait(3); connect()
+        self.manager.bus.connect = slow_connect
+        errors = []
+        def load():
+            try: self.manager.load(T)
+            except Exception as exc: errors.append(exc)
+        worker = threading.Thread(target=load); worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.manager.close()
+        finally:
+            unblock.set(); worker.join(3)
+        self.assertEqual(len(errors), 1)
+        self.assertFalse(self.manager.bus.connected)
+        self.assertEqual(self.manager.entries, {})
+
+    def test_reconnect_pins_runtime_and_isolates_local_failure(self):
+        self.manager.load(T); self.manager.load(U)
+        self.manager.bus.close()
+        entered, unblock = threading.Event(), threading.Event()
+        runtime = self.manager.entries[T]['runtime']
+        def broken_rpc(*args):
+            entered.set(); unblock.wait(3)
+            raise IPCError('local runtime failed')
+        runtime.rpc = broken_rpc
+        result = []
+        worker = threading.Thread(target=lambda: result.append(self.manager._reconnect_bus()))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            with self.assertRaisesRegex(IPCError, 'pending operations'): self.manager.release(T)
+            self.manager.publish(U, force=True)
+        finally:
+            unblock.set(); worker.join(3)
+        self.assertEqual(result, [True])
+        self.assertTrue(self.manager.bus.connected)
+        self.assertTrue(self.manager.entries[T]['conflict'])
+        self.assertFalse(self.manager.entries[U]['disconnect'])
+
+    def test_shutdown_during_resume_closes_unregistered_runtime(self):
+        self.manager.load(T)
+        entry = self.manager.entries[T]
+        entry['runtime'].close(); entry['suspended'] = True
+        entered, unblock = threading.Event(), threading.Event()
+        original = Runtime.snapshot
+        resumed = []
+        def slow_snapshot(runtime, tid):
+            result = original(runtime, tid)
+            resumed.append(runtime); entered.set(); unblock.wait(3)
+            return result
+        errors = []
+        def load():
+            try: self.manager.load(T)
+            except Exception as exc: errors.append(exc)
+        with patch.object(Runtime, 'snapshot', slow_snapshot):
+            worker = threading.Thread(target=load); worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.manager.close()
+            finally:
+                unblock.set(); worker.join(3)
+        self.assertEqual(self.manager.entries, {})
+        self.assertEqual(len(errors), 1)
+        self.assertFalse(resumed[0].connected)
+
+    def test_pending_start_allows_other_thread_updates_and_same_thread_interrupt(self):
+        self.manager.load(T); self.manager.load(U)
+        runtime = self.manager.entries[T]['runtime']
+        entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+        rpc = runtime.rpc
+        def slow_rpc(method, params):
+            if method == 'turn/start':
+                runtime.data['turns'].append({'turnId': 'new', 'status': 'inProgress', 'items': []})
+                entered.set(); release.wait(3)
+            elif method == 'turn/interrupt': stopped.set()
+            return rpc(method, params)
+        runtime.rpc = slow_rpc
+        request = self.envelope('thread-follower-start-turn', 2,
+            turnStart={'request': {'threadId': T, 'input': []}})
+        errors = []
+        def start():
+            try: self.manager.handle(request)
+            except Exception as exc: errors.append(exc)
+        worker = threading.Thread(target=start); worker.start()
+        done = threading.Event()
+        def inspect_and_stop():
+            try:
+                self.manager.handle(self.envelope(tid=U))
+                self.manager.publish(U, force=True)
+                with self.assertRaisesRegex(IPCError, 'pending operations'): self.manager.release(T)
+                interrupt = self.envelope('thread-follower-interrupt-turn', 4, expectedTurnId='new')
+                interrupt['requestId'] = 'stop'
+                self.manager.handle(interrupt)
+            except Exception as exc: errors.append(exc)
+            finally: done.set()
+        second = threading.Thread(target=inspect_and_stop)
+        try:
+            self.assertTrue(entered.wait(1)); second.start()
+            self.assertTrue(done.wait(1), 'another client waited behind turn/start')
+            self.assertTrue(stopped.is_set())
+        finally:
+            release.set(); worker.join(3)
+            if second.ident is not None: second.join(3)
+        self.assertEqual(errors, [])
+        self.manager.handle(request)
+        self.assertEqual(sum(method == 'turn/start' for method, _ in runtime.calls), 1)
+
+    def test_cold_resume_does_not_block_loaded_thread(self):
+        self.manager.load(U)
+        entered, release, inspected = threading.Event(), threading.Event(), threading.Event()
+        snapshot = Runtime.snapshot
+        errors = []
+        def slow_snapshot(runtime, tid):
+            if tid == T: entered.set(); release.wait(3)
+            return snapshot(runtime, tid)
+        def load():
+            try: self.manager.load(T)
+            except Exception as exc: errors.append(exc)
+        with patch.object(Runtime, 'snapshot', slow_snapshot):
+            worker = threading.Thread(target=load); worker.start()
+            second = threading.Thread(target=lambda: (self.manager.handle(self.envelope(tid=U)), inspected.set()))
+            try:
+                self.assertTrue(entered.wait(1)); second.start()
+                self.assertTrue(inspected.wait(1), 'loaded thread waited behind cold resume')
+                with self.assertRaisesRegex(IPCError, 'loading session'): self.manager.release(T)
+            finally:
+                release.set(); worker.join(3)
+                if second.ident is not None: second.join(3)
+        self.assertEqual(errors, [])
     def test_load_publish_discovery_and_release(self):
         self.manager.load(T)
         self.assertTrue(self.manager.can_handle(self.envelope()))
