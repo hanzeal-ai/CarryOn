@@ -169,7 +169,7 @@ def permission_subset(granted, requested):
     return type(granted) is type(requested) and granted == requested
 
 
-def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, parent_id=None):
+def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, parent_id=None, *, _reserved=None):
     from carryon.errors import BridgeError
     from carryon.sessions.catalog import valid_id
     valid_id(thread_id)
@@ -186,22 +186,26 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
     with bridge.lock:
         bridge.check_generation(ipc, generation)
         previous = bridge.journal.get(request_id)
-        if previous:
+        if previous and previous != _reserved:
             if previous['fingerprint'] != fingerprint:
                 raise BridgeError('requestId 已用于不同内容')
             return previous
         for previous in bridge.journal.list():
-            if previous['threadId'] != thread_id:
+            if previous['threadId'] != thread_id or previous['id'] == request_id:
                 continue
             if action in QUEUE_ACTIONS and previous['kind'] in {'operation:' + a for a in QUEUE_ACTIONS} and previous['state'] in ('preparing', 'dispatching', 'uncertain'):
                 raise BridgeError('原生队列写入尚未确认，请先核对队列；其他操作不受影响')
-            if action in ('compact', 'edit', 'resume') and previous['kind'] in ('message', 'create', 'operation:compact', 'operation:edit', 'operation:resume') and previous['state'] in ('preparing', 'dispatching'):
+            if action in ('compact', 'edit', 'resume') and previous['kind'] in ('compose', 'message', 'create', 'operation:compact', 'operation:edit', 'operation:resume') and previous['state'] in ('preparing', 'dispatching'):
                 raise BridgeError('会话正在提交操作，请稍后重试')
         job = {'id': request_id, 'fingerprint': fingerprint, 'kind': 'operation:' + action,
                'threadId': thread_id, 'created': time.time(), 'state': 'preparing'}
         if source:job.update(source)
         if parent_id is not None: job['sideParentId'] = parent_id
-        bridge.journal.insert(job)
+        if _reserved is None: bridge.journal.insert(job)
+        else:
+            if bridge.journal.get(request_id) != _reserved: raise BridgeError('发送准备记录已变化')
+            job['created'] = _reserved['created']
+            bridge.journal.update(request_id, **{k: v for k, v in job.items() if k != 'id'})
     dispatch(bridge, ipc, generation, job, data, authorize, prepared)
     return bridge.journal.get(request_id)
 

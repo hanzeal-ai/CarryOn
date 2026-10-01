@@ -115,8 +115,8 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
 @Test func outgoingLiveEvidenceIgnoresLateHTTPAndNeverRecreatesConfirmedMessage() {
     let start: JSONValue = .object(["id": .string("r"), "prompt": .string("hello"), "state": .string("sending")])
     let live = OutgoingMessageProjection.merge(start, .object(["state": .string("completed")]), live: true)
-    #expect(live == nil)
-    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("preparing")])) == nil)
+    #expect(live?["state"].text == "completed")
+    #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("preparing")])) == live)
     #expect(OutgoingMessageProjection.merge(nil, .object(["state": .string("preparing")])) == nil)
     #expect(OutgoingMessageProjection.merge(live, .object(["state": .string("acknowledged")]), live: true) == nil)
 }

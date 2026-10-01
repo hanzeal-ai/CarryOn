@@ -3,18 +3,20 @@ import CarryOnCore
 
 // AppModel owns state; this boundary owns request identity and delivery reconciliation.
 extension AppModel {
-    @discardableResult func write(path: String, target: String, body: JSONValue) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
         if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !path.hasSuffix("/session") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
         let version = epoch, capturedScope = scope
+        var requestID: String?
         writing = true; defer { writing = false }
         do {
             let id = try pending.requestID(scope: capturedScope, target: target, path: path, body: body)
+            requestID = id
             let composing = path.hasSuffix("/compose")
             if composing {
                 outgoing[id] = .object(["id": .string(id), "threadId": .string(target), "scope": .string(capturedScope),
-                    "prompt": body["prompt"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
+                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
                 historyRevision += 1
             }
             var result: JSONValue
@@ -27,7 +29,7 @@ extension AppModel {
                 }
                 throw error
             }
-            let deadline = Date().addingTimeInterval(20)
+            let deadline = Date().addingTimeInterval(composing ? 120 : 20)
             do {
                 while ["preparing", "dispatching"].contains(result["state"].text) ||
                     (path == "/api/threads" && result["state"].text == "accepted" && result["createdThreadId"].string == nil) {
@@ -52,8 +54,23 @@ extension AppModel {
                 throw APIError((result["error"].string ?? "操作结果尚未确认") + "；请在请求记录与 Codex App 核对，原请求编号已保留。")
             }
             try pending.resolve(scope: capturedScope, target: target, requestID: id)
+            if composing, draftSubmission, let item = outgoing[id] {
+                outgoing[id] = item.setting("draftSubmission", .bool(false))
+                reconcileOutgoing()
+            }
             return true
-        } catch { if version == epoch { report(error, operation: path.hasSuffix("/compose") ? "发送消息" : "提交操作") }; return false }
+        } catch {
+            // A live native acceptance remains authoritative if the HTTP reply is lost.
+            if version == epoch, capturedScope == scope, let id = requestID, let item = outgoing[id],
+               ["accepted", "completed", "inProgress"].contains(item["state"].text) {
+                try? pending.resolve(scope: capturedScope, target: target, requestID: id)
+                outgoing[id] = item.setting("draftSubmission", .bool(false))
+                reconcileOutgoing()
+                return true
+            }
+            if version == epoch { report(error, operation: path.hasSuffix("/compose") ? "发送消息" : "提交操作") }
+            return false
+        }
     }
     func checkOutgoing(_ item: JSONValue) async {
         let capturedScope = scope, identifier = item["id"].text
@@ -75,7 +92,8 @@ extension AppModel {
         outgoingFor(selectedThread?.id)
     }
     func outgoingFor(_ threadID: String?) -> [JSONValue] {
-        outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == threadID }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
+        outgoing.values.filter { $0["scope"].text == scope && $0["threadId"].text == threadID &&
+            $0["draftSubmission"].bool != true }.sorted { ($0["created"].int ?? 0, $0["id"].text) < ($1["created"].int ?? 0, $1["id"].text) }
     }
     private func mergeOutgoing(_ job: JSONValue, live: Bool = false) {
         let id = job["id"].text

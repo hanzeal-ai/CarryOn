@@ -107,8 +107,13 @@ class Bridge:
                         or ipc.events.read_refreshes.get(tid) is not token
                         or tid in ipc.events.read_dirty):
                     return
-                workspace.observe(state)
-                workspace.read('native:codex', tid, workspace.latest_sequence(tid))
+                if workspace.desktop_reads() is not None:
+                    # Desktop-owned persistence, not an owner's default false,
+                    # authorizes advancing the identity-scoped read cursor.
+                    workspace.sync_desktop_reads(ipc,self.generation,{tid:workspace.latest_sequence(tid)})
+                elif state.get('executionBackend')!='carryon-owner':
+                    workspace.observe(state)
+                    workspace.read('native:codex', tid, workspace.latest_sequence(tid))
 
     def status(self):
         import socket
@@ -326,7 +331,6 @@ class Bridge:
 
     def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None):
         from carryon.contracts import digest, text, validate_request_id
-        from carryon.sessions.operations import controls, submit as operate
         from carryon.sessions.images import validate_images
         # Idempotency binds the original wire payload, before native text normalization.
         raw_prompt = prompt
@@ -341,6 +345,16 @@ class Bridge:
         if previous:
             if previous.get('composeFingerprint')!=fingerprint:raise BridgeError('requestId 已用于不同内容')
             return previous
+        return self.prepare_compose(thread_id, request_id, fingerprint, source, authorize,
+            lambda reserved: self._compose(thread_id, request_id, prompt, images, source, authorize,
+                                           parent_id, ipc, generation, fingerprint, reserved))
+
+    def prepare_compose(self, thread_id, request_id, fingerprint, source, authorize, run):
+        return run(None)
+
+    def _compose(self, thread_id, request_id, prompt, images, source, authorize,
+                 parent_id, ipc, generation, fingerprint, reserved):
+        from carryon.sessions.operations import controls, submit as operate
         owner,state=self.send_snapshot(ipc,generation,thread_id,authorize,parent_id)
         with self.lock:
             self.check_generation(ipc,generation)
@@ -349,7 +363,7 @@ class Bridge:
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
         # Never hold the bridge gate while waiting for a native response: stream
         # updates, cancellation and approval replies must remain able to proceed.
-        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id)
+        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id, _reserved=reserved)
         if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
         data={'requestId':request_id,'prompt':prompt}
         if images:data['images']=images
@@ -357,9 +371,9 @@ class Bridge:
             data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id, authoritative=True)['fingerprint'])
         else:
             data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
-        return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id)
+        return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id, _reserved=reserved)
 
-    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None):
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, *, _reserved=None):
         if kind != "message": raise ValueError("新建会话请通过项目创建接口提交")
         from carryon.sessions.images import validate_images
         images=validate_images(images)
@@ -373,13 +387,13 @@ class Bridge:
             valid_id(thread_id)
             fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else []), ensure_ascii=False).encode()).hexdigest()
             previous = self.journal.get(request_id)
-            if previous:
+            if previous and previous != _reserved:
                 if previous["fingerprint"] != fingerprint:
                     raise BridgeError("requestId 已用于不同内容")
                 return previous
             # Protect concurrent turn-start writes, never the lifetime of a task.
-            if any(j['threadId'] == thread_id and j['state'] in ('preparing', 'dispatching')
-                   and j['kind'] in ('message', 'create', 'operation:edit', 'operation:resume', 'operation:compact')
+            if any(j['id'] != request_id and j['threadId'] == thread_id and j['state'] in ('preparing', 'dispatching')
+                   and j['kind'] in ('compose', 'message', 'create', 'operation:edit', 'operation:resume', 'operation:compact')
                    for j in self.journal.list()):
                 raise BridgeError('会话正在提交操作，请稍后重试')
             self.assert_target(thread_id, parent_id)
@@ -388,7 +402,11 @@ class Bridge:
                    "clientMessageId": str(uuid.uuid4())}
             if source:job.update(source)
             if parent_id is not None: job['sideParentId'] = parent_id
-            self.journal.insert(job)
+            if _reserved is None: self.journal.insert(job)
+            else:
+                if previous != _reserved: raise BridgeError('发送准备记录已变化')
+                job['created'] = _reserved['created']
+                self.journal.update(request_id, **{k: v for k, v in job.items() if k != 'id'})
         self._dispatch(job, prompt, ipc, generation, images, authorize)
         return self.journal.get(request_id)
 

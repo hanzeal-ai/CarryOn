@@ -51,6 +51,13 @@ struct ConversationView: View {
         messageRefresh.request {
             guard isCurrent() else { return }
             let revision = model.historyRevision
+            // Capture history and its pending bubbles together before asynchronous rendering.
+            let supplemental: JSONValue = .object([
+                "showEmpty": .bool(model.historyFailure == nil && model.history != .null && model.history["timeline"].array.isEmpty),
+                "syncing": model.history["syncing"], "readOnly": .bool(model.conversationReadOnly),
+                "requests": model.history["controls"]["requests"], "pendingRequests": model.history["pendingRequests"],
+                "queue": model.history["queue"], "outgoing": .array(model.visibleOutgoing)
+            ])
             if projectedHistoryRevision != revision {
                 let source = model.history["timeline"].array
                 let (grouped, navigation) = await Task.detached(priority: .userInitiated) {
@@ -64,7 +71,7 @@ struct ConversationView: View {
                 timeline = grouped; projectedHistoryRevision = revision
                 navigationIndex = navigation
             }
-            let next = await projectedMessages()
+            let next = await projectedMessages(supplemental: supplemental)
             guard isCurrent() else { return }
             guard next != chatMessages else { applyNavigation(); return }
             if let tableUpdates {
@@ -77,15 +84,9 @@ struct ConversationView: View {
         }
     }
 
-    private func projectedMessages() async -> [ExyteChat.Message] {
+    private func projectedMessages(supplemental: JSONValue) async -> [ExyteChat.Message] {
         let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let rows = Array(timeline.suffix(visibleCount))
-        let supplemental: JSONValue = .object([
-            "showEmpty": .bool(model.historyFailure == nil && model.history != .null && timeline.isEmpty),
-            "syncing": model.history["syncing"], "readOnly": .bool(model.conversationReadOnly),
-            "requests": model.history["controls"]["requests"], "pendingRequests": model.history["pendingRequests"],
-            "queue": model.history["queue"], "outgoing": .array(model.visibleOutgoing)
-        ])
         var statusMessage: ExyteChat.Message
         if let existing = previous["carryon:status"], existing.customData["supplemental"] as? JSONValue == supplemental {
             statusMessage = existing
@@ -400,7 +401,7 @@ struct ConversationView: View {
         if !model.conversationReadOnly {
         CarryOnChatComposer(text: $model.draft,
             disabled: !(model.canCompose || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
-            draftEditable: !loadingImages && !submitting,
+            draftEditable: !loadingImages && !submitting && !model.writing,
             sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.canInteract(.stop),
             hasImages: !images.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,

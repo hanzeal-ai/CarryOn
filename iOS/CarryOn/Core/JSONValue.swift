@@ -50,9 +50,12 @@ public enum JSONValue: Codable, Sendable, Equatable, Hashable {
 public struct APIError: LocalizedError, Sendable {
     public let status: Int
     public let message: String
+    public let uncertain: Bool
     public var errorDescription: String? { message }
-    public var isWriteRejection: Bool { (400..<500).contains(status) && status != 408 }
-    public init(_ message: String, status: Int = 0) { self.message = message; self.status = status }
+    public var isWriteRejection: Bool { !uncertain && (400..<500).contains(status) && status != 408 }
+    public init(_ message: String, status: Int = 0, uncertain: Bool = false) {
+        self.message = message; self.status = status; self.uncertain = uncertain
+    }
 }
 
 public struct Record: Identifiable, Hashable, Sendable {

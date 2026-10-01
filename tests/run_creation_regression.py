@@ -65,6 +65,9 @@ def main():
                 state = observed[tid]; assert state['executionBackend'] == 'carryon-owner'
                 assert len(state['turns']) == 1
                 assert any(i.get('text') == 'fixture response' for i in state['turns'][0]['items'])
+                follower._write({'type': 'broadcast', 'method': 'thread-stream-following-changed',
+                    'version': 1, 'sourceClientId': follower.client_id, 'targetClientIds': ['fixture-owner'],
+                    'params': {'hostId': 'local', 'conversationId': tid, 'following': False}})
                 wait_until(lambda: tid not in manager.entries)
                 rows = bridge.catalog.list(); assert len(rows) == 1, rows
                 assert rows[0]['nativeProjectId'] == project['id'] and rows[0]['cwd'] == str(root)

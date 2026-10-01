@@ -2,8 +2,9 @@
 from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
+from runpy import run_path
 
-ASSETS=('logo.svg','favicon.png','apple-touch-icon.png','example.html','app.js','subagents.js','notification-client.js','workspace-binding.js','client.js','timeline.js','operations.js','cloud-console-client.js','console-login.js','qrcode.js','style.css','shadcn.css','shadcn-ui.js','mobile.css','mobile-ui.js')
+ASSETS = run_path(str(Path(__file__).parent / 'carryon/web_assets.py'))['ASSETS']
 class Build(build_py):
     def run(self):
         super().run()

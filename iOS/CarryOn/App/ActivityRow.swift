@@ -11,21 +11,20 @@ struct ActivityRow: View {
     @State private var pendingOpen: JSONValue?
     @State private var readThrough = 0
     @State private var loading = false
+    @State private var loadVersion = UUID()
     @State private var failure: String?
     private var target: ConversationActionTarget { .init(scope: scope, threadID: record.id, isActivity: true) }
     private var snapshot: JSONValue { model.snapshot(for: target) }
     private var preview: JSONValue { record.value["activityPreview"] }
+    private var previewText: String? {
+        guard let text = preview["text"].string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+    private var showInitialLoading: Bool { loading && snapshot == .null && previewText == nil }
     private var detail: ActivityDetail { ActivityDetail(history: snapshot) }
     private var kind: ActivityDetail.Kind {
         if snapshot != .null { return detail.kind }
-        switch (preview["kind"].string ?? record.value["activityKind"].text) {
-        case "approval": return .approval
-        case "question": return .question
-        case "failed": return .failed
-        case "completed": return .completed
-        case "other": return .other
-        default: break
-        }
+        if let kind = ActivityDetail.Kind(rawValue: preview["kind"].string ?? record.value["activityKind"].text) { return kind }
         if record.value["failed"].bool == true { return .failed }
         if record.value["status"]["state"].text == "waiting" { return .approval }
         return .other
@@ -52,7 +51,7 @@ struct ActivityRow: View {
         return nil
     }
     var body: some View {
-        Button { showingDetails = true } label: {
+        Button { openDetails() } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(unread ? Design.blue : .clear).frame(width: 8, height: 8).padding(.top, 6)
                     .accessibilityHidden(true)
@@ -65,11 +64,11 @@ struct ActivityRow: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Design.secondary)
             }.contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(loading).opacity(dimmed ? 0.6 : 1)
+        }.buttonStyle(.plain).opacity(dimmed ? 0.6 : 1)
             .accessibilityValue(unread ? "未读" : "已读")
             .padding(.horizontal, 15).padding(.vertical, 17).frame(maxWidth: .infinity, alignment: .leading)
             .sheet(isPresented: $showingDetails, onDismiss: {
-                if target.scope == model.scope { model.activitySnapshots.removeValue(forKey: record.id) }
+                closeDetails()
                 if let value = pendingOpen, target.scope == model.scope {
                     pendingOpen = nil
                     beforeOpen?()
@@ -82,13 +81,13 @@ struct ActivityRow: View {
                         VStack(alignment: .leading, spacing: 18) {
                             Text(record.title).font(.headline)
                             Text(label).font(.subheadline).foregroundStyle(Design.secondary)
-                            if snapshot == .null, let text = preview["text"].string, !text.isEmpty {
+                            if snapshot == .null, let text = previewText {
                                 MessageMarkdown(text: text, resolveCreatedThreads: false)
                                 if preview["truncated"].bool == true {
                                     Text("进入会话查看完整内容").font(.caption).foregroundStyle(Design.secondary)
                                 }
                             }
-                            if loading && snapshot == .null { ProgressView("正在刷新详情…") }
+                            if showInitialLoading { ProgressView("正在加载详情…") }
                             if let failure {
                                 Text(failure).font(.caption).foregroundStyle(.red)
                                 Button("重试") { Task { await load() } }.disabled(loading)
@@ -105,13 +104,12 @@ struct ActivityRow: View {
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
                 .task {
                     guard target.scope == model.scope else { return }
-                    model.activitySnapshots[record.id] = .null
                     await load()
                 }
                 .onChange(of: model.workspaceRevision) { _, _ in Task { await load() } }
             }
             .onChange(of: model.scope) { _, _ in showingDetails = false; pendingOpen = nil }
-            .onDisappear { if target.scope == model.scope { model.activitySnapshots.removeValue(forKey: record.id) } }
+            .onDisappear { closeDetails() }
     }
     @ViewBuilder private var content: some View {
         if !detail.requests.isEmpty || !detail.questions.isEmpty {
@@ -133,12 +131,24 @@ struct ActivityRow: View {
         }
     }
     private func date(_ value: Double) -> String { Date(timeIntervalSince1970: value).formatted(date: .abbreviated, time: .shortened) }
+    private func openDetails() {
+        guard target.scope == model.scope else { return }
+        loadVersion = UUID(); loading = false; failure = nil
+        model.beginActivity(target, preview: preview)
+        showingDetails = true
+    }
+    private func closeDetails() {
+        loadVersion = UUID(); loading = false
+        model.endActivity(target)
+    }
     private func load() async {
         guard !loading, showingDetails, target.scope == model.scope else { return }
-        loading = true; defer { loading = false }
+        let version = UUID(); loadVersion = version
+        loading = true; defer { if loadVersion == version { loading = false } }
         let sequence = record.value["readSequence"].int ?? 0
         do {
             try await model.loadActivity(target)
+            guard loadVersion == version, showingDetails, target.scope == model.scope else { return }
             failure = nil
             if unread, sequence > readThrough, showingDetails, model.foreground {
                 do {
@@ -152,7 +162,7 @@ struct ActivityRow: View {
             }
         } catch is CancellationError { return }
         catch {
-            guard target.scope == model.scope, showingDetails, model.activitySnapshots[record.id] != nil else { return }
+            guard loadVersion == version, target.scope == model.scope, showingDetails, model.activitySnapshots[record.id] != nil else { return }
             failure = error.localizedDescription
         }
     }

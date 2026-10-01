@@ -23,7 +23,7 @@ class CloudConsoleClient extends CarryOnClient {
     if(epoch!==this.epoch)throw Error('设备已改变，请重新读取状态');
     if(!response.ok){
       if(response.status===401){this.token='';this.close();this.onAuthError();}
-      throw responseError(result.error||'云端请求失败',response.status);
+      throw responseError(result.error||'云端请求失败',response.status,result.uncertain===true);
     }
     return result;
   }

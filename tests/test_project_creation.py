@@ -62,11 +62,13 @@ class ProjectCreationTests(unittest.TestCase):
         self.journal = Journal(self.home / 'jobs.sqlite')
         self.bridge = OwnerBridge('fake', ProjectCatalog(self.home), self.journal,
                                   owner_directory=self.home / 'owner', ipc_factory=Follower)
-        self.bridge.enable()
         self.manager = OwnerManager(self.home, self.home / 'owner', self.bridge.catalog,
                                     runtime_factory=Creator, transport_factory=Bus)
         self.bridge.owner_service = self.manager
+        self.bridge.enable()
         self.bridge.ipc.manager = self.manager
+        with self.manager.prewarm.condition:
+            self.assertTrue(self.manager.prewarm.condition.wait_for(lambda: self.manager.prewarm.worker is None, timeout=2))
         Creator.instances = []; Creator.hook = None; Creator.error = None
     def tearDown(self):
         self.bridge.shutdown(); self.journal.conn.close(); self.temp.cleanup()

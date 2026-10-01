@@ -10,7 +10,7 @@ Group=carryon
 WorkingDirectory=/opt/carryon/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/opt/carryon/current/release.env
-ExecStart=/usr/bin/python3.11 -m carryon.gateway serve --config /etc/carryon/gateway.json --port 8780
+ExecStart=/usr/bin/python3.11 -m carryon.cloud.gateway serve --config /etc/carryon/gateway.json --port 8780
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15

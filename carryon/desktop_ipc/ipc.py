@@ -31,6 +31,9 @@ class DesktopIPC:
     OWNER_VERSION = 1
     HISTORY_VERSION = 1
     START_VERSION = 2
+    # The native router discovers a handler before starting timeoutMs. Its
+    # discovery deadline is 10 seconds, including for targeted requests.
+    DISCOVERY_TIMEOUT_SECONDS = 10
 
     def __init__(self, path):
         self.path = str(path)
@@ -103,7 +106,8 @@ class DesktopIPC:
             else:
                 attempted = True
                 self._write(message)
-            if not waiter["event"].wait(timeout_ms / 1000 + 3):
+            discovery = 0 if method == 'initialize' else self.DISCOVERY_TIMEOUT_SECONDS
+            if not waiter["event"].wait(discovery + timeout_ms / 1000 + 3):
                 raise IPCError("Codex 响应超时；不要自动重发", uncertain=True)
             if "error" in waiter:
                 raise IPCError(waiter["error"], uncertain=attempted)
@@ -133,6 +137,18 @@ class DesktopIPC:
     def snapshot(self, thread_id):
         with self._snapshot_lock(thread_id):
             return self._snapshot(thread_id)
+
+    def refresh_snapshot(self, thread_id):
+        try:
+            owner = self.owner(thread_id, timeout_ms=1500)
+        except IPCError as error:
+            if str(error) == 'no-client-found':
+                with self.lock:
+                    self.snapshots.pop(thread_id, None)
+                    self.following.pop(thread_id, None)
+            raise
+        with self._snapshot_lock(thread_id):
+            return self._snapshot(thread_id, owner)
 
     def sidebar_snapshot(self, thread_id):
         # Discovery for unloaded threads must not hold the full-history lock.

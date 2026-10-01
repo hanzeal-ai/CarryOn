@@ -30,10 +30,12 @@ public enum OutgoingMessageProjection {
             questions.contains { $0["id"] == reply["questionItemId"] && $0["answer"] == reply["answer"] }
         }
     }
-    /// Native acceptance ends the temporary bubble, independently of history loading.
+    /// Keep the temporary bubble until matching native history replaces it.
     public static func merge(_ previous: JSONValue?, _ update: JSONValue, live: Bool = false) -> JSONValue? {
         guard var fields = previous?.object else { return nil }
-        if ["accepted", "completed", "inProgress", "acknowledged"].contains(update["state"].text) { return nil }
+        if update["state"].text == "acknowledged" { return nil }
+        if ["accepted", "completed", "inProgress"].contains(previous?["state"].text ?? "") &&
+            ["sending", "preparing", "dispatching", "failed", "uncertain"].contains(update["state"].text) { return previous }
         if ["failed", "uncertain"].contains(previous?["state"].text ?? "") && ["preparing", "dispatching"].contains(update["state"].text) { return previous }
         if case .number(let old) = previous?["updated"], case .number(let new) = update["updated"], new < old { return previous }
         for (key, value) in update.object ?? [:] where key != "created" { fields[key] = value }

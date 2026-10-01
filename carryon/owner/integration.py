@@ -1,5 +1,6 @@
 """Composition root for desktop workspace session ownership."""
 import time
+import threading
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.catalog import valid_id
 from carryon.contracts import digest, validate_request_id
@@ -13,6 +14,12 @@ class OwnerBridge(Bridge):
         super().__init__(socket_path, catalog, journal, **kwargs)
         self.owner_directory = owner_directory
         self.owner_service = None
+        self.compose_workers = set()
+
+    def enable(self):
+        result = super().enable()
+        self.owners()
+        return result
 
     def status(self):
         return {**super().status(), 'supportsSessionLoading': True}
@@ -23,6 +30,44 @@ class OwnerBridge(Bridge):
             if self.owner_service is None:
                 self.owner_service = OwnerManager(self.catalog.home, self.owner_directory, self.catalog)
             return self.owner_service
+
+    def prepare_compose(self, thread_id, request_id, fingerprint, source, authorize, run):
+        # Persist identity before slow discovery/resume, so the cloud can return
+        # promptly and both HTTP and live updates can track the same request.
+        with self.lock:
+            self.require()
+            if authorize: authorize()
+            previous = self.journal.get(request_id)
+            if previous:
+                if previous.get('composeFingerprint') != fingerprint:
+                    raise BridgeError('requestId 已用于不同内容')
+                return previous
+            if any(j['threadId'] == thread_id and j['state'] in ('preparing', 'dispatching')
+                   for j in self.journal.list()):
+                raise BridgeError('会话正在提交操作，请稍后重试')
+            job = {'id': request_id, 'threadId': thread_id, 'kind': 'compose',
+                   'state': 'preparing', 'created': time.time(), 'fingerprint': fingerprint,
+                   **(source or {}), 'composeFingerprint': fingerprint}
+            self.journal.insert(job)
+        def execute():
+            try: run(job)
+            except Exception as exc:
+                # No turn was sent by compose's preparation. Dispatch owns any
+                # subsequent accepted/failed/uncertain receipt itself.
+                self.journal.update(request_id, expected=job, state='failed', error=str(exc))
+            finally:
+                with self.lock: self.compose_workers.discard(threading.current_thread())
+        worker = None
+        with self.lock:
+            try:
+                self.require()
+                worker = threading.Thread(target=execute, daemon=True, name='owner-compose')
+                self.compose_workers.add(worker)
+                worker.start()
+            except Exception as exc:
+                if worker is not None: self.compose_workers.discard(worker)
+                return self.journal.update(request_id, expected=job, state='failed', error=str(exc))
+        return self.journal.get(request_id)
 
     def send_snapshot(self, ipc, generation, thread_id, authorize=None, parent_id=None):
         try:
@@ -85,4 +130,6 @@ class OwnerBridge(Bridge):
         result = super().disable()
         service, self.owner_service = self.owner_service, None
         if service: service.close()
+        with self.lock: workers = list(self.compose_workers)
+        for worker in workers: worker.join()
         return result

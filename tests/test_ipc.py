@@ -184,3 +184,29 @@ class IncomingResponseLifetimeTests(unittest.TestCase):
                 finally: proceed.set()
                 self.assertTrue(done.wait(1))
                 self.assertEqual(ipc.requests_in_flight, 0)
+
+
+class RouterDiscoveryDeadlineTests(unittest.TestCase):
+    def test_slow_discovery_returns_definite_missing_owner_without_resend(self):
+        # The native router discovery deadline is independent of timeoutMs.
+        # A late no-client-found must arrive before our local request expires.
+        left, right = socket.socketpair()
+        ipc = DesktopIPC('unused'); ipc.sock = left
+        reader = threading.Thread(target=ipc._reader, args=(left,), daemon=True); reader.start()
+        requests = []
+        def router():
+            size = struct.unpack('<I', DesktopIPC._exact(right, 4))[0]
+            request = json.loads(DesktopIPC._exact(right, size)); requests.append(request)
+            threading.Event().wait(3.1)
+            payload = json.dumps({'type': 'response', 'requestId': request['requestId'],
+                                  'resultType': 'error', 'error': 'no-client-found'}).encode()
+            right.sendall(struct.pack('<I', len(payload)) + payload)
+        worker = threading.Thread(target=router); worker.start()
+        try:
+            with self.assertRaisesRegex(IPCError, '^no-client-found$') as caught:
+                ipc.owner('11111111-1111-4111-8111-111111111111', timeout_ms=20)
+            self.assertFalse(caught.exception.uncertain)
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0]['timeoutMs'], 20)
+        finally:
+            worker.join(5); ipc.close(); right.close(); reader.join(1)

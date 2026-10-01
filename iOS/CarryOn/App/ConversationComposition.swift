@@ -33,7 +33,7 @@ extension AppModel {
         if edit != .null {
             success = await operation("edit", fields: ["turnId": edit["turnId"], "prompt": .string(text), "confirmed": .bool(true)])
         } else {
-            success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body)
+            success = await write(path: "/api/threads/\(ConsoleAddress.component(thread.id))/compose", target: thread.id, body: body, draftSubmission: true)
         }
         if success, edit != .null {
             if editingMessage == edit { cancelEditing() }

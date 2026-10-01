@@ -114,7 +114,8 @@ struct ThreadRow: View {
         return path.split(separator: "/").last.map(String.init) ?? "最近"
     }
     var body: some View {
-        let state = record.value["status"]["state"].text
+        let status = model.listStatus(record)
+        let state = status["state"].text
         HStack(spacing: 13) {
             SymbolTile(name: "bubble.left.and.bubble.right", color: state == "running" && model.connected ? Design.green : Design.secondary)
             VStack(alignment: .leading, spacing: 5) {
@@ -122,12 +123,10 @@ struct ThreadRow: View {
                     if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7).accessibilityLabel("未读") }
                 }
                 Text(projectName).font(.caption).foregroundStyle(Design.secondary).lineLimit(1)
-                Text(record.value["failed"].bool == true ? "执行失败" : record.value["status"]["label"].string ?? "状态未知")
-                    .font(.caption).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
-                if case .number(let time) = (state == "idle" && record.value["completedAt"] != .null ? record.value["completedAt"] : record.value["updated_at"]) {
-                    Text(Date(timeIntervalSince1970: time), style: .relative)
-                        .font(.caption).foregroundStyle(Design.secondary)
-                }
+                HStack(spacing: 5) {
+                    if state == "running" { ProgressView().controlSize(.mini) }
+                    Text(state == "error" || (state == "idle" && record.value["failed"].bool == true) ? "执行失败" : status["label"].string ?? "状态未知")
+                }.font(.caption).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)

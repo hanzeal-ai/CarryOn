@@ -17,6 +17,9 @@ class Realtime:
         self.sessions = set()
         self.watched = {}
         self.unavailable = {}
+        self.load_attempts = {}
+        self.load_sequence = 0
+        self.refresh_threads = set()
         self.closed = threading.Event()
         self.workers = []
         self.load_event = threading.Event()
@@ -53,10 +56,74 @@ class Realtime:
                     source.unwatch(tid)
                     del self.watched[tid]
                     self.unavailable.pop(tid, None)
+                    self.load_attempts.pop(tid, None)
+                    self.refresh_threads.discard(tid)
             for tid in desired:
                 if tid not in self.watched:
                     ipc.watch(tid)
                     self.watched[tid] = ipc
+
+    def thread_status(self, tid, ipc, native):
+        """HTTP lists and live rows use the same native evidence and probe result."""
+        with self.bridge.lock:
+            previous = self.unavailable.get(tid)
+            if native is not None:
+                return project_status(native)
+            if previous and previous[0] is ipc and previous[2]:
+                return dict(previous[2])
+        return {'state': 'loading', 'label': '检测中'}
+
+    def _status_changed(self):
+        workspace = getattr(self.bridge, 'workspace', None)
+        if workspace is not None:
+            workspace.invalidate_status()
+        else:
+            self.bridge.notify()
+
+    def refresh_statuses(self, ids):
+        """Retry missing snapshots without resuming tasks or discarding live state."""
+        changed = False
+        with self.bridge.lock:
+            ipc = self.bridge.ipc
+            for tid in ids:
+                native = ipc.current(tid) if ipc else None
+                if native is not None and not native.get('_metadataOnly'):
+                    continue
+                changed |= self.unavailable.pop(tid, None) is not None
+                self.refresh_threads.add(tid)
+            self.load_event.set()
+        if changed:
+            self._status_changed()
+
+    def _load_candidates(self, pending):
+        """Prefer visible rows; within each tier, untouched/oldest probes go first."""
+        with self.bridge.lock:
+            selected = {s.selection['threadId'] for s in self.sessions if s.selection['threadId']}
+            visible = {tid for s in self.sessions for tid in s.selection['threadIds']}
+            visible.update(self.refresh_threads)
+            candidates = []
+            now = time.monotonic()
+            for tid, ipc in self.watched.items():
+                previous = self.unavailable.get(tid)
+                state = ipc.current(tid)
+                if (tid in pending or (state is not None and not state.get('_metadataOnly')) or
+                    previous and previous[0] is ipc and now - previous[1] < 30):
+                    continue
+                tier = 0 if tid in selected else 1 if tid in visible else 2
+                candidates.append((tier, self.load_attempts.get(tid, -1), tid))
+            candidates.sort()
+            slots = max(0, 4 - len(pending))
+            # Keep background discovery moving even while foreground misses retry.
+            background = [row[2] for row in candidates if row[0] == 2]
+            ids = [row[2] for row in candidates[:slots]]
+            if slots and background and not any(tid not in selected | visible for tid in pending):
+                if ids and all(tid in selected | visible for tid in ids):
+                    ids[-1] = background[0]
+            for tid in ids:
+                self.load_sequence += 1
+                self.load_attempts[tid] = self.load_sequence
+                self.refresh_threads.discard(tid)
+            return ids
 
     def _load(self, tid):
         with self.bridge.lock:
@@ -77,8 +144,13 @@ class Realtime:
         with self.bridge.lock:
             if self.closed.is_set() or self.watched.get(tid) is not ipc or self.bridge.ipc is not ipc:
                 return
+            previous = self.unavailable.get(tid)
             self.unavailable[tid] = (ipc, time.monotonic(), result)
-        self.bridge.notify()
+            changed = previous is None or previous[0] is not ipc or previous[2] != result
+        if changed:
+            self._status_changed()
+        else:
+            self.bridge.notify()
 
     def _load_sidebar(self):
         # Bounded submissions, no blocking map over the entire directory. A newly
@@ -91,20 +163,7 @@ class Realtime:
                 if self.closed.is_set(): break
                 pending = {tid: future for tid, future in pending.items() if not future.done()}
                 self.sync_watches()
-                with self.bridge.lock:
-                    selected = {s.selection['threadId'] for s in self.sessions if s.selection['threadId']}
-                    ids = {tid for s in self.sessions for tid in s.selection['threadIds']}
-                    if hasattr(self.bridge,'workspace'):ids.update(self.bridge.workspace.thread_ids())
-                    candidates = []
-                    for tid in list(selected) + list(ids - selected):
-                        ipc = self.watched.get(tid)
-                        previous = self.unavailable.get(tid)
-                        state = ipc.current(tid) if ipc else None
-                        if (tid in pending or ipc is None or (state is not None and not state.get('_metadataOnly')) or
-                            previous and previous[0] is ipc and time.monotonic() - previous[1] < 30):
-                            continue
-                        candidates.append(tid)
-                for tid in candidates[:max(0, 4-len(pending))]:
+                for tid in self._load_candidates(pending):
                     pending[tid] = pool.submit(self._load, tid)
 
     def _reconcile(self):
@@ -210,15 +269,9 @@ class Subscription:
             self.owner.sync_watches()
             if hasattr(self.bridge,'workspace'):packet['workspaceRevision']=self.bridge.workspace.revision
             packet['jobs'] = self.bridge.journal.list(limit=100)
-            with self.bridge.lock:
-                missing = dict(self.owner.unavailable)
             packet['threadStatuses'] = {}
             for tid in ids:
-                native = ipc.current(tid)
-                unavailable = missing.get(tid)
-                packet['threadStatuses'][tid] = (project_status(native) if native is not None else
-                    unavailable[2] if unavailable and unavailable[0] is ipc and unavailable[2] else
-                    {'state': 'loading', 'label': '检测中'})
+                packet['threadStatuses'][tid] = self.owner.thread_status(tid, ipc, ipc.current(tid))
             if hasattr(ipc, 'events'):
                 with ipc.lock:
                     packet['catalogRevision'] = ipc.events.catalog_revision

@@ -24,6 +24,11 @@ class Catalog:
         self.lock = threading.Lock()
         self.rollout_cache = {}
 
+    def desktop_read_state(self):
+        if self.independent:return None
+        from carryon.desktop_ipc.read_state import DesktopReadState
+        return DesktopReadState(self.home)
+
     def children(self, parent_id):
         from carryon.sessions.subagents import spawn_source
         valid_id(parent_id)

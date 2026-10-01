@@ -44,10 +44,15 @@ struct ProjectsView: View {
     var requestVersion = UUID()
     var clearing = false
     var updatedAt = Date.distantPast
+    let watchID = UUID()
+    var visibleThreadIDs: Set<String> = []
+    var isVisible = false
+    var refreshPending = false
     func reset() {
         search = ""; filter = "all"; scrollID = nil; loadedQueryIdentity = ""
         records = []; total = 0; offset = 0; loadKind = .initial
         failure = nil; requestVersion = UUID(); clearing = false; updatedAt = .distantPast
+        visibleThreadIDs = []; refreshPending = false
     }
 }
 
@@ -107,6 +112,8 @@ struct RecordListView: View {
                                         .id(record.id)
                                 } else {
                                     Button { select(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
+                                        .onAppear { state.visibleThreadIDs.insert(record.id); syncListWatch() }
+                                        .onDisappear { state.visibleThreadIDs.remove(record.id); syncListWatch() }
                                 }
                                 if record.id != state.records.last?.id { Divider().padding(.leading, 16) }
                             }
@@ -161,9 +168,16 @@ struct RecordListView: View {
                 if connected { Task { await load(reset: true, kind: .background) } }
             }
             .onChange(of: model.workspaceRevision) { _, _ in Task { await load(reset: true, kind: .background) } }
+            .onAppear { state.isVisible = true; syncListWatch() }
+            .onDisappear { state.isVisible = false; model.watchList(state.watchID, threads: []) }
+            .onChange(of: model.scope) { _, _ in state.visibleThreadIDs = []; syncListWatch() }
             .onChange(of: model.activitySnapshots.isEmpty) { _, empty in
                 if path == "/api/activity", empty { Task { await load(reset: true, kind: .background) } }
             }
+    }
+    private func syncListWatch() {
+        guard !isProjectList, path != "/api/activity", state.isVisible else { return }
+        model.watchList(state.watchID, threads: state.visibleThreadIDs)
     }
     private func clearRead() async {
         state.clearing = true; defer { state.clearing = false }
@@ -193,26 +207,53 @@ struct RecordListView: View {
     @ViewBuilder private func counts(_ record: Record) -> some View {
         let waiting = record.value["waiting"].int ?? 0, running = record.value["running"].int ?? 0, unread = record.value["unread"].int ?? 0
         if waiting > 0 { CountPill(text: "\(waiting) 待处理", color: Design.orange) }
-        if running > 0 { CountPill(text: "\(running) 进行中", color: Design.green) }
+        if running > 0 && model.connected { CountPill(text: "\(running) 进行中", color: Design.green) }
         if unread > 0 { CountPill(text: "\(unread) 未读", color: Design.blue) }
     }
-    private func requestPath(offset requestedOffset: Int) -> String {
+    private func requestPath(offset requestedOffset: Int, refreshStatuses: Bool = false) -> String {
         let excluded = excludedThreadID.map { "&excludeThreadId=" + ConsoleAddress.component($0) } ?? ""
-        return path + "?limit=50&offset=\(requestedOffset)&search=\(ConsoleAddress.component(state.search))&filter=\(state.filter)&availableOnly=\(!showInactiveConversations)" + excluded + (retainReadActivity ? "&includeRead=true" : "")
+        return path + "?limit=50&offset=\(requestedOffset)&search=\(ConsoleAddress.component(state.search))&filter=\(state.filter)&availableOnly=\(!showInactiveConversations)" + excluded + (retainReadActivity ? "&includeRead=true" : "") + (refreshStatuses ? "&refreshStatuses=true&sync=full" : "")
     }
     private func load(reset: Bool, kind: LoadKind = .initial, debounce: Bool = false) async {
-        if (kind == .more || kind == .background) && loading { return }
+        if (kind == .more || kind == .background) && loading {
+            if kind == .background { state.refreshPending = true }
+            return
+        }
         // Reading a detail may remove its row from the unread query. Keep its sheet alive until dismissed.
         if path == "/api/activity", !model.activitySnapshots.isEmpty { return }
         guard !model.selectedDevice.isEmpty else { state.loadKind = nil; return }
         let version = UUID(); state.requestVersion = version
         state.loadKind = kind; state.failure = nil
-        defer { if state.requestVersion == version { state.loadKind = nil } }
+        defer {
+            if state.requestVersion == version {
+                state.loadKind = nil
+                let refresh = state.refreshPending
+                state.refreshPending = false
+                if refresh, state.isVisible, !Task.isCancelled {
+                    Task { await load(reset: true, kind: .background) }
+                }
+            }
+        }
         do {
             if debounce { try await Task.sleep(for: .milliseconds(300)) }
             try Task.checkCancellation()
             let desired = reset && kind == .background ? max(50, state.records.count) : 50
-            var next = try RecordPage(try await model.cachedDeviceRequest(requestPath(offset: reset ? 0 : state.offset), maxAge: kind == .initial ? 30 : 0), key: key)
+            let request = requestPath(offset: reset ? 0 : state.offset, refreshStatuses: kind == .refresh)
+            var value = try await model.cachedDeviceRequest(request, maxAge: kind == .initial ? 30 : 0)
+            if kind == .refresh && value["sync"]["state"].string == nil {
+                throw APIError("工作区服务尚不支持完整同步，请更新桌面端 CarryOn")
+            }
+            while value["sync"]["state"].string == "running" {
+                guard version == state.requestVersion, !Task.isCancelled else { return }
+                guard let syncID = value["sync"]["id"].string else { throw APIError("同步响应缺少标识") }
+                try await Task.sleep(for: .milliseconds(500))
+                value = try await model.cachedDeviceRequest(requestPath(offset: 0) + "&syncId=" + ConsoleAddress.component(syncID), maxAge: 0)
+            }
+            if value["sync"]["state"].string == "failed" { throw APIError(value["sync"]["error"].string ?? "工作区同步失败，请重试") }
+            if kind == .refresh && value["sync"]["state"].string != "completed" {
+                throw APIError("未收到同步完成确认，请重试")
+            }
+            var next = try RecordPage(value, key: key)
             var refreshed = next.records
             while reset && refreshed.count < min(desired, next.total) && !next.records.isEmpty {
                 guard version == state.requestVersion, !Task.isCancelled else { return }

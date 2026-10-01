@@ -37,10 +37,10 @@ private func replyPrompt(answer: String = "允许") throws -> String {
     #expect(OutgoingMessageProjection.isReflected(item, in: history("message-1", "accepted")))
 }
 
-@Test func nativeReceiptsRemoveTemporaryBubbleWithoutAnyHistory() {
+@Test func nativeReceiptsRetainTemporaryBubbleUntilMatchingHistory() {
     let sending: JSONValue = .object(["state": .string("sending"), "prompt": .string("hello")])
-    for state in ["accepted", "completed", "inProgress", "acknowledged"] {
-        #expect(OutgoingMessageProjection.merge(sending, .object(["state": .string(state)])) == nil)
+    for state in ["accepted", "completed", "inProgress"] {
+        #expect(OutgoingMessageProjection.merge(sending, .object(["state": .string(state)]))?["prompt"].text == "hello")
     }
     let pending = OutgoingMessageProjection.merge(sending, .object(["state": .string("dispatching")]), live: true)
     #expect(OutgoingMessageProjection.merge(pending, .object(["state": .string("failed")]))?["state"].text == "failed")

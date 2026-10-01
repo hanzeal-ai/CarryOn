@@ -7,17 +7,17 @@ import sys
 import time
 
 if len(sys.argv) not in (2, 3):
-    raise SystemExit("Usage: python3 tests/run_ios_navigation_regression.py <booted-simulator-id> [navigation|alignment|tabs]")
+    raise SystemExit("Usage: python3 tests/run_ios_navigation_regression.py <booted-simulator-id> [navigation|alignment|tabs|statuses|activity]")
 repo = Path(__file__).resolve().parents[1]
 mode = sys.argv[2] if len(sys.argv) == 3 else "navigation"
-if mode not in ("navigation", "alignment", "tabs"): raise SystemExit("Unknown regression")
+if mode not in ("navigation", "alignment", "tabs", "statuses", "activity"): raise SystemExit("Unknown regression")
 work = repo / (".runtime/" + mode + "-regression")
 source = work / "source"
 source.mkdir(parents=True, exist_ok=True)
 for directory in ("CarryOn", "CarryOn.xcodeproj", "Tests"):
     shutil.copytree(repo / "iOS" / directory, source / directory, dirs_exist_ok=True)
 shutil.copy2(repo / "iOS/Package.swift", source / "Package.swift")
-fixtures = {"navigation": "ios_navigation_regression.swift", "alignment": "ios_codex_alignment.swift", "tabs": "ios_tabs_regression.swift"}
+fixtures = {"navigation": "ios_navigation_regression.swift", "alignment": "ios_codex_alignment.swift", "tabs": "ios_tabs_regression.swift", "statuses": "ios_list_status_regression.swift", "activity": "ios_activity_regression.swift"}
 shutil.copy2(repo / "tests/fixtures" / fixtures[mode], source / "CarryOn/App/CarryOnApp.swift")
 if mode == "tabs":
     # Drive the same selection state as the bottom buttons, only in the test copy.
@@ -42,9 +42,50 @@ if mode == "tabs":
         }
         '''
     root.write_text(original.replace(anchor, hooks + anchor, 1))
-if mode == "alignment":
+if mode in ("alignment", "activity"):
     with (source / "CarryOn/App/AppModel.swift").open("a") as handle:
         handle.write("\nextension AppModel { func fixtureClient(_ client: ConsoleAPI) { api = client } }\n")
+if mode == "activity":
+    row = source / "CarryOn/App/ActivityRow.swift"
+    anchor = '.accessibilityValue(unread ? "未读" : "已读")'
+    original = row.read_text()
+    if anchor not in original: raise SystemExit("Activity fixture injection point is missing")
+    row.write_text(original.replace(anchor, anchor + '''
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.activity.open"))) { note in
+                if note.object as? String == record.id { openDetails() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.activity.close"))) { note in
+                if note.object as? String == record.id { showingDetails = false }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.activity.inspect"))) { note in
+                if note.object as? String == record.id {
+                    NotificationCenter.default.post(name: Notification.Name("fixture.activity.state"), object: [
+                        "loading": showInitialLoading, "snapshot": snapshot != .null,
+                        "canPerform": model.canPerform(target), "failure": failure != nil])
+                }
+            }
+''', 1))
+if mode == "statuses":
+    # Trigger the production refresh action in both real SwiftUI lists. This
+    # notification hook exists only in the isolated regression app copy.
+    lists = source / "CarryOn/App/ProjectsView.swift"
+    anchor = '.refreshable { await load(reset: true, kind: .refresh) }'
+    original = lists.read_text()
+    if anchor not in original: raise SystemExit("List refresh fixture injection point is missing")
+    lists.write_text(original.replace(anchor, anchor + '''
+                .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.listRefresh"))) { _ in
+                    Task { await load(reset: true, kind: .refresh) }
+                }
+''', 1))
+    with (source / "CarryOn/App/AppModel.swift").open("a") as handle:
+        handle.write('''
+extension AppModel {
+    func fixtureClient(_ client: ConsoleAPI) { api = client }
+    func fixtureSelection() -> JSONValue { selection(selectedThread?.id) }
+    func fixturePacket(_ packet: JSONValue) async { await apply(packet, threadID: selectedThread?.id) }
+    func fixtureResetScope() { epoch = UUID() }
+}
+''')
 project = source / "CarryOn.xcodeproj/project.pbxproj"
 project.write_text(project.read_text().replace("com.hanzeal.carryon", "com.hanzeal.carryon." + mode + "regression"))
 # The project bundles its product configuration from the adjacent package.

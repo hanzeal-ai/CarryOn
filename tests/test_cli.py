@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import re
 import unittest
 from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
@@ -37,6 +38,12 @@ class CLITests(unittest.TestCase):
                 import urllib.request
                 with urllib.request.urlopen(f"http://127.0.0.1:{info['port']}/client.js") as response:
                     self.assertIn(b'CarryOnClient',response.read())
+                with urllib.request.urlopen(f"http://127.0.0.1:{info['port']}/example.html") as response:
+                    page=response.read().decode()
+                for asset in set(re.findall(r'(?:src|href)="/([^"?]+\.(?:js|css))"',page)):
+                    with self.subTest(asset=asset), urllib.request.urlopen(f"http://127.0.0.1:{info['port']}/"+asset) as response:
+                        self.assertEqual(response.status,200)
+                        self.assertTrue(response.read())
                 self.assertEqual((state/'token').stat().st_mode&0o777,0o600)
                 stopped=run('stop');self.assertEqual(stopped.returncode,0,stopped.stderr)
                 self.assertEqual(run('status').returncode,1)

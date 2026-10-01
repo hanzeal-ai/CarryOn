@@ -51,6 +51,43 @@ class WorkspaceTests(unittest.TestCase):
         state={'id':tid,'threadRuntimeStatus':{'type':'active' if status=='inProgress' else 'idle'},'turns':[{'turnId':'turn-1','status':status,'items':[{'id':'message-1','type':'agentMessage','text':text}]}],'requests':[]}
         if request:state['requests']=[{'id':1,'method':'item/tool/requestUserInput','params':{'questions':[]}}]
         self.bridge.ipc.states[tid]=state;self.workspace.observe(state);return state
+    def test_manual_refresh_reads_current_catalog_before_building_each_list(self):
+        from unittest.mock import patch
+        from carryon.routes.realtime import Realtime
+        realtime=Realtime(self.bridge);self.bridge.realtime=realtime;realtime.sync_watches()
+        fresh=[{'id':T,'title':'Renamed on desktop','cwd':'/moved/project'},
+               {'id':'33333333-3333-4333-8333-333333333333','title':'New on desktop','cwd':'/new/project'}]
+        pid=project_identity('/moved/project')[0]
+        for path in ('/api/projects','/api/workspace/threads','/api/projects/'+pid+'/threads','/api/activity'):
+            with self.subTest(path=path):
+                self.workspace.catalog_refresh()
+                with patch.object(self.bridge.catalog,'list',return_value=fresh) as read:
+                    result=self.workspace.dispatch('local','GET',path,None,{'refreshStatuses':['true']})[1]
+                    read.assert_called_once()
+                self.assertEqual(set(self.workspace.rows),{row['id'] for row in fresh})
+                self.assertEqual(self.workspace.rows[T]['title'],'Renamed on desktop')
+                self.assertNotIn(U,realtime.watched)
+                self.assertIn(fresh[1]['id'],realtime.watched)
+                if path=='/api/projects':
+                    self.assertEqual({p['cwd'] for p in result['projects']},{'/moved/project','/new/project'})
+                elif path!='/api/activity':
+                    self.assertEqual(next(t for t in result['threads'] if t['id']==T)['title'],'Renamed on desktop')
+                    self.assertNotIn(U,{t['id'] for t in result['threads']})
+
+    def test_manual_refresh_failure_is_not_reported_as_stale_success(self):
+        from unittest.mock import patch
+        before=copy.deepcopy(self.workspace.rows)
+        with patch.object(self.bridge.catalog,'list',side_effect=ValueError('catalog unavailable')):
+            with self.assertRaisesRegex(ValueError,'catalog unavailable'):
+                self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'refreshStatuses':['true']})
+        self.assertEqual(self.workspace.rows,before)
+
+    def test_ordinary_list_request_keeps_background_catalog_policy(self):
+        from unittest.mock import patch
+        with patch.object(self.bridge.catalog,'list') as read:
+            self.workspace.dispatch('local','GET','/api/workspace/threads',None,{})
+            read.assert_not_called()
+
     def test_active_async_question_is_actionable_without_exposing_running_process(self):
         import json
         from carryon.sessions.questions import OPEN, CLOSE
@@ -85,6 +122,22 @@ class WorkspaceTests(unittest.TestCase):
         # Delivery-journal completion cannot fabricate native completion events.
         self.journal.insert({'id':'fake-job','fingerprint':'f','kind':'message','threadId':U,'state':'completed','created':1})
         self.assertEqual(len(self.workspace.events('local')['events']),2)
+    def test_runtime_only_changes_wake_lists_and_update_project_counts(self):
+        before = self.bridge.event_revision
+        state = self.observe()
+        self.assertGreater(self.bridge.event_revision, before)
+        self.assertEqual(self.workspace.events('local')['events'], [])
+        self.assertEqual(sum(p['running'] for p in self.workspace.projection('local')[0]), 1)
+        unchanged = self.bridge.event_revision
+        self.workspace.observe(state)
+        self.assertEqual(self.bridge.event_revision, unchanged)
+        state = copy.deepcopy(state)
+        state['threadRuntimeStatus'] = {'type': 'idle'}
+        self.bridge.ipc.states[T] = state
+        self.workspace.observe(state)
+        self.assertGreater(self.bridge.event_revision, unchanged)
+        self.assertEqual(sum(p['running'] for p in self.workspace.projection('local')[0]), 0)
+        self.assertEqual(self.workspace.events('local')['events'], [])
     def test_initial_history_baseline_pending_requests_and_changed_fingerprint(self):
         self.observe(status='completed');self.assertEqual(self.workspace.events('local')['events'],[])
         state=self.observe(request=True);self.assertEqual(len(self.workspace.events('local')['events']),1)
@@ -540,6 +593,7 @@ class AvailableConversationTests(unittest.TestCase):
 
     def test_available_filter_counts_projects_and_paginates_after_filtering(self):
         self.observe(T,status='completed')
+        self.bridge.ipc.states[U]={'threadRuntimeStatus':{'type':'notLoaded'}}
         query={'availableOnly':['true'],'limit':['1']}
         page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,query)[1]
         self.assertEqual([t['id'] for t in page['threads']],[T])
@@ -552,14 +606,49 @@ class AvailableConversationTests(unittest.TestCase):
         self.assertEqual(all_threads['total'],2)
         self.assertFalse(next(t for t in all_threads['threads'] if t['id']==U)['available'])
 
-    def test_unloaded_metadata_and_lost_snapshot_are_hidden(self):
+    def test_confirmed_unloaded_and_metadata_are_hidden(self):
+        self.bridge.ipc.states[U]={'threadRuntimeStatus':{'type':'notLoaded'}}
         for state in ({'threadRuntimeStatus':{'type':'notLoaded'}},
-                      {'threadRuntimeStatus':{'type':'idle'},'_metadataOnly':True},
-                      None):
-            if state is None:self.bridge.ipc.states.pop(T,None)
-            else:self.bridge.ipc.states[T]=state
+                      {'threadRuntimeStatus':{'type':'idle'},'_metadataOnly':True}):
+            self.bridge.ipc.states[T]=state
             page=self.workspace.dispatch('local','GET','/api/workspace/threads',None,{'availableOnly':['true']})[1]
             self.assertEqual(page['total'],0)
+
+    def test_unconfirmed_list_rows_stay_visible_until_native_probe_finishes(self):
+        from carryon.routes.realtime import Realtime
+        realtime=Realtime(self.bridge);self.bridge.realtime=realtime;realtime.sync_watches()
+        query={'availableOnly':['true']}
+        page=lambda:self.workspace.dispatch('local','GET','/api/workspace/threads',None,query)[1]
+        row=next(row for row in page()['threads'] if row['id']==T)
+        self.assertEqual(row['status']['state'],'loading')
+        self.assertFalse(row['available'])
+        # A definite native routing miss hides only that conversation, including
+        # from project aggregates, and invalidates already displayed pages.
+        from carryon.desktop_ipc.ipc import IPCError
+        self.bridge.ipc.sidebar_snapshot=lambda tid:(_ for _ in ()).throw(IPCError('no-client-found'))
+        before=self.workspace.revision
+        realtime._load(T)
+        self.assertGreater(self.workspace.revision,before)
+        self.assertEqual([row['id'] for row in page()['threads']],[U])
+        self.assertEqual(self.workspace.dispatch('local','GET','/api/projects',None,query)[1]['total'],1)
+        self.observe(T)
+        self.assertEqual(next(row for row in page()['threads'] if row['id']==T)['status']['state'],'running')
+
+    def test_refresh_reprobes_hidden_rows_in_requested_project_only(self):
+        from carryon.routes.realtime import Realtime
+        import time
+        realtime=Realtime(self.bridge);self.bridge.realtime=realtime;realtime.sync_watches()
+        for tid in (T,U):realtime.unavailable[tid]=(self.bridge.ipc,time.monotonic(),{'state':'notLoaded','label':'未加载'})
+        pid=project_identity('/one/same')[0]
+        before=self.workspace.revision
+        result=self.workspace.dispatch('local','GET','/api/projects/'+pid+'/threads',None,
+            {'availableOnly':['true'],'refreshStatuses':['true']})[1]
+        self.assertEqual([row['id'] for row in result['threads']],[T])
+        self.assertEqual(result['threads'][0]['status']['state'],'loading')
+        self.assertGreater(self.workspace.revision,before)
+        self.assertIn(U,realtime.unavailable)
+        self.assertEqual(realtime.refresh_threads,{T})
+        self.assertTrue(realtime.load_event.is_set())
 
     def test_unread_activity_filter_hides_unloaded_without_marking_read(self):
         for tid in (T,U):

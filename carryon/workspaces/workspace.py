@@ -30,6 +30,9 @@ def row_project_identity(row):
 class Workspace:
     def __init__(self,bridge):
         self.bridge=bridge;self.db=bridge.journal.conn;self.lock=bridge.journal.lock
+        self.catalog_lock=threading.Lock()
+        from carryon.workspaces.sync import WorkspaceSync
+        self.sync=WorkspaceSync(self)
         self.turn_candidates={};self.rows={};self.states={};self.fingerprints={};self.native_refs={};self.error=None;self.closed=threading.Event();self.worker=None;self.observer=None;self.revision=0
         with self.lock:
             self.db.executescript('''
@@ -46,19 +49,75 @@ class Workspace:
 
     def close(self):
         self.closed.set()
+        self.sync.close()
         if self.worker:self.worker.join(5)
         if self.observer:self.observer.close()
 
     def thread_ids(self):
         with self.lock:return set(self.rows)
 
-    def catalog_refresh(self):
-        rows=self.bridge.catalog.list(2147483647,0,'')
+    def desktop_reads(self):
+        factory=getattr(self.bridge.catalog,'desktop_read_state',None)
+        return factory() if factory else None
+
+    def native_reader(self):
+        source=self.desktop_reads()
+        if source is None:return 'native:codex'
+        try:return 'native:codex:'+source.identity()
+        except ValueError:return 'native:unavailable'
+
+    def read_cutoffs(self):
         with self.lock:
-            fresh={r['id']:dict(r) for r in rows}
-            if fresh!=self.rows:self.revision+=1
-            self.turn_candidates={k:v for k,v in self.turn_candidates.items() if k in fresh}
-            self.rows=fresh;self.native_refs={k:v for k,v in self.native_refs.items() if k in fresh};self.error=None
+            return dict(self.db.execute('SELECT thread_id,MAX(sequence) FROM notification_events GROUP BY thread_id'))
+
+    def sync_desktop_reads(self,ipc,generation,cutoffs):
+        source=self.desktop_reads()
+        if source is None:return 0
+        identity,unread,modified=source.capture()
+        pending=0
+        with self.bridge.lock:
+            self.bridge.check_generation(ipc,generation)
+            if self.closed.is_set():raise ValueError('工作区已关闭')
+            if source.identity()!=identity:raise ValueError('Codex 桌面端账号已切换，请重新刷新')
+            with self.lock:
+                for tid,ceiling in cutoffs.items():
+                    if tid not in self.rows or tid in unread:continue
+                    native=ipc.current(tid) or {}
+                    if native.get('executionBackend')!='carryon-owner' and native.get('hasUnreadTurn') is True:continue
+                    from carryon.desktop_ipc.read_state import event_time
+                    completed={turn.get('turnId'):event_time(turn) for turn in turns(native)}
+                    reader='native:codex:'+identity
+                    saved=self.db.execute('SELECT sequence FROM notification_readers WHERE reader=? AND thread_id=?',(reader,tid)).fetchone()
+                    saved=saved[0] if saved else 0
+                    sequence=saved
+                    for seq,body in self.db.execute('SELECT sequence,body FROM notification_events WHERE thread_id=? ORDER BY sequence',(tid,)):
+                        if seq<=saved:continue
+                        event=json.loads(body)
+                        occurred=event.get('occurredAt') or completed.get(event.get('turnId'))
+                        # A late-discovered old completion can be read in this
+                        # pass. New/undated events need the pre-refresh fence.
+                        if occurred is not None:
+                            if occurred>modified:break
+                        elif seq>ceiling or event.get('created',float('inf'))>modified:
+                            pending+=1
+                            break
+                        sequence=seq
+                    if sequence>saved:self.read(reader,tid,sequence)
+        return pending
+
+    def invalidate_status(self):
+        with self.lock:self.revision+=1
+        self.bridge.notify()
+
+    def catalog_refresh(self):
+        # Serialize background and manual reads so an older catalog cannot win.
+        with self.catalog_lock:
+            rows=self.bridge.catalog.list(2147483647,0,'')
+            with self.lock:
+                fresh={r['id']:dict(r) for r in rows}
+                if fresh!=self.rows:self.revision+=1
+                self.turn_candidates={k:v for k,v in self.turn_candidates.items() if k in fresh}
+                self.rows=fresh;self.native_refs={k:v for k,v in self.native_refs.items() if k in fresh};self.error=None
 
     def run(self):
         next_catalog=0;revision=-1
@@ -128,7 +187,6 @@ class Workspace:
             if self.fingerprints.get(tid)==fingerprint:return
             previous=self.db.execute('SELECT body FROM notification_baselines WHERE thread_id=?',(tid,)).fetchone()
             known=set(json.loads(previous[0])) if previous else set(candidates)
-            changed=False
             for key,body in candidates.items():
                 # Existing pending requests must be visible on first connection; old completed history is only a baseline.
                 if key in known and (previous or body['kind']!='approval'):continue
@@ -137,9 +195,11 @@ class Workspace:
                             else 'completed' if event_turn.get('status')=='completed' else 'other')
                 event_preview=preview(event_turn,event_kind,requests=requests,questions=questions)
                 record={**body,'eventId':key,'threadId':tid,'created':time.time(),'preview':event_preview}
-                inserted=self.db.execute('INSERT OR IGNORE INTO notification_events(event_id,thread_id,kind,body) VALUES(?,?,?,?)',
-                    (key,tid,body['kind'],json.dumps(record))).rowcount
-                changed=changed or bool(inserted)
+                from carryon.desktop_ipc.read_state import event_time
+                occurred=event_time(event_turn)
+                if occurred is not None and body['kind']!='approval':record['occurredAt']=occurred
+                self.db.execute('INSERT OR IGNORE INTO notification_events(event_id,thread_id,kind,body) VALUES(?,?,?,?)',
+                    (key,tid,body['kind'],json.dumps(record)))
             self.db.execute('INSERT OR REPLACE INTO notification_baselines VALUES(?,?)',(tid,json.dumps(sorted(known|set(candidates)))))
             self.db.commit()
             self.revision+=1
@@ -147,7 +207,8 @@ class Workspace:
             self.states[tid]={'status':status,'actionable':bool(requests or questions) or status['state']=='waiting' or failed,'failed':failed,
                               'needsConfirmation':bool(requests or questions) or status['state']=='waiting',
                               'activityKind':activity_kind,'activityPreview':activity_preview}
-        if changed:self.bridge.notify()
+        # Runtime-only changes also invalidate project counts and list statuses.
+        self.bridge.notify()
 
     def preferences(self,reader,data=None):
         with self.lock:
@@ -181,10 +242,10 @@ class Workspace:
             self.db.execute('''INSERT INTO activity_cleared(reader,thread_id,sequence)
                 SELECT ?,e.thread_id,MAX(e.sequence) FROM notification_events e
                 LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
-                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader='native:codex'
+                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader=?
                 GROUP BY e.thread_id
                 HAVING MAX(e.sequence)<=MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0))
-                ON CONFLICT(reader,thread_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)''',(activity_owner or reader,reader))
+                ON CONFLICT(reader,thread_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence)''',(activity_owner or reader,reader,self.native_reader()))
             self.db.commit();self.revision+=1
         self.bridge.notify()
         return {'cleared':True}
@@ -201,7 +262,7 @@ class Workspace:
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
         return {'events':events,'nextSequence':records[-1][0] if records else after}
 
-    def projection(self,reader,activity_owner=None,available_only=False):
+    def projection(self,reader,activity_owner=None,available_only=False,include_unconfirmed=False):
         self.bridge.require()
         with self.lock:
             if self.error:raise ValueError(self.error)
@@ -209,8 +270,8 @@ class Workspace:
             preferences=self.preferences(reader)
             unread_events=self.db.execute('''SELECT e.thread_id,e.kind FROM notification_events e
                 LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
-                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader='native:codex'
-                WHERE e.sequence>MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0)) GROUP BY e.thread_id,e.kind''',(reader,)).fetchall()
+                LEFT JOIN notification_readers n ON n.thread_id=e.thread_id AND n.reader=?
+                WHERE e.sequence>MAX(COALESCE(r.sequence,0),COALESCE(n.sequence,0)) GROUP BY e.thread_id,e.kind''',(reader,self.native_reader())).fetchall()
             unread={row[0] for row in unread_events}
             notified={tid for tid,kind in unread_events if preferences.get(kind,False)}
             sequences={row[0]:row[1] for row in self.db.execute('SELECT thread_id,MAX(sequence) FROM notification_events GROUP BY thread_id')}
@@ -220,9 +281,11 @@ class Workspace:
         ipc,_=self.bridge.require();groups={};threads=[];project_activity={}
         for row in rows:
             tid=row['id'];native=ipc.current(tid)
-            status=project_status(native)
+            realtime=getattr(self.bridge,'realtime',None)
+            status=realtime.thread_status(tid,ipc,native) if realtime else project_status(native)
             available=bool(native and not native.get('_metadataOnly') and status['state'] in ('idle','running','waiting'))
-            if available_only and not available:continue
+            unconfirmed=native is None and status['state'] in ('unknown','loading')
+            if available_only and not available and not (include_unconfirmed and unconfirmed):continue
             # Never preserve cached running/idle after a connection reset or unload.
             known=states.get(tid,{}) if native is not None else {}
             actionable=known.get('actionable',False)
@@ -241,7 +304,7 @@ class Workspace:
             group['rootPaths']=row.get('projectRoots',[]) if not row.get('projectless') else []
             project_activity[pid]=max(project_activity.get(pid,0),row.get('updated_at') or 0)
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
-            group['unknown']+=int(status['state'] in ('unknown','notLoaded','error'))
+            group['unknown']+=int(status['state'] in ('unknown','loading','notLoaded','error'))
         if getattr(self.bridge.catalog, 'independent', False):
             pid, name = project_identity(None)
             groups.setdefault(pid, {'id':pid, 'name':name, 'cwd':'', 'rootPaths':[], 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})['canCreate'] = getattr(ipc, 'account_ready', False)
@@ -264,7 +327,7 @@ class Workspace:
                 for event in packet['events']:
                     tid=event['threadId'];kind=event['kind']
                     if tid not in visible or not preferences.get(kind,False):continue
-                    read=self.db.execute("SELECT COALESCE(MAX(sequence),0) FROM notification_readers WHERE thread_id=? AND reader IN (?, 'native:codex')",(tid,reader)).fetchone()[0]
+                    read=self.db.execute("SELECT COALESCE(MAX(sequence),0) FROM notification_readers WHERE thread_id=? AND reader IN (?, ?)",(tid,reader,self.native_reader())).fetchone()[0]
                     if event['sequence']<=read:continue
                     if kind=='message' and any(preferences[terminal] and self.db.execute(
                         'SELECT 1 FROM notification_events WHERE event_id=?',(digest([tid,event['turnId'],terminal]),)).fetchone()
@@ -289,8 +352,36 @@ class Workspace:
         limit=min(100,max(1,int(query.get('limit',['100'])[0])));offset=max(0,int(query.get('offset',['0'])[0]))
         if path=='/api/notifications' and method=='GET':return 200,self.events(reader,max(0,int(query.get('after',['0'])[0])),limit)
         if method!='GET':return 404,{'error':'接口不存在'}
+        if query.get('sync',[''])[0]=='full' or query.get('syncId'):
+            progress=self.sync.poll(query['syncId'][0]) if query.get('syncId') else self.sync.start()
+            if progress['state']!='completed':return 200,{'sync':progress}
+            query={key:value for key,value in query.items() if key not in ('sync','syncId','refreshStatuses')}
+            status,result=self.dispatch(reader,method,path,data,query,activity_owner)
+            return status,{**result,'sync':progress}
+        realtime=getattr(self.bridge,'realtime',None)
+        status_list=path in ('/api/projects','/api/workspace/threads') or path.startswith('/api/projects/') and path.endswith('/threads')
+        refresh=query.get('refreshStatuses',['false'])[0]=='true'
+        if refresh and (status_list or path=='/api/activity'):
+            self.catalog_refresh()
+            if realtime:realtime.sync_watches()
+            self.bridge.notify()
+        if realtime and status_list and refresh:
+            # Select from the unfiltered directory so an earlier routing miss can
+            # be rechecked even when its row is currently hidden.
+            with self.lock:rows=list(self.rows.values())
+            search=query.get('search',[''])[0].casefold()
+            if path.startswith('/api/projects/') and path.endswith('/threads'):
+                rows=[row for row in rows if row_project_identity(row)[0]==path.split('/')[3]]
+            if path=='/api/projects':
+                rows=[row for row in rows if search in (' '.join([row_project_identity(row)[1],row.get('cwd',''),*row.get('projectRoots',[])])).casefold()]
+            else:
+                rows=[row for row in rows if search in (row.get('title','')+' '+row.get('cwd','')).casefold()]
+            if path=='/api/workspace/threads' and query.get('threadId'):
+                rows=[row for row in rows if row['id']==query['threadId'][0]]
+            rows.sort(key=lambda row:(row.get('updated_at') or 0,row['id']),reverse=True)
+            realtime.refresh_statuses([row['id'] for row in rows[offset:offset+limit]])
         available_only=query.get('availableOnly',['false'])[0]=='true'
-        groups,threads=self.projection(reader,activity_owner,available_only=True) if available_only else (self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader))
+        groups,threads=self.projection(reader,activity_owner,available_only=True,include_unconfirmed=path!='/api/activity') if available_only else (self.projection(reader,activity_owner) if activity_owner is not None else self.projection(reader))
         search=query.get('search',[''])[0].casefold()
         if path=='/api/projects':
             groups=[g for g in groups if search in (' '.join([g['name'],g['cwd'],*g['rootPaths']])).casefold()]

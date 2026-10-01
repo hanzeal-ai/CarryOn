@@ -50,9 +50,14 @@ def main():
     threading.Thread(target=server.serve_forever,daemon=True).start()
     with tempfile.TemporaryDirectory(prefix='carryon-appserver-regression-') as temporary:
         root=Path(temporary).resolve();source=root/'source';source.mkdir()
-        (source/'config.toml').write_text('model="gpt-5.5"\nmodel_provider="fixture"\n[model_providers.fixture]\nname="Local fixture"\nbase_url="http://127.0.0.1:'+str(server.server_port)+'/v1"\nwire_api="responses"\nrequires_openai_auth=false\n')
+        config='model="gpt-5.5"\nmodel_provider="fixture"\n[model_providers.fixture]\nname="Local fixture"\nbase_url="http://127.0.0.1:'+str(server.server_port)+'/v1"\nwire_api="responses"\nrequires_openai_auth=false\n'
+        def prepare(home):
+            home.mkdir(parents=True,exist_ok=True)
+            (home/'config.toml').write_text(config)
+        prepare(source)
         with patch.dict(os.environ,{'CODEX_HOME':str(source),'CARRYON_REGISTRY_DIR':str(root/'registry')}):
             a=AppServer(root/'workspace a/codex-home');b=AppServer(root/'workspace b/codex-home')
+            prepare(a.home);prepare(b.home)
             try:
                 a.connect();b.connect();assert a.account_ready and b.account_ready
                 pid_a,pid_b=a.process.pid,b.process.pid;assert pid_a!=pid_b
@@ -86,10 +91,13 @@ def main():
                 print(json.dumps({'passed':True,'checks':['distinct processes','exclusive home lock','first turn','streamed response','catalog isolation','cross-home read refused','stop isolation','restart restores history','crash reconnect']},ensure_ascii=False))
             finally:a.close();b.close()
             from carryon.cli import main as cli
-            from carryon.services import call
+            from carryon.services import call, register
             homes=[root/'service a',root/'service b']
             try:
                 for home in homes:
+                    codex_home=home/'codex'
+                    prepare(codex_home)
+                    register(home,codex_home=codex_home,backend='app-server')
                     with redirect_stdout(io.StringIO()):
                         assert cli(['start','--state-dir',str(home),'--port','0'])==0
                     assert call(home,'/status')['protocol']=='codex-app-server'
@@ -99,7 +107,8 @@ def main():
                 tid=created['createdThreadId']
                 wait_until(lambda:call(homes[0],'/threads/'+tid+'/history')['status']['state']=='idle')
                 history=call(homes[0],'/threads/'+tid+'/history')
-                assert any(m.get('text')=='fixture response' for m in history['messages'])
+                assert any(item.get('type')=='agentMessage' and item.get('text')=='fixture response'
+                           for item in history['timeline'])
                 assert call(homes[1],'/threads')['threads']==[]
                 assert call(homes[1],'/projects')['projects'][0]['canCreate']
                 again=call(homes[0],'/threads',{'requestId':'first-api-create','prompt':'Return fixture response only'})

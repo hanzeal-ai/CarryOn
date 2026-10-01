@@ -79,12 +79,17 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(self.manager.entries, {})
     def test_revoke_before_claim_closes_runtime(self):
         count = [0]
+        claimed = []
+        take = self.manager.prewarm.take
+        def capture():
+            runtime = take(); claimed.append(runtime); return runtime
+        self.manager.prewarm.take = capture
         def guard():
             count[0] += 1
             if count[0] == 3: raise PermissionError('revoked')
         with self.assertRaises(PermissionError): self.manager.load(T, guard)
         self.assertEqual(self.manager.entries, {})
-        self.assertFalse(Runtime.instances[-1].connected)
+        self.assertFalse(claimed[0].connected)
     def test_method_version_host_and_thread_are_checked(self):
         self.manager.load(T)
         for e in (self.envelope(version=0), self.envelope(tid=U), self.envelope(method='thread/delete'), self.envelope(hostId='remote')):
@@ -259,6 +264,85 @@ class AutoReleaseTests(unittest.TestCase):
         self.manager._release_finished()
         self.assertIn(T, self.manager.entries)
 
+    def follow(self, client, following=True):
+        self.manager.broadcast({'method': 'thread-stream-following-changed', 'version': 1,
+            'sourceClientId': client, 'params': {'hostId': 'local', 'conversationId': T, 'following': following}})
+
+    def test_desktop_can_append_after_mobile_turn_finishes(self):
+        self.follow('mobile'); self.follow('desktop')
+        self.start(); self.finish()
+        self.follow('mobile', False)
+        self.manager._release_finished()
+        self.assertTrue(self.manager.can_handle(self.envelope()))
+        self.assertFalse(self.runtime.connected)  # Native writer is free for desktop archive.
+        request = self.envelope('thread-follower-start-turn', 2, turnStart={'request': {
+            'threadId': T, 'clientUserMessageId': 'desktop-next-message', 'input': [{'type': 'text', 'text': 'next'}]}})
+        self.manager.handle(request)
+        resumed = self.manager.entries[T]['runtime']
+        self.assertIsNot(resumed, self.runtime)
+        self.assertEqual(sum(method == 'turn/start' for method, _ in resumed.calls), 1)
+        self.manager.handle(request)
+        self.assertEqual(sum(method == 'turn/start' for method, _ in resumed.calls), 1)
+        self.runtime = resumed
+        self.finish(); self.follow('desktop', False)
+        self.manager._release_finished()
+        self.assertFalse(self.runtime.connected)
+
+    def test_disconnected_follower_does_not_pin_finished_runtime(self):
+        self.follow('desktop'); self.start(); self.finish()
+        self.manager.broadcast({'method': 'client-status-changed', 'params': {
+            'clientId': 'unrelated', 'status': 'disconnected'}})
+        self.manager._release_finished(); self.assertIn(T, self.manager.entries)
+        self.manager.broadcast({'method': 'client-status-changed', 'params': {
+            'clientId': 'desktop', 'status': 'disconnected'}})
+        self.manager._release_finished(); self.assertFalse(self.runtime.connected)
+        self.assertNotIn(T, self.manager.entries)
+
+    def test_suspended_owner_refuses_archived_or_competing_owner(self):
+        self.follow('desktop'); self.start(); self.finish(); self.manager._release_finished()
+        self.catalog.get.side_effect = ValueError('archived')
+        with self.assertRaisesRegex(ValueError, 'archived'): self.manager.load(T)
+        self.assertFalse(self.runtime.connected)
+        self.catalog.get.side_effect = None
+        self.manager.bus.foreign = 'new-desktop-owner'
+        with self.assertRaisesRegex(IPCError, 'owner appeared'): self.manager.load(T)
+        self.assertFalse(self.manager.can_handle(self.envelope()))
+
+    def test_follower_broadcast_does_not_block_reader_behind_manager_lock(self):
+        done = threading.Event()
+        with self.manager.lock:
+            thread = threading.Thread(target=lambda: (self.follow('desktop'), done.set()))
+            thread.start()
+            self.assertTrue(done.wait(1))
+        thread.join()
+        self.start(); self.finish(); self.manager._release_finished()
+        self.assertIn('desktop', self.manager.entries[T]['followers'])
+        self.assertTrue(self.manager.can_handle(self.envelope()))
+
+    def test_state_change_during_terminal_publish_prevents_suspension(self):
+        self.follow('desktop'); self.start(); self.finish()
+        original = self.manager.publish
+        def publish(*args, **kwargs):
+            original(*args, **kwargs)
+            self.runtime.data['threadRuntimeStatus'] = {'type': 'active'}
+        self.manager.publish = publish
+        self.manager._release_finished()
+        self.assertTrue(self.runtime.connected)
+        self.assertFalse(self.manager.entries[T].get('suspended', False))
+
+    def test_disconnected_suspended_owner_is_removed_before_reconnect(self):
+        self.follow('desktop'); request = self.start(); self.finish(); self.manager._release_finished()
+        self.assertTrue(self.manager.entries[T]['suspended'])
+        self.manager.bus.connected = False
+        self.manager._release_finished()
+        self.assertNotIn(T, self.manager.entries)
+        self.assertFalse(self.manager.can_handle(self.envelope()))
+        self.assertTrue(self.manager.receipts[T])
+        self.manager.load(T)
+        runtime = self.manager.entries[T]['runtime']
+        self.manager.handle(request)
+        self.assertEqual(runtime.calls, [])
+
     def test_terminal_and_idle_are_both_required(self):
         self.start()
         self.manager._release_finished()  # idle can arrive before completed
@@ -389,14 +473,22 @@ class SendOwnerTests(unittest.TestCase):
                 return super().snapshot(tid)
 
         self.bridge = OwnerBridge('unused', Catalog(), self.journal, owner_directory=self.tmp.name, ipc_factory=UnloadedIPC)
+        self.service = Mock(); self.bridge.owner_service = self.service
         self.bridge.enable(); self.addCleanup(self.bridge.shutdown)
         self.ipc = self.bridge.ipc
-        self.service = Mock(); self.bridge.owner_service = self.service
         def load(tid, check):
             check()
             self.ipc.loaded = True
             return {'state': 'loaded'}
         self.service.load.side_effect = load
+
+    def finished(self, job):
+        import time
+        for _ in range(300):
+            current = self.journal.get(job['id'])
+            if current['state'] not in ('preparing', 'dispatching'): return current
+            time.sleep(.01)
+        self.fail('compose did not finish')
 
     def test_compose_endpoint_loads_then_sends_and_retry_does_not_reload(self):
         from carryon.routes.api import dispatch
@@ -404,6 +496,7 @@ class SendOwnerTests(unittest.TestCase):
         payload = {'requestId': 'auto-send-request', 'prompt': 'hello'}
         path = '/api/threads/' + T + '/compose'
         code, job = dispatch(self.bridge, 'POST', path, payload, remote=True, control=True, authorize=guard)
+        job = self.finished(job)
         self.assertEqual((code, job['state']), (202, 'accepted'))
         self.assertEqual(type(self.ipc).sends, 1)
         self.service.load.assert_called_once()
@@ -413,7 +506,7 @@ class SendOwnerTests(unittest.TestCase):
         self.assertEqual(type(self.ipc).sends, 1)
         self.service.load.assert_called_once()
         payload['requestId'] = 'auto-send-next-request'
-        self.assertEqual(dispatch(self.bridge, 'POST', path, payload, remote=True, control=True)[1]['state'], 'accepted')
+        self.assertEqual(self.finished(dispatch(self.bridge, 'POST', path, payload, remote=True, control=True)[1])['state'], 'accepted')
         self.assertEqual(type(self.ipc).sends, 2)
         self.assertEqual(self.service.load.call_count, 2)
 
@@ -426,7 +519,7 @@ class SendOwnerTests(unittest.TestCase):
 
     def test_existing_owner_is_used_without_loading(self):
         self.ipc.loaded = True
-        self.assertEqual(self.bridge.compose(T, 'existing-owner-request', 'hello')['state'], 'accepted')
+        self.assertEqual(self.finished(self.bridge.compose(T, 'existing-owner-request', 'hello'))['state'], 'accepted')
         self.service.load.assert_not_called()
 
     def test_other_or_uncertain_errors_never_load(self):
@@ -434,7 +527,9 @@ class SendOwnerTests(unittest.TestCase):
                       IPCError('no-client-found', uncertain=True)):
             with self.subTest(error=str(error), uncertain=error.uncertain):
                 self.ipc.snapshot = Mock(side_effect=error)
-                with self.assertRaises(IPCError): self.bridge.compose(T, 'no-load-error-request', 'hello')
+                job = self.finished(self.bridge.compose(T, 'no-load-error-' + str(error.uncertain) + str(error).replace(' ', '-'), 'hello'))
+                self.assertEqual(job['state'], 'failed')
+                self.assertEqual(job['error'], str(error))
         self.service.load.assert_not_called()
         self.assertEqual(type(self.ipc).sends, 0)
 
@@ -455,7 +550,8 @@ class SendOwnerTests(unittest.TestCase):
             self.bridge.disable()
             check()
         self.service.load.side_effect = load
-        with self.assertRaises(BridgeError): self.bridge.compose(T, 'disabled-send-request', 'hello')
+        job = self.finished(self.bridge.compose(T, 'disabled-send-request', 'hello'))
+        self.assertEqual(job['state'], 'failed')
         self.assertEqual(type(self.ipc).sends, 0)
 
     def test_revoke_after_load_blocks_send(self):
@@ -465,18 +561,20 @@ class SendOwnerTests(unittest.TestCase):
             self.ipc.loaded = True
             guard.side_effect = PermissionError('revoked')
         self.service.load.side_effect = load
-        with self.assertRaises(PermissionError): self.bridge.compose(T, 'revoke-after-load', 'hello', authorize=guard)
+        job = self.finished(self.bridge.compose(T, 'revoke-after-load', 'hello', authorize=guard))
+        self.assertEqual((job['state'], job['error']), ('failed', 'revoked'))
         self.assertEqual(type(self.ipc).sends, 0)
 
     def test_load_failure_or_competition_never_sends(self):
         for error in ('owner appeared during resume', 'owner-conflict', 'owner requires paginated history with native writer locking'):
             self.service.load.side_effect = IPCError(error)
-            with self.assertRaisesRegex(IPCError, error): self.bridge.compose(T, 'load-failure-request', 'hello')
+            job = self.finished(self.bridge.compose(T, 'load-failure-' + str(len(error)), 'hello'))
+            self.assertEqual((job['state'], job['error']), ('failed', error))
         self.assertEqual(type(self.ipc).sends, 0)
 
     def test_uncertain_start_is_not_replayed_or_reloaded(self):
         type(self.ipc).error = IPCError('request-timeout', uncertain=True)
-        job = self.bridge.compose(T, 'uncertain-start-request', 'hello')
+        job = self.finished(self.bridge.compose(T, 'uncertain-start-request', 'hello'))
         self.assertEqual(job['state'], 'uncertain')
         self.ipc.loaded = False
         self.assertEqual(self.bridge.compose(T, 'uncertain-start-request', 'hello'), job)
@@ -498,6 +596,106 @@ class SendOwnerTests(unittest.TestCase):
             if calls == 1: self.ipc.loaded = False
             return result
         self.ipc.snapshot = release_after_snapshot
-        self.assertEqual(self.bridge.compose(T, 'release-race-request', 'hello')['state'], 'accepted')
+        self.assertEqual(self.finished(self.bridge.compose(T, 'release-race-request', 'hello'))['state'], 'accepted')
         self.assertEqual(type(self.ipc).sends, 1)
         self.assertEqual(self.service.load.call_count, 2)
+
+
+    def test_slow_compose_returns_receipt_and_duplicate_does_not_start_again(self):
+        import time
+        from carryon.errors import BridgeError
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def load(tid, check):
+            entered.set()
+            if not release.wait(5): raise RuntimeError('test release timed out')
+            check(); self.ipc.loaded = True
+        self.service.load.side_effect = load
+        started = time.monotonic()
+        job = self.bridge.compose(T, 'slow-compose-request', 'hello')
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(job['state'], 'preparing')
+        self.assertTrue(entered.wait(1))
+        self.assertEqual(self.bridge.compose(T, 'slow-compose-request', 'hello'), job)
+        with self.assertRaises(BridgeError): self.bridge.compose(T, 'slow-compose-request', 'changed')
+        with self.assertRaises(BridgeError): self.bridge.compose(T, 'other-compose-request', 'hello')
+        self.service.load.assert_called_once()
+        release.set()
+        self.assertEqual(self.finished(job)['state'], 'accepted')
+        self.assertEqual(type(self.ipc).sends, 1)
+
+    def test_deferred_running_compose_keeps_native_steer_and_receipt_identity(self):
+        from test_operations import IPC, state
+        ipc = IPC('unused'); ipc.connect()
+        ipc.state = state('active')
+        ipc.snapshot = lambda _: ('desktop', ipc.state)
+        ipc.current = lambda _: ipc.state
+        self.bridge.ipc = ipc
+        job = self.finished(self.bridge.compose(T, 'deferred-running-request', 'hello'))
+        self.assertEqual((job['kind'], job['state']), ('operation:steer', 'completed'))
+        self.assertEqual(len(ipc.calls), 1)
+        self.assertEqual(self.bridge.compose(T, 'deferred-running-request', 'hello'), job)
+        self.assertEqual(len(ipc.calls), 1)
+        self.service.load.assert_not_called()
+
+
+class PrewarmTests(unittest.TestCase):
+    def setUp(self):
+        from carryon.owner.prewarm import PrewarmedRuntime
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.created = []
+        def factory(*args, **kwargs):
+            runtime = Runtime(*args, **kwargs)
+            runtime.directory = kwargs['runtime_directory']
+            self.created.append(runtime)
+            return runtime
+        self.pool = PrewarmedRuntime('/home', self.tmp.name, factory)
+        self.addCleanup(self.pool.close)
+    def ready(self):
+        with self.pool.condition:
+            self.assertTrue(self.pool.condition.wait_for(lambda: self.pool.worker is None, timeout=2))
+    def test_take_initialized_unused_process_and_refill_one_spare(self):
+        self.pool.start(); self.ready()
+        first = self.pool.runtime
+        self.assertTrue(first.connected); self.assertIsNone(first.data)
+        self.assertIs(self.pool.take(), first)
+        self.ready(); spare = self.pool.runtime
+        self.assertIsNot(spare, first); self.assertIsNone(spare.data)
+        self.assertNotEqual(spare.directory, first.directory)
+        self.pool.start(); self.assertEqual(len(self.created), 2)
+        first.snapshot(T); first.close()
+        self.assertTrue(spare.connected)
+        self.pool.close(); self.assertFalse(spare.connected)
+    def test_dead_spare_is_not_resumed_or_silently_retried(self):
+        self.pool.start(); self.ready(); first = self.pool.runtime; first.close()
+        with self.assertRaisesRegex(IPCError, 'disconnected'): self.pool.take()
+        self.assertIsNone(first.data)
+        self.ready(); next_runtime = self.pool.take()
+        self.assertTrue(next_runtime.connected); next_runtime.close()
+    def test_initialization_failure_is_reported_without_loading_and_retry_can_prepare(self):
+        factory = self.pool.factory
+        self.pool.factory = Mock(side_effect=RuntimeError('initialize failed'))
+        self.pool.start(); self.ready()
+        with self.assertRaisesRegex(IPCError, 'initialize failed'): self.pool.take()
+        self.assertEqual(self.pool.factory.call_count, 1)
+        self.pool.factory = factory
+        runtime = self.pool.take(); self.assertIsNone(runtime.data); runtime.close()
+    def test_shutdown_waits_for_inflight_initialization_and_leaves_no_process(self):
+        entered, finish = threading.Event(), threading.Event()
+        factory = self.pool.factory
+        def blocking(*args, **kwargs):
+            runtime = factory(*args, **kwargs)
+            def connect():
+                entered.set()
+                if not finish.wait(2): raise RuntimeError('test timeout')
+                runtime.connected = True
+            runtime.connect = connect
+            return runtime
+        self.pool.factory = blocking
+        self.pool.start(); self.assertTrue(entered.wait(2))
+        closing = threading.Thread(target=self.pool.close); closing.start()
+        with self.pool.condition:
+            self.assertTrue(self.pool.condition.wait_for(lambda: self.pool.closed, timeout=2))
+        with self.assertRaisesRegex(IPCError, 'closed'): self.pool.take()
+        finish.set(); closing.join(2)
+        self.assertFalse(closing.is_alive()); self.assertFalse(self.created[0].connected)

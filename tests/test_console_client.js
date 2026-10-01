@@ -21,6 +21,16 @@ function fixture(fetch){
  return {client:new ctx.Client({onUpdate(){},onDisconnect(){},onAuthError:()=>errors.push('auth'),onError(){}}),storage,errors,sockets};
 }
 const ok=body=>({ok:true,status:200,json:async()=>body});
+test('console forwards uncertain outcome and preserves the retry identity',async()=>{
+ const ids=[];
+ const {client}=fixture(async(url,options)=>{
+  ids.push(JSON.parse(options.body).body.requestId);
+  return {ok:false,status:409,json:async()=>({error:'unknown outcome',uncertain:true})};
+ });
+ client.device='one';client.setStorage();
+ for(let i=0;i<2;i++)await assert.rejects(client.submit('message','thread','prompt'),e=>e.uncertain===true);
+ assert.equal(ids[0],ids[1]);
+});
 test('console uses prefix-scoped cookie requests, never browser device credentials',async()=>{
  const calls=[];const {client}=fixture(async(url,options)=>{calls.push([String(url),options]);return ok({enabled:true});});
  client.device='my-mac';client.token='session';

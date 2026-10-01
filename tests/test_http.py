@@ -29,6 +29,11 @@ class HTTPTests(unittest.TestCase):
         response=conn.getresponse();result=(response.status,response.read(),dict(response.getheaders()));conn.close();return result
     def test_token_required(self):
         self.assertEqual(self.request('/api/status')[0],401)
+    def test_local_images_allow_inline_data_without_opening_script_sources(self):
+        _, _, headers = self.request('/example.html')
+        directives = dict(part.strip().split(' ', 1) for part in headers['Content-Security-Policy'].split(';'))
+        self.assertEqual(directives['img-src'], "'self' data:")
+        self.assertEqual(directives['script-src'], "'self'")
     def test_origin_and_host_rejected(self):
         auth={"Authorization":"Bearer "+self.server.token}
         self.assertEqual(self.request('/api/status',{**auth,"Origin":"https://attacker.test"})[0],403)

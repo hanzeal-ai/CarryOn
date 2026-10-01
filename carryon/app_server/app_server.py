@@ -218,6 +218,18 @@ class AppServer:
             finally:
                 with self.lock: self.loading.pop(tid, None)
 
+    def refresh_snapshot(self, tid):
+        # Reading never resumes unloaded conversations. Loaded histories continue
+        # to receive ordered app-server notifications on this connection.
+        thread = self.rpc('thread/read', {'threadId': tid, 'includeTurns': False})['thread']
+        with self.lock:
+            previous = self.snapshots.get(tid)
+            state = NativeSnapshot({**(previous or {'id': tid, 'turns': [], 'requests': [], '_metadataOnly': True}),
+                'title': thread.get('name') or thread.get('preview', ''), 'cwd': thread['cwd'],
+                'threadMetadata': thread, 'threadRuntimeStatus': thread['status']})
+            self.snapshots[tid] = state
+        return 'app-server', state
+
     def sidebar_snapshot(self, tid):
         current = self.current(tid)
         if current is not None: return 'app-server', current

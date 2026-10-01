@@ -34,7 +34,7 @@ extension ChatView {
     }
 }
 
-/// Exyte's input slot uses the app-owned draft; only a confirmed server response clears it.
+/// The outgoing bubble retains submitted text until native history is visible.
 struct OutgoingMessageStatusView: View {
     @Environment(AppModel.self) private var model
     @State private var checking = false

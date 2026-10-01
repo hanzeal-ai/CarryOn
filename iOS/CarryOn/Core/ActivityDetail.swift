@@ -2,7 +2,7 @@ import Foundation
 
 /// A view of the latest native turn and its outstanding requests, never execution narration.
 public struct ActivityDetail: Sendable {
-    public enum Kind: Equatable, Sendable { case completed, approval, question, failed, other }
+    public enum Kind: String, Equatable, Sendable { case completed, approval, question, failed, other }
     public let kind: Kind
     public let result: JSONValue
     public let requests: [JSONValue]

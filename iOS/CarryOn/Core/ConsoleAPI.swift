@@ -86,7 +86,8 @@ public actor ConsoleAPI {
         }
         let result = try? JSONDecoder().decode(JSONValue.self, from: data)
         guard (200..<300).contains(response.statusCode) else {
-            throw APIError(result?["error"].string ?? "请求失败（HTTP \(response.statusCode)）", status: response.statusCode)
+            throw APIError(result?["error"].string ?? "请求失败（HTTP \(response.statusCode)）", status: response.statusCode,
+                           uncertain: result?["uncertain"].bool == true || (result?.object == nil && response.statusCode == 409))
         }
         guard let result, result.object != nil else { throw APIError("服务器返回了无效数据") }
         if route == "login" || route == "register" || (route == "qr/poll" && result["authenticated"].bool == true) {

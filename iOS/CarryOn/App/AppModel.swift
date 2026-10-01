@@ -31,6 +31,7 @@ import CarryOnCore
     private(set) var threadParents: [Record] = []
     var selectedProject: Record?
     var activitySnapshots: [String: JSONValue] = [:]
+    @ObservationIgnored var activitySnapshotVersions: [String: UUID] = [:]
     var activityRequestKey: String?
     var activityScrollTarget: String?
     var activityCount: Int?
@@ -62,6 +63,30 @@ import CarryOnCore
         let state = ConversationReadingState(); readingStates[key] = state; return state
     }
     var workspaceRevision = 0
+    var listThreadStatuses: [String: JSONValue] = [:]
+    @ObservationIgnored private var listWatches: [UUID: Set<String>] = [:]
+    @ObservationIgnored private var listWatchUpdate: Task<Void, Never>?
+    @ObservationIgnored private var subscribedListThreadIDs: [String] = []
+    private var listThreadIDs: [String] { Array(Set(listWatches.values.flatMap { $0 }).sorted().prefix(100)) }
+    func watchList(_ owner: UUID, threads: Set<String>) {
+        let before = listThreadIDs
+        if threads.isEmpty { listWatches.removeValue(forKey: owner) }
+        else { listWatches[owner] = threads }
+        guard before != listThreadIDs else { return }
+        let retained = Set(listThreadIDs)
+        listThreadStatuses = listThreadStatuses.filter { retained.contains($0.key) }
+        listWatchUpdate?.cancel()
+        let generation = epoch
+        listWatchUpdate = Task {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            guard epoch == generation else { return }
+            updateSelection(resetHistory: false)
+        }
+    }
+    func listStatus(_ record: Record) -> JSONValue {
+        guard connected else { return .object(["state": .string("unknown"), "label": .string("状态待确认")]) }
+        return listThreadStatuses[record.id] ?? record.value["status"]
+    }
     var requests: [Record] = []
     var foreground = true
     var editContext: JSONValue = .null
@@ -69,7 +94,7 @@ import CarryOnCore
     var notice: String?
     private(set) var removingDevice = false
     private let readReceipts = ReadReceiptSync()
-    private(set) var epoch = UUID() { didSet { commandReady = false; historySynchronized = false; endBackgroundSync(); historyUpdatedAt = [:]; displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
+    private(set) var epoch = UUID() { didSet { listWatches = [:]; listThreadStatuses = [:]; commandReady = false; historySynchronized = false; endBackgroundSync(); historyUpdatedAt = [:]; displayCache.cancelRequests(); prefetching = false; activitySnapshots = [:]; activitySnapshotVersions = [:]; activityScrollTarget = nil; activityRequestKey = nil; readReceipts.reset(); threadParents = []; previewImage = nil; readingStates = [:] } }
     private var api: ConsoleAPI?
     private var updates: Task<Void, Never>?
     private var liveStream: ConsoleStream?
@@ -579,13 +604,13 @@ import CarryOnCore
     }
     private func selection(_ threadID: String?) -> JSONValue {
         .object(["threadId": threadID.map(JSONValue.string) ?? .null,
-                 "threadIds": .array([]), "historyProtocol": .number(1), "historyLimit": .number(Double(historyLimit)), "subscription": .string(UUID().uuidString),
+                 "threadIds": .array(listThreadIDs.map(JSONValue.string)), "historyProtocol": .number(1), "historyLimit": .number(Double(historyLimit)), "subscription": .string(UUID().uuidString),
                  "includeSideChats": .bool(sideThreadID != nil), "sideThreadId": sideThreadID.map(JSONValue.string) ?? .null, "sideHistoryLimit": .number(Double(sideHistoryLimit))])
     }
-    private func updateSelection() {
-        historySynchronized = false
-        sideHistory = .null
+    private func updateSelection(resetHistory: Bool = true) {
+        if resetHistory { historySynchronized = false; sideHistory = .null }
         guard let connection = liveStream, connection.canResubscribe else {
+            if !resetHistory { return }
             connected = false
             updates?.cancel(); updates = nil; liveStream?.close(); liveStream = nil; startStream(); return
         }
@@ -594,7 +619,13 @@ import CarryOnCore
             await previous?.value
             guard let self, self.epoch == generation, self.selectedThread?.id == threadID, self.historyLimit == limit,
                   self.liveStream === connection, self.sideThreadID == sideID else { return }
-            do { try await connection.resubscribe(self.selection(threadID)) }
+            do {
+                if !resetHistory, self.subscribedListThreadIDs == self.listThreadIDs { return }
+                let selection = self.selection(threadID)
+                try await connection.resubscribe(selection)
+                guard self.epoch == generation, self.liveStream === connection else { return }
+                self.subscribedListThreadIDs = selection["threadIds"].array.map(\.text)
+            }
             catch {
                 guard !Task.isCancelled, self.epoch == generation, self.liveStream === connection else { return }
                 connection.close(); self.reportStreamFailure(error)
@@ -616,10 +647,12 @@ import CarryOnCore
                 }
                 var stream: ConsoleStream?
                 do {
-                    let connection = try await client.stream(deviceID: deviceID, selection: self.selection(self.selectedThread?.id))
+                    let requestedSelection = self.selection(self.selectedThread?.id)
+                    let connection = try await client.stream(deviceID: deviceID, selection: requestedSelection)
                     stream = connection
                     try Task.checkCancellation()
                     self.liveStream = connection
+                    self.subscribedListThreadIDs = requestedSelection["threadIds"].array.map(\.text)
                     connection.setForeground(self.foreground || self.backgroundSyncTask != .invalid)
                     // HTTP commands need current workspace permission, not a downloaded history window.
                     async let _: Void = self.refreshCommandReadiness(generation: generation)
@@ -627,6 +660,9 @@ import CarryOnCore
                         let packet = try await connection.next()
                         try Task.checkCancellation()
                         guard self.epoch == generation else { break }
+                        if connection.canResubscribe, self.subscribedListThreadIDs != self.listThreadIDs {
+                            self.updateSelection(resetHistory: false)
+                        }
                         guard packet["threadId"].string == self.selectedThread?.id else { continue }
                         await self.apply(packet, threadID: self.selectedThread?.id)
                     }
@@ -667,6 +703,11 @@ import CarryOnCore
               selectedThread?.id == threadID, historyLimit == limit else { return }
         let resumed = !connected
         status = packet["status"]; connected = true; reconnecting = false
+        if let statuses = packet["threadStatuses"].object {
+            let watched = Set(listThreadIDs)
+            // A late packet from the previous viewport must not revive removed rows.
+            listThreadStatuses = statuses.filter { watched.contains($0.key) }
+        }
         if let sideThreadID, packet["sideThreadId"].string == sideThreadID {
             sideHistoryFailure = packet["sideError"].string
             if sideHistoryFailure != nil { sideHistory = .null }

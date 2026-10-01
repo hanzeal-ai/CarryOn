@@ -41,6 +41,40 @@ test('network failure survives reload with the original request ID; success rele
   assert.notEqual(restored.requests[1].body.requestId,original);
 });
 
+test('uncertain HTTP conflict retains identity across reload and success reconciles it', async()=>{
+  const f=fixture();
+  f.respond(async()=>({ok:false,status:409,json:async()=>({error:'unknown outcome',uncertain:true})}));
+  await assert.rejects(f.client.submit('compose','thread','hello'),e=>e.uncertain===true);
+  const original=f.requests[0].body.requestId;
+  const restored=fixture(f.storage);
+  await restored.client.submit('compose','thread','hello');
+  assert.equal(restored.requests[0].body.requestId,original);
+  await restored.client.submit('compose','thread','hello');
+  assert.notEqual(restored.requests[1].body.requestId,original);
+});
+
+test('definite conflict releases identity while malformed 409 retains it', async()=>{
+  const f=fixture();
+  f.respond(async()=>({ok:false,status:409,json:async()=>({error:'rejected'})}));
+  await assert.rejects(f.client.submit('message','thread','hello'));
+  const rejected=f.requests[0].body.requestId;
+  f.respond(async()=>({ok:false,status:409,json:async()=>{throw new SyntaxError('invalid JSON')}}));
+  await assert.rejects(f.client.submit('message','thread','hello'));
+  const uncertain=f.requests[1].body.requestId;
+  assert.notEqual(uncertain,rejected);
+  await assert.rejects(f.client.submit('message','thread','hello'));
+  assert.equal(f.requests[2].body.requestId,uncertain);
+});
+
+test('non-object HTTP409 responses retain the original request identity', async()=>{
+  const f=fixture();
+  for(const body of [[], 'invalid shape', false, null]){
+    f.respond(async()=>({ok:false,status:409,json:async()=>body}));
+    await assert.rejects(f.client.submit('message','thread','hello'),e=>e.uncertain===true);
+  }
+  assert.equal(new Set(f.requests.map(r=>r.body.requestId)).size,1);
+});
+
 test('side chat requests retain uncertain identity and isolate parent and target', async()=>{
   const f=fixture();f.respond(async()=>{throw Error('network interrupted');});
   await assert.rejects(f.client.sideAction('parent','child','compose',{prompt:'hello'}),/interrupted/);

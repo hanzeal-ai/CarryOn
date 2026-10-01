@@ -109,7 +109,7 @@ class ConsoleServer(Gateway):
                 self.account_request('change', {'currentUsername':username, 'currentPassword':data.get('currentPassword'),
                                                'username':username, 'password':data.get('password')})
             else:
-                users = {**self.auth.users, identity:record}
+                users = {**self.auth.users, identity:{**self.auth.users[identity], **record}}
                 if self.auth.users_path: save_json(self.auth.users_path, users)
                 self.auth.users = users
                 revoked = {session for session in self.sessions if self.auth.identity(session) == identity}

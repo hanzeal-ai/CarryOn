@@ -51,6 +51,19 @@ class RegistrationInvitesTests(AccountTests):
             self.assertEqual(self.request('register', {**body, **invite})[0], 400)
         self.assertEqual(self.request('register', {'username':'alice', 'password':'a long password 123', **invite})[0], 200)
 
+    def test_password_change_preserves_consumed_invite_across_restart(self):
+        invite = self.issue()
+        status, _, cookie = self.request('register', {'username':'alice', 'password':'a long password 123', **invite})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request('password', {'currentPassword':'a long password 123',
+                                                 'password':'new long password 123'}, cookie)[0], 200)
+        self.assertEqual(self.request('session', cookie=cookie)[0], 401)
+        self.stop(); self.start()
+        self.assertEqual(self.request('login', {'username':'alice', 'password':'new long password 123'})[0], 200)
+        status, data, _ = self.request('register', {'username':'bob', 'password':'a long password 123', **invite})
+        self.assertEqual(status, 400)
+        self.assertIn('已使用', data['error'])
+
     def test_native_transport_and_issuer_replacement(self):
         token = 'issuer-secret-' + 'x' * 32
         self.issue()

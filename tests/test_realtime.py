@@ -92,6 +92,100 @@ class FakeBridge:
         return {'parentId':parent,'thread':{'id':tid},'timeline':[{'text':'side '+self.text}]}
 
 
+class StatusSchedulingTests(unittest.TestCase):
+    def setUp(self):
+        from carryon.routes.realtime import Realtime, Subscription
+        self.bridge=FakeBridge();self.realtime=Realtime(self.bridge)
+        self.session=Subscription(self.realtime);self.realtime.sessions.add(self.session)
+        self.ids=[f'00000000-0000-4000-8000-{n:012d}' for n in range(47)]
+        self.realtime.watched={tid:self.bridge.ipc for tid in self.ids}
+
+    def test_slow_router_misses_cannot_starve_tail_running_conversation(self):
+        from unittest.mock import patch
+        now=0;pending={};attempted=set();active=self.ids[-1]
+        # Real router misses occupy each slot for ten seconds. Drive the actual
+        # scheduler over virtual time so its thirty-second retry cooldown applies.
+        with patch('carryon.routes.realtime.time.monotonic',side_effect=lambda:now):
+            for now in range(601):
+                for tid,finish in list(pending.items()):
+                    if finish<=now:
+                        del pending[tid]
+                        if tid==active:
+                            self.bridge.ipc.states[tid]={'threadRuntimeStatus':{'type':'active'}}
+                        else:
+                            self.realtime.unavailable[tid]=(self.bridge.ipc,now,{'state':'notLoaded','label':'未加载'})
+                for tid in self.realtime._load_candidates(pending):
+                    pending[tid]=now+10;attempted.add(tid)
+                self.assertLessEqual(len(pending),4)
+                if self.bridge.ipc.current(active):break
+        self.assertEqual(attempted,set(self.ids))
+        self.assertLessEqual(now,120)
+        self.assertEqual(self.realtime.thread_status(active,self.bridge.ipc,self.bridge.ipc.current(active))['state'],'running')
+
+    def test_visible_and_selected_threads_precede_background_with_background_progress(self):
+        self.session.selection.update(threadId=self.ids[-1],threadIds=self.ids[-5:-1])
+        picked=self.realtime._load_candidates({})
+        self.assertEqual(picked[0],self.ids[-1])
+        self.assertEqual(sum(tid in self.ids[-5:] for tid in picked),3)
+        self.assertEqual(len(picked),4)
+        self.assertEqual(self.realtime._load_candidates(dict.fromkeys(picked)),[])
+
+    def test_visible_retries_do_not_repeat_ahead_of_unchecked_visible_rows(self):
+        from unittest.mock import patch
+        self.session.selection['threadIds']=self.ids
+        with patch('carryon.routes.realtime.time.monotonic',return_value=100):
+            first=self.realtime._load_candidates({})
+            for tid in first:self.realtime.unavailable[tid]=(self.bridge.ipc,0,{'state':'notLoaded','label':'未加载'})
+            self.assertTrue(set(first).isdisjoint(self.realtime._load_candidates({})))
+
+    def test_refresh_bypasses_miss_cooldown_but_preserves_live_snapshot(self):
+        now=time.monotonic();missing,live=self.ids[-2:]
+        self.realtime.unavailable[missing]=(self.bridge.ipc,now,{'state':'notLoaded','label':'未加载'})
+        state={'threadRuntimeStatus':{'type':'active'}};self.bridge.ipc.states[live]=state
+        self.realtime.refresh_statuses([missing,live])
+        self.assertNotIn(missing,self.realtime.unavailable)
+        self.assertEqual(self.realtime._load_candidates({})[0],missing)
+        self.assertIs(self.bridge.ipc.current(live),state)
+
+    def test_reconnect_does_not_reuse_previous_ipc_failure(self):
+        tid=self.ids[0]
+        self.realtime.unavailable[tid]=(self.bridge.ipc,time.monotonic(),{'state':'notLoaded','label':'未加载'})
+        new=FakeIPC();self.bridge.ipc=new
+        self.assertEqual(self.realtime.thread_status(tid,new,new.current(tid))['state'],'loading')
+        new.states[tid]={'threadRuntimeStatus':{'type':'active'}}
+        self.assertEqual(self.realtime.thread_status(tid,new,new.current(tid))['state'],'running')
+
+    def test_visible_thread_recovers_when_busy_background_workers_finish(self):
+        from carryon.desktop_ipc.ipc import IPCError
+        active=self.ids[-1];release=threading.Event();busy=threading.Event()
+        entered=[];lock=threading.Lock()
+        self.bridge.workspace=SimpleNamespace(thread_ids=lambda:set(self.ids),invalidate_status=self.bridge.notify,revision=0)
+        def snapshot(tid):
+            if tid==active:
+                self.bridge.ipc.states[tid]={'threadRuntimeStatus':{'type':'active'}}
+                return 'owner',self.bridge.ipc.states[tid]
+            with lock:
+                entered.append(tid)
+                if len(entered)==4:busy.set()
+            release.wait(2)
+            raise IPCError('no-client-found')
+        self.bridge.ipc.sidebar_snapshot=snapshot
+        opened=self.realtime.open()
+        try:
+            self.assertTrue(busy.wait(1))
+            self.session.subscribe({'type':'subscribe','threadId':None,'threadIds':[active],'subscription':'visible'})
+            self.assertEqual(self.session.update()[0]['threadStatuses'][active]['state'],'loading')
+            release.set()
+            deadline=time.monotonic()+1
+            while not self.bridge.ipc.current(active) and time.monotonic()<deadline:time.sleep(.01)
+            self.assertEqual(self.session.update()[0]['threadStatuses'][active]['state'],'running')
+        finally:
+            release.set();self.realtime.closed.set();self.realtime.load_event.set();self.bridge.notify()
+            opened.close();self.session.close()
+            for worker in self.realtime.workers:worker.join(2)
+            self.assertTrue(all(not worker.is_alive() for worker in self.realtime.workers))
+
+
 class WSTests(unittest.TestCase):
     def setUp(self):
         self.server = Server(('127.0.0.1',0),Handler)

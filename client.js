@@ -1,11 +1,15 @@
 /* HTTP authentication, durable retry IDs and the live connection lifecycle. */
 'use strict';
-function responseError(message,status){return Object.assign(Error(message),{status});}
+function responseError(message,status,uncertain=false){return Object.assign(Error(message),{status,uncertain});}
 async function readApiResponse(response) {
-  try { return await response.json(); }
+  try {
+    const result=await response.json();
+    if(!result||typeof result!=='object'||Array.isArray(result))throw Error('Invalid response object');
+    return result;
+  }
   catch {
     if (response.status === 413) throw responseError('图片请求超过服务器大小限制，请减少图片或压缩后重试',response.status);
-    throw responseError(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试',response.status);
+    throw responseError(response.ok ? '服务器返回了无效数据，请重试' : '服务请求失败（HTTP '+response.status+'），请稍后重试',response.status,response.status===409);
   }
 }
 // Display-only cache bounded by both count and encoded bytes.
@@ -92,7 +96,7 @@ class CarryOnClient {
     if (epoch !== this.epoch) throw Error('配对已改变，请重新读取状态');
     if (!response.ok) {
       if (response.status === 401) this.onAuthError();
-      throw responseError(result.error || '请求失败',response.status);
+      throw responseError(result.error || '请求失败',response.status,result.uncertain===true);
     }
     return result;
   }
@@ -124,7 +128,7 @@ class CarryOnClient {
       }
     }
     catch(error){
-      const rejected=!admitted&&error.status>=400&&error.status<500&&error.status!==408;
+      const rejected=!admitted&&!error.uncertain&&error.status>=400&&error.status<500&&error.status!==408;
       if(rejected){pending.delete(key);sessionStorage.setItem(storageKey,JSON.stringify([...pending]));}
       if(composing&&scope===this.epoch)this.onSubmission({id:requestId,threadId:path.split('/')[2],state:rejected?'failed':'uncertain'});
       throw error;
