@@ -6,12 +6,13 @@ import uuid
 from carryon.contracts import digest, text
 
 
-def message(prompt, state, images=None):
+def message(prompt, state, images=None, skills=None):
     return {'id': str(uuid.uuid4()), 'text': prompt, 'cwd': state.get('cwd'),
             'createdAt': int(time.time() * 1000), 'context': {
                 'prompt': prompt, 'commentAttachments': [], 'imageAttachments': [{'id': str(uuid.uuid4()), 'src': url} for url in (images or [])],
                 'fileAttachments': [], 'pastedTextAttachments': [], 'addedFiles': [],
-                'workspaceRoots': [state['cwd']] if state.get('cwd') else []}}
+                'workspaceRoots': [state['cwd']] if state.get('cwd') else [],
+                **({'skills': skills} if skills else {})}}
 
 
 def projection(messages, source):
@@ -29,9 +30,11 @@ def transform(action, data, state, original):
     if action == 'queue-add':
         from carryon.sessions.images import validate_images
         images = validate_images(data.get('images'))
+        from carryon.sessions.skills import selections
+        skills = selections(data.get('skills'))
         prompt = data.get('prompt')
-        prompt = text(prompt, allow_empty=bool(images))
-        messages.append(message(prompt, state, images))
+        prompt = text(prompt, allow_empty=bool(images or skills))
+        messages.append(message(prompt, state, images, skills))
     elif action == 'clear-queue':
         if data.get('confirmed') is not True:
             raise ValueError('请确认清空排队消息')

@@ -31,6 +31,8 @@ import CarryOnCore
             model.displayCache.store(value, key: model.scope + "\n" + path + suffix, bytes: 10000)
         }
         try? await Task.sleep(for: .seconds(2))
+        try? Data().write(to: URL.documentsDirectory.appendingPathComponent("tabs-top.capture"))
+        try? await Task.sleep(for: .seconds(1))
         let observer = NotificationCenter.default.addObserver(forName: Notification.Name("fixture.state"), object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated { self?.retained = note.object as? [String: Any] ?? [:] }
         }
@@ -58,8 +60,8 @@ import CarryOnCore
         let filtersIsolated = retained["projectFilter"] as? String == "all" && retained["threadFilter"] as? String == "running"
         let markdown = await MessageMarkdownParser.shared.prepare(.object(["type": .string("agentMessage"), "text": .string("**最新消息**\n\n- 已完成")]))
         let markdownReady = markdown?.content.renderPlainText().contains("最新消息") == true
-        var result: [String: Any] = ["passed": ticks.count > 30 && gap < 0.5 && delay < 0.75 && retainedState && markdownReady && filtersIsolated,
-            "retainedListState": retainedState, "viewModeFiltersIsolated": filtersIsolated, "retainedStateValues": retained, "preparedMarkdown": markdownReady,
+        var result: [String: Any] = ["passed": model.selectedThread == nil && ticks.count > 30 && gap < 0.5 && delay < 0.75 && retainedState && markdownReady && filtersIsolated,
+            "unexpectedThread": model.selectedThread?.id ?? "", "retainedListState": retainedState, "viewModeFiltersIsolated": filtersIsolated, "retainedStateValues": retained, "preparedMarkdown": markdownReady,
             "switches": delays.count, "frames": ticks.count, "maxFrameGapSeconds": gap, "maxSwitchDelaySeconds": delay]
         if let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: \.isKeyWindow) {
             func scrollOffsets(_ view: UIView) -> [CGFloat] {

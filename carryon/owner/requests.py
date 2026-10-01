@@ -13,6 +13,8 @@ APPROVALS = {
 VERSIONS = {'thread-owner-discovery': 1, 'thread-follower-load-complete-history': 1,
             'thread-follower-start-turn': 2, 'thread-follower-steer-turn': 1,
             'thread-follower-interrupt-turn': 4, 'thread-follower-compact-thread': 1,
+            'thread-follower-update-thread-settings': 2,
+            'thread-follower-set-queued-follow-ups-state': 1,
             **{name: 1 for name in APPROVALS}}
 
 
@@ -27,6 +29,9 @@ def input_items(value):
         elif item.get('type') == 'image':
             if set(item) - {'type', 'url'} or not isinstance(item.get('url'), str):
                 raise IPCError('unsupported-image-input')
+        elif item.get('type') == 'skill':
+            from carryon.sessions.skills import selections
+            selections([{k: v for k, v in item.items() if k != 'type'}])
         else: raise IPCError('unsupported-input-type')
     return value
 
@@ -46,25 +51,28 @@ def forward(runtime, tid, method, params):
             raise IPCError('unsupported-turn-context')
         if active or state.get('requests') or state['threadRuntimeStatus']['type'] != 'idle':
             raise IPCError('thread-not-idle')
-        runtime.require_account()
-        result = runtime.rpc('turn/start', {**request, 'input': input_items(request.get('input'))})
-        # Notifications may follow the response. Hold an authoritative returned turn immediately.
-        with runtime.lock:
-            current = runtime.current(tid)
-            if current is not None and not any(t['turnId'] == result['turn']['id'] for t in current['turns']):
-                runtime._event({'method': 'turn/started', 'params': {'threadId': tid, 'turn': result['turn']}})
+        result = runtime.start_turn(tid, {**request, 'input': input_items(request.get('input'))})
         return {'result': result}
     if method in ('thread-follower-steer-turn', 'thread-follower-interrupt-turn'):
         if active is None: raise IPCError('turn-changed')
         expected = params.get('expectedTurnId', active['turnId']) if method.endswith('steer-turn') else params.get('expectedTurnId')
         if expected != active['turnId']: raise IPCError('turn-changed')
         if method.endswith('steer-turn'):
+            from carryon.sessions.skills import guard_inputs
+            values = input_items(params.get('input'))
             return runtime.rpc('turn/steer', {'threadId': tid, 'expectedTurnId': expected,
-                                            'input': input_items(params.get('input'))})
+                                            'input': values}, guard_inputs(runtime, tid, values))
         return runtime.rpc('turn/interrupt', {'threadId': tid, 'turnId': expected})
     if method == 'thread-follower-compact-thread':
         if active or state.get('requests'): raise IPCError('thread-not-idle')
         return runtime.rpc('thread/compact/start', {'threadId': tid})
+    if method == 'thread-follower-update-thread-settings':
+        if state['threadRuntimeStatus']['type'] not in ('active', 'idle'):
+            raise IPCError('thread-state-unknown')
+        return runtime.request(method, params)['result']
+    if method == 'thread-follower-set-queued-follow-ups-state':
+        if set(params.get('state', {})) != {tid}: raise IPCError('queue-thread-mismatch')
+        return runtime.request(method, params)['result']
     action = APPROVALS.get(method)
     if action:
         request = next((r for r in state.get('requests', []) if type(r['id']) is type(params.get('requestId'))

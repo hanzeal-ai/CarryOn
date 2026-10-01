@@ -1,6 +1,7 @@
 import SwiftUI
 import CarryOnCore
 import ExyteChat
+import PhotosUI
 
 func supportsOperation(_ action: String, in snapshot: JSONValue) -> Bool {
     snapshot["controls"]["supportedOperations"] == .null || snapshot["controls"]["supportedOperations"].array.contains(.string(action))
@@ -12,10 +13,20 @@ struct NewConversationView: View {
     @State private var projects: [Record] = []
     @State private var project = ""
     @State private var selecting = false
+    @State private var choosingModel = false
+    @State private var choosingWorkspace = false
+    @State private var creationSettings: JSONValue = .null
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var loadingPhotos = false
+    private var draftKey: String { model.scope + "\nnew" }
+    private var images: [String] {
+        get { model.draftStore.images[draftKey] ?? [] }
+        nonmutating set { model.draftStore.images[draftKey] = newValue; model.draftStore.save() }
+    }
     private var directCreation: Bool { model.status["supportsDirectCreation"].bool == true }
     private var text: String { model.draftStore.texts[model.scope + "\nnew"] ?? "" }
     private var draftBinding: Binding<String> {
-        Binding(get: { text }, set: { model.draftStore.texts[model.scope + "\nnew"] = $0 })
+        Binding(get: { text }, set: { model.draftStore.texts[draftKey] = $0; model.draftStore.save() })
     }
     @State private var failure: String?
     @State private var loading = false
@@ -25,26 +36,71 @@ struct NewConversationView: View {
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite(.create) || (!directCreation && !projects.contains(where: { $0.id == project })) || loading,
-                                    send: { Task { await create() } }) { EmptyView() }
+                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite(.create) || (!directCreation && !projects.contains(where: { $0.id == project })) || loading || loadingPhotos,
+                                    draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty, submitting: loading, placeholder: "询问 CarryOn",
+                                    send: { Task { await create() } }) {
+                    PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
+                        Image(systemName: "plus").frame(width: 44, height: 44)
+                    }.disabled(loading || loadingPhotos || images.count >= 3).accessibilityLabel("添加图片")
+                    Spacer(minLength: 4)
+                    Button { choosingModel = true } label: {
+                        HStack(spacing: 5) { Text(ModelPresentation.name(creationSettings["model"].string ?? "默认模型", catalog: model.cachedValue("/api/models"))).lineLimit(1); Text(ModelPresentation.effort(creationSettings["effort"].text)).foregroundStyle(Design.secondary) }.font(.subheadline).frame(minHeight: 44)
+                    }.accessibilityLabel("模型与思考强度")
+                }
             })
             .setAvailableInputs([.text])
-            .mainHeaderBuilder {
-                VStack(alignment: .leading, spacing: 16) {
+            .betweenListAndInputViewBuilder {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button { choosingWorkspace = true } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "desktopcomputer")
+                            Text(model.device?.title ?? "工作区").lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down").font(.caption)
+                        }.font(.subheadline).foregroundStyle(Design.secondary).frame(minHeight: 44)
+                    }.accessibilityLabel("切换工作区")
                     if !directCreation {
-                    SectionCaption(title: "项目")
-                    Paper {
-                        Button { selecting = true } label: { SettingRow(icon: "folder", title: projects.first(where: { $0.id == project })?.title ?? "选择项目", chevron: true) }
+                        Button { selecting = true } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "folder")
+                                Text(projects.first(where: { $0.id == project })?.title ?? "选择项目").lineLimit(1)
+                                Image(systemName: "chevron.up.chevron.down").font(.caption)
+                            }.font(.subheadline).foregroundStyle(Design.secondary).frame(minHeight: 44)
+                        }
                     }
+                    if loadingPhotos { ProgressView("正在处理图片…") }
+                    if !images.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(Array(images.enumerated()), id: \.offset) { index, url in
+                                    DraftImageThumbnail(dataURL: url) {
+                                        guard images.indices.contains(index), images[index] == url else { return }
+                                        images.remove(at: index)
+                                    }.disabled(loading)
+                                }
+                            }.padding(.vertical, 6)
+                        }
                     }
                     if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
-                }.padding(20)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24)
             }
             .carryOnChatAppearance()
             .disabled(loading)
             .navigationTitle("新建会话").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-                .task(id: model.scope) { projects = []; project = model.selectedProject?.id ?? ""; await loadProjects(reset: true) }
+                .task(id: model.scope) { projects = []; photos = []; failure = nil; creationSettings = .null; choosingModel = false; project = model.selectedProject?.id ?? ""; await loadProjects(reset: true) }
+                .task(id: photos) {
+                    guard !photos.isEmpty else { return }
+                    let scope = model.scope
+                    loadingPhotos = true
+                    defer { loadingPhotos = false }
+                    do {
+                        let added = try await conversationPhotos(photos)
+                        guard !Task.isCancelled, scope == model.scope else { return }
+                        images = Array((images + added).prefix(3)); photos = []
+                    } catch { if !Task.isCancelled { failure = error.localizedDescription } }
+                }
+                .sheet(isPresented: $choosingWorkspace) { WorkspaceSwitcher() }
+                .sheet(isPresented: $choosingModel) { CreationModelPicker(selection: $creationSettings, scope: model.scope) }
                 .sheet(isPresented: $selecting) {
                     NavigationStack {
                         List {
@@ -73,13 +129,16 @@ struct NewConversationView: View {
         } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard model.canWrite(.create), directCreation || projects.contains(where: { $0.id == project }) else { return }
+        guard !loading, !loadingPhotos, model.canWrite(.create), directCreation || projects.contains(where: { $0.id == project }) else { return }
         loading = true; defer { loading = false }
-        let draftKey = model.scope + "\nnew", sent = text
+        let draftKey = self.draftKey, sent = text, sentImages = images
         var fields: [String: JSONValue] = ["prompt": .string(sent)]
+        if creationSettings != .null { fields["settings"] = creationSettings }
+        if !sentImages.isEmpty { fields["images"] = .array(sentImages.map(JSONValue.string)) }
         if !directCreation { fields["projectId"] = .string(project) }
         if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields)) {
             if model.draftStore.texts[draftKey] == sent { model.draftStore.texts[draftKey] = ""; model.draftStore.save() }
+            if model.draftStore.images[draftKey] == sentImages { model.draftStore.images[draftKey] = []; model.draftStore.save() }
             dismiss()
         }
     }
@@ -91,6 +150,9 @@ struct ConversationMenu: View {
     @State private var metadata = false
     @State private var sideChats = false
     @State private var subagents = false
+    @State private var forking = false
+    @State private var reviewing = false
+    @State private var goal = false
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -126,12 +188,41 @@ struct ConversationMenu: View {
                                 .disabled(!model.canWrite(.send) || model.writing)
                             Divider().padding(.leading, 60)
                         }
+                        if model.history["controls"]["supportsGoal"].bool == true {
+                            Button { goal = true } label: { SettingRow(icon: "target", title: "会话目标", chevron: true) }
+                            Divider().padding(.leading, 60)
+                        }
+                        if model.history["controls"]["supportedOperations"].array.contains(.string("review")) {
+                            Button { reviewing = true } label: { SettingRow(icon: "doc.text.magnifyingglass", title: "审查代码", chevron: true) }
+                                .disabled(!model.canInteract(.send) || model.state != "idle")
+                            Divider().padding(.leading, 60)
+                        }
+                        if model.history["controls"]["supportedOperations"].array.contains(.string("fork")) {
+                            Button { forking = true } label: { SettingRow(icon: "arrow.triangle.branch", title: "分叉会话", chevron: true) }
+                                .disabled(!model.canWrite(.create) || model.state != "idle" || model.writing)
+                            Divider().padding(.leading, 60)
+                        }
                         Button { jobs = true } label: { SettingRow(icon: "clock", title: "请求记录", chevron: true) }
                     }
                 }.padding(20)
             }.background(Design.background).navigationTitle("会话操作").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-                .sheet(isPresented: $jobs) { RequestLogView() }
+                .sheet(isPresented: $forking) {
+                if let thread = model.selectedThread {
+                    ForkConversationView(thread: thread, scope: model.scope) { dismiss() }
+                }
+            }
+            .sheet(isPresented: $goal) {
+                if let thread = model.selectedThread {
+                    ConversationGoalView(target: .init(scope: model.scope, threadID: thread.id))
+                }
+            }
+            .sheet(isPresented: $reviewing) {
+                if let thread = model.selectedThread {
+                    ReviewConversationView(target: .init(scope: model.scope, threadID: thread.id)) { dismiss() }
+                }
+            }
+            .sheet(isPresented: $jobs) { RequestLogView() }
                 .sheet(isPresented: $sideChats) { SideChatsView() }
                 .sheet(isPresented: $subagents) {
                     if let parent = model.selectedThread?.id { SubagentsView(parentID: parent, onOpen: { dismiss() }) }

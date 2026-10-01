@@ -75,7 +75,7 @@ private struct SideChatConversation: View {
     @State private var bottomVisible = true
     @State private var renderRevision = 0
     private var target: ConversationActionTarget { .init(scope: model.scope, threadID: chat.id, parentID: parentID) }
-    private var images: Binding<[String]> { Binding(get: { model.draftStore.images[draftKey] ?? [] }, set: { model.draftStore.images[draftKey] = $0 }) }
+    private var images: Binding<[String]> { Binding(get: { model.draftStore.images[draftKey] ?? [] }, set: { model.draftStore.images[draftKey] = $0; model.draftStore.save() }) }
     private var draftKey: String { model.scope + "\nside:" + parentID + ":" + chat.id }
     private var writable: Bool { model.canPerform(target) && !submitting }
     var body: some View {
@@ -87,7 +87,7 @@ private struct SideChatConversation: View {
                     .padding(.horizontal, 16).padding(.vertical, item["type"].text == "processGroup" ? 2 : 8)
             }
         }, inputViewBuilder: { _ in
-            CarryOnChatComposer(text: Binding(get: { model.draftStore.texts[draftKey] ?? "" }, set: { model.draftStore.texts[draftKey] = $0 }),
+            CarryOnChatComposer(text: Binding(get: { model.draftStore.texts[draftKey] ?? "" }, set: { model.draftStore.texts[draftKey] = $0; model.draftStore.save() }),
                 disabled: !writable, sendAllowed: model.allows(.send), stopAllowed: model.allows(.stop), hasImages: !images.wrappedValue.isEmpty, stopping: history["status"]["state"].text == "running",
                 submitting: submitting && !interrupting,
                 resuming: history["status"]["state"].text == "idle" && history["controls"]["lastTurnStatus"].text == "interrupted",
@@ -95,6 +95,7 @@ private struct SideChatConversation: View {
                 stop: { Task { await send(stopping: true) } },
                 resume: { Task { _ = await model.perform("resume", target: target, fields: ["turnId": history["controls"]["lastTurnId"]]) } }) {
                     ConversationPhotoPicker(images: images, disabled: !writable || !model.allows(.send))
+                    Spacer(minLength: 4)
                     Button { showingModel = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }.accessibilityLabel("模型与思考强度")
                 }
         }, messageMenuAction: { (_: CarryOnMessageAction, _, message) in
@@ -163,6 +164,7 @@ private struct SideChatConversation: View {
         if ok {
             if !stopping && model.draftStore.texts[key] == text { model.draftStore.texts[key] = "" }
             if !stopping && model.draftStore.images[key] == sentImages { model.draftStore.images[key] = [] }
+            model.draftStore.save()
             failure = nil
         }
         else { failure = model.error }

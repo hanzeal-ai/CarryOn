@@ -1,6 +1,6 @@
 """Per-binding request identities; native sessions and execution remain shared."""
-import hashlib
 import re
+import hashlib
 from urllib.parse import urlsplit, parse_qs
 from carryon.routes.api import dispatch
 from carryon.errors import BridgeError
@@ -51,7 +51,7 @@ def scoped_dispatch(bridge,method,target,data,control,binding,authorize=None,act
         if not job or job.get('sourceBinding')!=binding:raise BridgeError('请求不存在',404)
         target=target.replace('/api/jobs/'+original,'/api/jobs/'+internal,1)
     source=None
-    if method=='POST' and (path in ('/api/threads','/api/usage/reset') or re.fullmatch(r'/api/threads/[^/]+/(messages|operations|compose|session)',path) or re.fullmatch(r'/api/side-chats/[^/]+/(operations|compose)',path)):
+    if method=='POST' and (path in ('/api/threads','/api/usage/reset') or re.fullmatch(r'/api/threads/[^/]+/(messages|operations|compose|session|fork)',path) or re.fullmatch(r'/api/side-chats/[^/]+/(operations|compose)',path)):
         if not isinstance(data,dict):raise ValueError('请求体必须是 JSON 对象')
         original=data.get('requestId')
         data={**data,'requestId':request_key(binding,original)}

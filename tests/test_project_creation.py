@@ -27,6 +27,10 @@ class Creator(Runtime):
     hook = None
     error = None
     instances = []
+    def request(self, method, params, before_send):
+        self.last_settings = params['threadSettings']
+        before_send(lambda: self.calls.append(('thread/settings/update', params)))
+        return {'result': {'applied': True}}
     def create_thread(self, params, before_send):
         if self.hook: self.hook()
         before_send(lambda: self.calls.append(('thread/start', params)))
@@ -42,13 +46,13 @@ class Creator(Runtime):
 class Follower(FakeIPC):
     def snapshot(self, tid):
         return self.manager.bus.client_id, self.manager.entries[tid]['runtime'].current(tid)
-    def start(self, tid, prompt, owner, message_id, before_send):
+    def start(self, tid, prompt, owner, message_id, before_send, images=None):
         result = []
         def send():
             result.append(self.manager.handle({'method': 'thread-follower-start-turn', 'version': 2,
                 'requestId': 'wire', 'sourceClientId': 'follower', 'params': {'conversationId': tid,
                 'turnStart': {'request': {'threadId': tid, 'clientUserMessageId': message_id,
-                'input': [{'type': 'text', 'text': prompt}]}, 'context': {'inheritThreadSettings': True}}}}))
+                'input': ([{'type': 'text', 'text': prompt}] if prompt else []) + [{'type': 'image', 'url': url} for url in (images or [])]}, 'context': {'inheritThreadSettings': True}}}}))
         before_send(send)
         return result[0]['result']['turn']
 
@@ -105,6 +109,24 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual(first['id'], second['id'])
         proceed.set(); self.assertEqual(self.settled(first)['state'], 'completed')
         self.assertEqual(len(Creator.instances), 1)
+    def test_image_only_creation_preserves_input_and_retry_identity(self):
+        image = 'data:image/png;base64,iVBORw0KGgo='
+        job = self.settled(submit(self.bridge, 'image-create', '', self.project, images=[image]))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(Creator.instances[0].calls[1][1]['input'], [{'type': 'image', 'url': image}])
+        self.assertEqual(submit(self.bridge, job['id'], '', self.project, images=[image]), job)
+        with self.assertRaises(BridgeError): submit(self.bridge, job['id'], 'changed', self.project, images=[image])
+        self.assertEqual(len(Creator.instances), 1)
+    def test_selected_model_is_applied_before_first_turn(self):
+        settings = {'model': 'fixture', 'effort': 'high'}
+        job = self.settled(submit(self.bridge, 'model-create', 'task', self.project, settings=settings))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual([call[0] for call in Creator.instances[0].calls], ['thread/start', 'thread/settings/update', 'turn/start'])
+        self.assertEqual(Creator.instances[0].last_settings, settings)
+        with self.assertRaises(BridgeError): submit(self.bridge, job['id'], 'task', self.project, settings={'model': 'other'})
+    def test_creation_model_settings_cannot_change_permissions(self):
+        with self.assertRaises(ValueError): submit(self.bridge, 'bad-settings', 'task', self.project, settings={'approvalPolicy': 'never'})
+        self.assertEqual(Creator.instances, [])
     def test_invalid_project_and_missing_directory_do_not_start_runtime(self):
         for project in (None, project_identity('/other')[0]):
             with self.assertRaises((ValueError, BridgeError)): submit(self.bridge, 'bad-project', 'hello', project)
@@ -152,8 +174,8 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertFalse(Creator.instances[0].connected); self.assertEqual(self.manager.entries, {})
     def test_lost_turn_reply_retains_owner_and_does_not_replay(self):
         original = self.bridge.ipc.start
-        def start(*args):
-            original(*args); raise IPCError('lost turn', uncertain=True)
+        def start(*args, **kwargs):
+            original(*args, **kwargs); raise IPCError('lost turn', uncertain=True)
         self.bridge.ipc.start = start
         job = self.settled(submit(self.bridge, 'lost-turn', 'hello', self.project))
         self.assertEqual(job['state'], 'uncertain'); self.assertTrue(Creator.instances[0].connected)

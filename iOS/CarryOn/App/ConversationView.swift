@@ -10,6 +10,7 @@ struct ConversationView: View {
     @State private var menu = false
     @State private var activity = false
     @State private var modelInfo = false
+    @State private var skillsPicker = false
     @State private var newMessages = false
     @State private var lastTimelineItem: JSONValue?
     @State private var selectionText: String?
@@ -23,6 +24,16 @@ struct ConversationView: View {
     @State private var loadingImages = false
     @State private var selectionGeneration = UUID()
     @State private var submitting = false
+    @AppStorage("carryon.queueFollowUps") private var queueFollowUps = true
+    private var canQueue: Bool { supportsOperation("queue-add", in: model.history) }
+    private var queueFollowUp: Bool { canQueue && (queueFollowUps || model.history["controls"]["canSteer"].bool == false) }
+    private var queueUnavailable: Bool { ["running", "waiting"].contains(model.state) && ((queueFollowUp && model.history["queue"]["fingerprint"].string == nil) || (model.history["controls"]["canSteer"].bool == false && !canQueue)) }
+    private var composerModel: String {
+        model.history["controls"]["settings"]["model"].string ?? model.history["metadata"]["latestModel"].string ?? "模型"
+    }
+    private var composerEffort: String {
+        model.history["controls"]["settings"]["effort"].string ?? model.history["metadata"]["latestReasoningEffort"].text
+    }
     private var actionTarget: ConversationActionTarget { .init(scope: model.scope, threadID: thread.id) }
     @State private var timeline: [JSONValue] = []
     @State private var navigationIndex = ConversationPresentation.NavigationIndex([])
@@ -226,6 +237,7 @@ struct ConversationView: View {
         }
         .sheet(isPresented: $menu) { ConversationMenu() }
         .sheet(isPresented: $modelInfo) { ModelInformationView(target: actionTarget) }
+        .sheet(isPresented: $skillsPicker) { SkillsPickerView(target: actionTarget) }
         .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
             EditMessageView(item: model.editingMessage, threadID: thread.id, scope: model.scope)
         }
@@ -402,17 +414,38 @@ struct ConversationView: View {
         CarryOnChatComposer(text: $model.draft,
             disabled: !(model.canCompose || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting && !model.writing,
-            sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit), stopAllowed: model.canInteract(.stop),
-            hasImages: !images.isEmpty, stopping: model.state == "running", submitting: submitting,
+            sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable, stopAllowed: model.canInteract(.stop),
+            hasImages: !images.isEmpty || !model.draftSkills.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
+            sendLabel: model.state == "running" ? (queueFollowUp ? "排队发送" : "补充到当前任务") : nil,
             send: submitMessage,
             stop: interruptTurn,
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
-                PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
-                    Image(systemName: "plus").frame(width: 44, height: 44)
-                }.disabled(!model.canCompose || model.editingMessage != .null || images.count >= 3 || loadingImages || submitting)
-                    .accessibilityLabel("添加图片")
-                Button { modelInfo = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
+                Menu {
+                    PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
+                        Label("照片", systemImage: "photo")
+                    }.disabled(images.count >= 3)
+                    if model.history["controls"]["supportsSkills"].bool == true {
+                        Button { skillsPicker = true } label: { Label("技能", systemImage: "bolt") }
+                    }
+                } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                    .disabled(!model.canCompose || model.editingMessage != .null || loadingImages || submitting)
+                    .accessibilityLabel("添加附件或技能")
+                if model.state == "running", canQueue {
+                    Menu {
+                        Button { queueFollowUps = true } label: { Label("排队发送 · 本轮结束后", systemImage: queueFollowUps ? "checkmark" : "text.badge.clock") }
+                        Button { queueFollowUps = false } label: { Label("立即补充 · 当前任务", systemImage: !queueFollowUps ? "checkmark" : "arrow.turn.down.right") }.disabled(model.history["controls"]["canSteer"].bool == false)
+                    } label: {
+                        Image(systemName: queueFollowUp ? "text.badge.clock" : "arrow.turn.down.right").frame(width: 44, height: 44)
+                    }.accessibilityLabel("后续消息方式").accessibilityValue(queueFollowUp ? "排队发送" : "立即补充")
+                }
+                Spacer(minLength: 4)
+                Button { modelInfo = true } label: {
+                    HStack(spacing: 4) {
+                        Text(ModelPresentation.name(composerModel, catalog: model.cachedValue("/api/models"))).lineLimit(1).truncationMode(.middle)
+                        Text(ModelPresentation.effort(composerEffort)).foregroundStyle(Design.secondary).lineLimit(1)
+                    }.font(.subheadline).frame(minHeight: 44)
+                }
                     .accessibilityLabel("模型与思考强度")
             }
         }
@@ -482,7 +515,11 @@ struct ConversationView: View {
                 } else if (model.connected || model.commandReady) && !model.canCompose, let reason = model.interactionUnavailableReason(actionTarget, capability: .send) {
                     Text(reason).font(.caption).foregroundStyle(Design.secondary)
                 }
+                if queueUnavailable { Text("当前任务暂不接受补充，请等待队列同步或任务结束。").font(.caption).foregroundStyle(Design.secondary) }
                 ConversationActionBar(target: actionTarget)
+            }
+            if !model.draftSkills.isEmpty {
+                DraftSkillChips(skills: Binding(get: { model.draftSkills }, set: { model.draftSkills = $0 }), disabled: submitting || model.writing)
             }
             if loadingImages { ProgressView().controlSize(.small) }
             if !model.conversationReadOnly && !images.isEmpty {
@@ -519,7 +556,7 @@ struct ConversationView: View {
     private func send() async {
         guard !submitting, model.canCompose, !loadingImages else { return }
         submitting = true; defer { submitting = false }
-        if await model.compose(images: images.map(JSONValue.string)) { photos = [] }
+        if await model.compose(images: images.map(JSONValue.string), queueFollowUp: queueFollowUp) { photos = [] }
     }
     private func markRead() {
         let sequence = model.readSequence
@@ -574,7 +611,10 @@ struct TimelineEntry: View {
                 let parts = item["data"]["content"].array + item["data"]["input"].array
                 let nativePaths = Set(parts.filter { $0["type"].text == "localImage" }.map { $0["path"].text })
                 let refs = item["artifacts"].array.filter { !nativePaths.contains($0["path"].text) && (user || $0["kind"].text == "image" || !ConversationPresentation.referencedArtifactIDs(item).contains($0["id"].text)) }
-                if user { MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: true) }
+                if user {
+                    MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: true)
+                    MessageSkillReferences(skills: parts.filter { $0["type"].text == "skill" })
+                }
                 else { ForEach(refs.filter { $0["kind"].text == "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID, inlineImage: true) } }
                 let messageText = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
                 if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -667,13 +707,13 @@ struct EditMessageView: View {
         !sending && model.canInteract(.edit) && !model.conversationReadOnly && model.scope == scope &&
         model.selectedThread?.id == threadID && model.editingMessage == item && model.state == "idle" &&
         model.history["syncing"].bool != true && item["turnId"] == model.history["controls"]["lastTurnId"] &&
-        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !model.editingDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var body: some View {
         @Bindable var model = model
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                TextEditor(text: $model.draft).focused($focused)
+                TextEditor(text: $model.editingDraft).focused($focused)
                     .padding(8).background(Design.background, in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityLabel("修改消息内容").disabled(sending)
                 let parts = item["data"]["content"].array + item["data"]["input"].array
@@ -714,6 +754,7 @@ struct ModelInformationView: View {
     @State private var choices: [JSONValue] = []
     @State private var selectedModel = ""
     @State private var effort = ""
+    @State private var workMode = "default"
     @State private var loading = true
     @State private var saving = false
     @State private var failure: String?
@@ -730,6 +771,10 @@ struct ModelInformationView: View {
                     if !efforts.contains(effort) { Text(effort.isEmpty ? "未提供" : effort).tag(effort) }
                     ForEach(efforts, id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || efforts.isEmpty || saving || !model.canPerform(target, action: "settings"))
+                Picker("工作模式", selection: $workMode) {
+                    Text("执行").tag("default")
+                    Text("计划").tag("plan")
+                }.disabled(saving || loading || !model.canPerform(target, action: "settings"))
                 if let failure { Text(failure).foregroundStyle(.red) }
                 if !loading && choices.isEmpty { Text("暂未读取到本机模型目录").foregroundStyle(Design.secondary) }
                 if supportsOperation("settings", in: snapshot) { Text("从下一轮生效").font(.caption).foregroundStyle(Design.secondary) }
@@ -739,20 +784,32 @@ struct ModelInformationView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         if supportsOperation("settings", in: snapshot) { Button("保存") { Task {
                             saving = true
-                            if await model.perform("settings", target: target, fields: ["settings": .object(["model": .string(selectedModel), "effort": .string(effort)])]) { dismiss() }
+                            var settings: JSONValue = .object(["model": .string(selectedModel), "effort": .string(effort)])
+                            if workMode != (snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default") {
+                                let previous = snapshot["controls"]["settings"]["collaborationMode"]["settings"]
+                                settings = settings.setting("collaborationMode", .object(["mode": .string(workMode), "settings": .object([
+                                    "model": .string(selectedModel), "reasoning_effort": .string(effort), "developer_instructions": previous["developer_instructions"]])]))
+                            }
+                            if await model.perform("settings", target: target, fields: ["settings": settings]) { dismiss() }
                             saving = false
                         } }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !efforts.contains(effort)) }
                     }
                 }
                 .task {
-                    selectedModel = snapshot["controls"]["settings"]["model"].string ?? snapshot["metadata"]["latestModel"].text
-                    effort = snapshot["controls"]["settings"]["effort"].string ?? snapshot["metadata"]["latestReasoningEffort"].text
-                    do { choices = try await model.deviceRequest("/api/models")["models"].array }
-                    catch { failure = error.localizedDescription }
+                    let scope = model.scope
+                    loading = true; failure = nil
+                    do {
+                        let catalog = try await model.cachedDeviceRequest("/api/models", maxAge: 0)["models"].array
+                        guard !Task.isCancelled, model.scope == scope else { return }
+                        choices = catalog
+                        workMode = snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default"
+                        selectedModel = snapshot["controls"]["settings"]["model"].string ?? snapshot["metadata"]["latestModel"].text
+                        effort = snapshot["controls"]["settings"]["effort"].string ?? snapshot["metadata"]["latestReasoningEffort"].text
+                    } catch { if model.scope == scope { failure = error.localizedDescription } }
                     loading = false
                 }
                 .onChange(of: selectedModel) { _, value in
-                    if !efforts.isEmpty && !efforts.contains(effort) {
+                    if !loading && !efforts.isEmpty && !efforts.contains(effort) {
                         effort = choices.first { $0["id"].text == value }?["defaultEffort"].string ?? efforts[0]
                     }
                 }

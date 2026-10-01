@@ -3,7 +3,7 @@ import CarryOnCore
 
 // AppModel owns state; this boundary owns request identity and delivery reconciliation.
 extension AppModel {
-    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false, onCompletion: ((JSONValue) -> Void)? = nil) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
         if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !path.hasSuffix("/session") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
@@ -16,7 +16,7 @@ extension AppModel {
             let composing = path.hasSuffix("/compose")
             if composing {
                 outgoing[id] = .object(["id": .string(id), "threadId": .string(target), "scope": .string(capturedScope),
-                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
+                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "skills": body["skills"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
                 historyRevision += 1
             }
             var result: JSONValue
@@ -45,8 +45,23 @@ extension AppModel {
             }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
-            try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
             let state = result["state"].text
+            if path.hasSuffix("/fork"), ["completed", "accepted", "inProgress"].contains(state),
+               state != "completed" || result["createdThreadId"].string?.isEmpty != false {
+                throw APIError("尚未确认分叉会话，请在请求记录中核对")
+            }
+            if body["action"].text == "review", ["accepted", "inProgress", "completed"].contains(state),
+               state != "completed" || result["reviewThreadId"].text != target || result["turnId"].string?.isEmpty != false {
+                throw APIError("尚未确认审查启动，请在请求记录中核对")
+            }
+            if ["goal-set", "goal-pause", "goal-clear"].contains(body["action"].text), ["accepted", "inProgress", "completed"].contains(state) {
+                let confirmed = state == "completed" && (body["action"].text == "goal-clear"
+                    ? result["result"]["cleared"].bool == true
+                    : result["result"]["goal"]["threadId"].text == target &&
+                        (body["action"].text != "goal-pause" || result["result"]["goal"]["status"].text == "paused"))
+                guard confirmed else { throw APIError("尚未确认目标变更，请在请求记录中核对") }
+            }
+            try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
             if ["failed", "interrupted"].contains(state) {
                 throw APIError(result["error"].string ?? (state == "interrupted" ? "操作已暂停" : "操作失败"))
             }
@@ -58,6 +73,7 @@ extension AppModel {
                 outgoing[id] = item.setting("draftSubmission", .bool(false))
                 reconcileOutgoing()
             }
+            onCompletion?(result)
             return true
         } catch {
             // A live native acceptance remains authoritative if the HTTP reply is lost.

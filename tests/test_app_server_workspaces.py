@@ -125,7 +125,7 @@ class AppServerDeliveryTests(unittest.TestCase):
                 journal=Journal(Path(temp)/'jobs.sqlite'); bridge=AppServerBridge(Path(temp),journal); bridge.workspace_directory=Path(temp)
                 ipc=Mock();ipc.authenticated=True;ipc.connected=True;ipc.lock=__import__('threading').RLock();ipc.threads={}
                 tid='11111111-1111-1111-1111-111111111111'
-                ipc.rpc.return_value={'thread':{'id':tid}}
+                ipc.create_thread.return_value={'id':tid}
                 ipc.start.return_value={'id':'turn','status':'inProgress'}
                 bridge.enabled=True;bridge.ipc=ipc;bridge.workspace=Mock()
                 job={'id':'create-test','kind':'create','threadId':'','state':'preparing','created':1,'fingerprint':'hash','clientMessageId':'msg'}
@@ -135,7 +135,7 @@ class AppServerDeliveryTests(unittest.TestCase):
                 self.assertEqual(journal.get(job['id'])['state'],'accepted')
                 with patch.object(bridge,'turn_evidence',return_value={'status':terminal}):
                     self.assertEqual(bridge._refresh_job(job['id'])['state'],terminal)
-                self.assertEqual(ipc.rpc.call_count,1)
+                self.assertEqual(ipc.create_thread.call_count,1)
                 self.assertEqual(journal.get(job['id'])['createdThreadId'],tid)
                 journal.conn.close()
 

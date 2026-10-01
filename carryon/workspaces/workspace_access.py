@@ -20,15 +20,15 @@ def capability(method, target, body=None):
     if path.endswith('/streams') or '/streams/' in path or '/notifications/' in path:
         return 'view'
     if path == '/api/usage/reset': return 'resetQuota'
-    if path.endswith('/threads'):
+    if path.endswith('/threads') or path.endswith('/fork'):
         return 'create'
     if path.endswith('/session'): return 'send'
     if path.endswith('/messages') or path.endswith('/compose'):
         return 'send'
     if path.endswith('/operations'):
         action = (body or {}).get('action')
-        if action == 'interrupt': return 'stop'
-        if action in ('steer', 'resume', 'queue-add', 'queue-resume'): return 'send'
+        if action in ('interrupt', 'goal-pause', 'goal-clear'): return 'stop'
+        if action in ('steer', 'resume', 'queue-add', 'queue-resume', 'review', 'goal-set'): return 'send'
         if action in ('edit', 'compact', 'settings', 'queue-edit', 'queue-delete', 'queue-reorder', 'clear-queue'): return 'edit'
         if action in ('command-approval', 'file-approval', 'permissions-approval', 'user-input', 'mcp-response'): return 'approve'
     if path.endswith('/acknowledge'): return 'send'

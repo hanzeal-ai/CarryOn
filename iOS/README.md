@@ -1,6 +1,6 @@
 # CarryOn iOS
 
-原生 iPhone 客户端：Swift 6、SwiftUI、iOS 17+。视觉与交互依据 [design/mobile](../design/mobile/README.md)。聊天界面使用 Exyte Chat，Markdown 与代码高亮使用 MarkdownUI 和 Highlightr。详见 [Markdown 与聊天界面](docs/MARKDOWN-CHAT.md)。
+原生 iPhone 客户端：Swift 6、SwiftUI、iOS 17+。视觉与交互以官方 Remote 为对齐目标，当前范围与验收状态见 [官方对齐记录](../docs/parity/DELIVERY.md)。聊天界面使用 Exyte Chat，Markdown 与代码高亮使用 MarkdownUI 和 Highlightr。详见 [Markdown 与聊天界面](docs/MARKDOWN-CHAT.md)。
 
 ## 打开与运行
 

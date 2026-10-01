@@ -4,8 +4,9 @@ const Operations = (() => {
   const seenQuestions=new Set();
   let modelCatalog=null;
   const modelWrites=new Set();
+  const forkWrites=new Set();
   let messageEditor=null, messageEditorKey='';
-  const labels = {'interrupt':'停止任务','steer':'补充指令','compact':'压缩上下文','settings':'会话设置',
+  const labels = {'review':'审查代码','interrupt':'停止任务','steer':'补充指令','compact':'压缩上下文','settings':'会话设置',
     'queue-add':'添加排队任务','queue-edit':'编辑排队任务','queue-delete':'删除排队任务','queue-reorder':'调整排队顺序','queue-resume':'恢复排队任务','edit':'编辑最后一轮','clear-queue':'清空排队消息','command-approval':'命令审批',
     'file-approval':'文件审批','permissions-approval':'权限申请','user-input':'回答问题','mcp-response':'MCP 交互'};
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
@@ -55,11 +56,14 @@ const Operations = (() => {
     const c=history.controls;
     const selectedModel=drafts.get('模型')??c.settings.model??history.metadata?.latestModel??'';
     const selectedEffort=drafts.get('思考强度')??c.settings.effort??history.metadata?.latestReasoningEffort??'';
-    const model=el('select'), effort=el('select'), status=el('small');status.setAttribute('role','status');
+    const model=el('select'), effort=el('select'), mode=el('select'), status=el('small');status.setAttribute('role','status');
     model.dataset.draftKey='模型';effort.dataset.draftKey='思考强度';
     model.setAttribute('aria-label','模型');effort.setAttribute('aria-label','思考强度');
     const modelLabel=el('label','模型'), effortLabel=el('label','思考强度');
     modelLabel.append(model);effortLabel.append(effort);parent.append(modelLabel,effortLabel,status);
+    const originalMode=c.settings.collaborationMode?.mode||'default';
+    mode.append(new Option('执行','default'),new Option('计划','plan'));mode.value=drafts.get('工作模式')||originalMode;mode.dataset.draftKey='工作模式';mode.setAttribute('aria-label','工作模式');
+    const modeLabel=el('label','工作模式');modeLabel.append(mode);parent.insertBefore(modeLabel,status);
     model.append(new Option(selectedModel||'未提供',selectedModel));
     effort.append(new Option(selectedEffort||'未提供',selectedEffort));
     let choices=[], loading=true;
@@ -67,7 +71,7 @@ const Operations = (() => {
     const choice=()=>choices.find(item=>item.id===model.value);
     const update=()=>{
       const saving=!!pendingWrite();
-      model.disabled=!writable||loading||saving||!choices.length;
+      model.disabled=!writable||loading||saving||!choices.length;mode.disabled=model.disabled;
       effort.disabled=!writable||loading||saving||!choice()?.efforts.length;
       save.disabled=!writable||loading||saving||!choice()?.efforts.includes(effort.value);
     };
@@ -81,7 +85,9 @@ const Operations = (() => {
     const save=button(parent,'保存设置',async b=>{
       if(!current()||pendingWrite()||!choice()?.efforts.includes(effort.value))return;
       const pending={api,epoch,threadId};modelWrites.add(pending);
-      pending.promise=send(threadId,'settings',{settings:{model:model.value,effort:effort.value}},b).finally(()=>modelWrites.delete(pending));
+      const settings={model:model.value,effort:effort.value};
+      if(mode.value!==originalMode)settings.collaborationMode={mode:mode.value,settings:{...(c.settings.collaborationMode?.settings||{}),model:model.value,reasoning_effort:effort.value,developer_instructions:c.settings.collaborationMode?.settings?.developer_instructions??null}};
+      pending.promise=send(threadId,'settings',{settings},b).finally(()=>modelWrites.delete(pending));
       update();await pending.promise;update();
     });
     const pending=pendingWrite();
@@ -111,14 +117,15 @@ const Operations = (() => {
     }
     load();
   }
-  function render(history, threadId, api, notice, canWrite=true) {
+  function render(history, threadId, api, notice, canWrite=true, forkOptions) {
     writable=canWrite&&history.access?.canInteract!==false;
     if(history.access?.canInteract===false){reset();return;}
     transport=api;notify=notice;
     const c=history.controls;
     if(!c||history.syncing===true){reset();return;}
     syncMessageEditor(history,threadId);
-    const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite]);
+    const forkRows=c.supportedOperations?.includes('fork')?[...new Map((history.timeline||[]).filter(item=>item.type==='userMessage'&&item.turnId&&item.turnId!==c.activeTurnId).map(item=>[item.turnId,{id:item.turnId,text:(item.text||'用户消息').slice(0,80)}])).values()]:[];
+    const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite,forkOptions?.allowed,forkRows]);
     if(next===signature)return;
     window.MobileUI?.beforeOperationsRender();
     const same=selected===threadId;
@@ -135,17 +142,46 @@ const Operations = (() => {
     const idle=history.status?.state==='idle';
     if(active){
       button(root,'停止任务',b=>send(threadId,'interrupt',{expectedTurnId:c.activeTurnId},b));
+      if(c.canSteer!==false){
       const detail=el('details');detail.append(el('summary','补充指令'));root.append(detail);
       const input=field(detail,'给正在执行的任务补充说明','',true);
       button(detail,'发送补充指令',b=>send(threadId,'steer',{expectedTurnId:c.activeTurnId,prompt:input.value},b));
+      }
+    }
+    if(c.supportsGoal)GoalControls.render(root,{history,threadId,api,writable,drafts:allDrafts,notice,current:()=>selected===threadId&&transport===api});
+    if(c.supportedOperations?.includes('review'))ReviewControls.render(root,{history,threadId,api,writable,drafts:allDrafts,notice,current:()=>selected===threadId&&transport===api});
+    if(c.supportedOperations?.includes('fork')&&forkOptions){
+      const detail=el('details');detail.className='mobile-fork';detail.append(el('summary','分叉会话'));
+      detail.append(el('p','在新会话中继续，保留原会话。不会自动发送消息。'));
+      const label=el('label','保留到'),turn=el('select');turn.setAttribute('aria-label','分叉保留到');
+      turn.dataset.draftKey='分叉保留到';turn.append(new Option('当前完整历史',''));
+      for(const row of forkRows)turn.append(new Option(row.text,row.id));
+      const saved=allDrafts.get('分叉保留到')||'';
+      if(saved&&!forkRows.some(row=>row.id===saved)){const missing=new Option('此前轮次已不可用，请重新选择',saved);missing.disabled=true;turn.append(missing);}
+      turn.value=saved;
+      const validTurn=()=>turn.value===''||forkRows.some(row=>row.id===turn.value);
+      label.append(turn);detail.append(label);root.append(detail);
+      const epoch=api.epoch,current=()=>selected===threadId&&transport===api&&api.epoch===epoch;
+      const pendingFork=()=>[...forkWrites].find(item=>item.api===api&&item.epoch===epoch&&item.threadId===threadId);
+      const forkButton=button(detail,'创建分叉',async()=>{
+        if(!current()||!forkOptions.allowed||!idle||!validTurn()||pendingFork())return;
+        const pending={api,epoch,threadId};forkWrites.add(pending);
+        pending.promise=forkOptions.create(threadId,turn.value||null,current).finally(()=>forkWrites.delete(pending));updateFork();
+        try{await pending.promise;}catch(e){if(current())notice(e.message);}
+        finally{if(current())updateFork();}
+      });
+      const updateFork=()=>{const pending=!!pendingFork();turn.disabled=pending;forkButton.disabled=pending||!writable||!forkOptions.allowed||!idle||!validTurn();};turn.onchange=updateFork;updateFork();
+      const pending=pendingFork();if(pending){const settle=()=>{if(current())updateFork();};pending.promise.then(settle,settle);}
     }
     if(['active','idle'].includes(history.runtime?.type)&&(!c.supportedOperations||c.supportedOperations.includes('settings'))){
       const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
       renderModelSettings(settings,history,threadId,api,allDrafts);
       const advanced=el('details');advanced.append(el('summary','全部设置'));settings.append(advanced);
       advanced.append(el('p','填写需要修改的字段；未填写的设置保持不变。权限、沙箱和工作目录的更改会影响后续任务。'));
-      advanced.append(el('small','支持：model、effort、serviceTier、cwd、approvalPolicy、approvalsReviewer、sandboxPolicy、permissions、activePermissionProfile、collaborationMode、personality、summary'));
-      const editable={...c.settings};
+      const writableSettings=new Set(c.supportedSettings||[]);
+      advanced.hidden=!writableSettings.size;
+      advanced.append(el('small','支持：'+[...writableSettings].join('、')));
+      const editable=Object.fromEntries(Object.entries(c.settings).filter(([key])=>writableSettings.has(key)));
       // Snapshots contain the resolved sandbox alongside its named profile.
       // Updates accept the profile or an explicit sandbox, not both.
       if(editable.permissions!=null||editable.activePermissionProfile!=null)delete editable.sandboxPolicy;
@@ -172,7 +208,7 @@ const Operations = (() => {
           if(m.pausedReason)button(card,'恢复执行',b=>send(threadId,'queue-resume',{...base,messageId:m.id},b));
           button(card,'删除',b=>{if(confirm('删除这条尚未执行的排队任务？'))send(threadId,'queue-delete',{...base,messageId:m.id},b);});
         });
-        if(q.messages.length)button(queue,'清空排队消息',b=>{if(confirm('清空此会话全部排队任务？'))send(threadId,'clear-queue',{...base,confirmed:true},b);});
+        if(q.messages.length&&(!c.supportedOperations||c.supportedOperations.includes('clear-queue')))button(queue,'清空排队消息',b=>{if(confirm('清空此会话全部排队任务？'))send(threadId,'clear-queue',{...base,confirmed:true},b);});
       }
     }
     if(!active&&!idle)root.append(el('small','当前状态不支持会话操作；待处理请求可在下方回应。'));
@@ -234,5 +270,5 @@ const Operations = (() => {
       if(input){input.value=draft.value;input.focus();if(input.setSelectionRange&&draft.start!==null)input.setSelectionRange(draft.start,draft.end);}
     }
   }
-  return {render,reset,labels};
+  return {render,reset,labels,renderModelSettings};
 })();

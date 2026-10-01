@@ -306,10 +306,13 @@ class OwnerManager:
             for tid, entry in list(self.entries.items()):
                 if tid in self.loading or entry.get('in_flight'): continue
                 if entry.get('suspended'):
+                    state = entry.get('snapshot') or {}
+                    if state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active': continue
                     if not self.bus.connected or not entry['followers']: self.release(tid)
                     continue
                 state = entry['runtime'].current(tid)
                 if not entry['runtime'].connected or not state: continue
+                if state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active': continue
                 if state['threadRuntimeStatus']['type'] != 'idle' or state.get('requests'): continue
                 turns = state['turns']
                 if any(t['status'] == 'inProgress' for t in turns): continue
@@ -387,6 +390,9 @@ class OwnerManager:
                 'version': 11, 'sourceClientId': self.bus.client_id,
                 'params': {'hostId': 'local', 'conversationId': tid,
                            'change': {'type': 'snapshot', 'revision': revision, 'conversationState': state}}})
+            if 'nativeQueue' in state and (force or entry['snapshot'] is None or state['nativeQueue'] != entry['snapshot'].get('nativeQueue')):
+                self.bus._write({'type': 'broadcast', 'method': 'thread-queued-followups-changed', 'version': 2,
+                    'sourceClientId': self.bus.client_id, 'params': {'hostId': 'local', 'conversationId': tid, 'messages': state['nativeQueue']}})
             self.revisions[tid] = revision
             entry['snapshot'] = state
 
@@ -435,11 +441,23 @@ class OwnerManager:
                     entry['in_flight'] -= 1
         return self.bus.connected and not self.closed.is_set()
 
+    def _refresh_queues(self):
+        # Native I/O never holds the lock shared by all owned sessions.
+        with self.lock:
+            runtimes = [(tid, entry['runtime']) for tid, entry in self.entries.items()
+                        if not entry.get('suspended') and not entry['conflict']]
+        for tid, runtime in runtimes:
+            state = runtime.current(tid)
+            if state is None or 'nativeQueue' in state or not runtime.connected: continue
+            try: runtime.queue_snapshot(tid, refresh=True)
+            except (OSError, IPCError): continue
+
     def _pump(self):
         while not self.closed.is_set():
             self.dirty.wait(.25)
             if self.closed.wait(.075): break
             self.dirty.clear()
+            self._refresh_queues()
             self._release_finished()
             with self.lock:
                 if not self.entries: continue
@@ -453,8 +471,10 @@ class OwnerManager:
     @staticmethod
     def _assert_releasable(tid, entry):
         if entry.get('in_flight'): raise IPCError('cannot release a session with pending operations')
-        state = entry['runtime'].current(tid)
-        if entry['runtime'].connected and (not state or state.get('requests') or
+        state = entry.get('snapshot') if entry.get('suspended') else entry['runtime'].current(tid)
+        if state and (state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active'):
+            raise IPCError('cannot release a session with an active or unknown goal')
+        if entry['runtime'].connected and (not state or state.get('requests') or entry['runtime'].queue_busy(tid) or
                 state['threadRuntimeStatus']['type'] != 'idle' or
                 any(t['status'] == 'inProgress' for t in state['turns'])):
             raise IPCError('cannot release a running or waiting session')

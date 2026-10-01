@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import threading
 import uuid
+import weakref
 from contextlib import suppress
 
 from carryon.desktop_ipc.events import Events
@@ -17,16 +18,27 @@ from carryon.sessions.history_cache import NativeSnapshot
 from carryon.desktop_ipc.ipc import IPCError
 from carryon.paths import private_dir
 from carryon.usage import executable
+from carryon.contracts import SCHEMAS
+from carryon.app_server.initialization import initialization_lock
 
 
 def native_turn(turn):
     return {**turn, 'turnId': turn['id']}
 
 
+def thread_settings(result):
+    keys = ('model', 'approvalPolicy', 'approvalsReviewer', 'sandboxPolicy', 'permissions',
+            'serviceTier', 'collaborationMode', 'cwd', 'disabledPluginIds', 'personality', 'activePermissionProfile')
+    return {**{key: result[key] for key in keys if key in result},
+            **({'sandboxPolicy': result['sandbox']} if 'sandbox' in result else {}),
+            'effort': result.get('reasoningEffort')}
+
+
 class AppServer:
     protocol = 'codex-app-server'
-    supported_operations = {'interrupt', 'steer', 'compact', 'command-approval', 'file-approval',
-                            'permissions-approval', 'user-input', 'mcp-response'}
+    supported_settings = sorted(set(SCHEMAS['settings']['properties']) - {'threadId', 'multiAgentMode', 'activePermissionProfile'})
+    supported_operations = {'interrupt', 'steer', 'compact', 'settings', 'edit', 'fork', 'review', 'resume', 'queue-add', 'queue-edit', 'queue-delete', 'queue-reorder', 'queue-resume', 'command-approval', 'file-approval',
+                            'permissions-approval', 'user-input', 'mcp-response', 'goal-set', 'goal-pause', 'goal-clear'}
     MAX_FRAME = 32 * 1024 * 1024
 
     def __init__(self, home, *, runtime_directory=None):
@@ -48,6 +60,8 @@ class AppServer:
         self.on_change = lambda: None
         self.on_read = lambda tid, state=None, token=None: None
         self.account_ready = False
+        self.queue_locks = weakref.WeakValueDictionary()
+        self.review_refreshing = {}
 
     @property
     def connected(self):
@@ -59,16 +73,17 @@ class AppServer:
         self.home_lock = (self.runtime_directory / '.carryon-app-server.lock').open('a+')
         try:
             fcntl.flock(self.home_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            with (self.runtime_directory / 'app-server.log').open('ab') as log:
-                self.process = subprocess.Popen([executable(), 'app-server', '--listen', 'stdio://'],
-                    cwd=str(self.home), env=dict(os.environ, CODEX_HOME=str(self.home)),
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
-            threading.Thread(target=self._reader, args=(self.process,), daemon=True, name='app-server-reader').start()
-            self.rpc('initialize', {'clientInfo': {'name': 'carryon', 'version': '1.0'},
-                                    'capabilities': {'experimentalApi': True}})
-            self._write({'method': 'initialized', 'params': {}})
-            account = self.rpc('account/read', {'refreshToken': False})
-            self.account_ready = bool(account.get('account')) or account.get('requiresOpenaiAuth') is False
+            with initialization_lock(self.home):
+                with (self.runtime_directory / 'app-server.log').open('ab') as log:
+                    self.process = subprocess.Popen([executable(), 'app-server', '--listen', 'stdio://'],
+                        cwd=str(self.home), env=dict(os.environ, CODEX_HOME=str(self.home)),
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+                threading.Thread(target=self._reader, args=(self.process,), daemon=True, name='app-server-reader').start()
+                self.rpc('initialize', {'clientInfo': {'name': 'carryon', 'version': '1.0'},
+                                        'capabilities': {'experimentalApi': True}})
+                self._write({'method': 'initialized', 'params': {}})
+                account = self.rpc('account/read', {'refreshToken': False})
+                self.account_ready = bool(account.get('account')) or account.get('requiresOpenaiAuth') is False
         except Exception:
             self.close()
             raise
@@ -172,10 +187,11 @@ class AppServer:
             self._apply({'method': 'thread/started', 'params': {'thread': thread}}, thread['id'])
             state = self.snapshots[thread['id']]
             state['threadMetadata'] = thread
-            state['latestThreadSettings'] = {k: v for k, v in result.items() if k in
-                ('model', 'reasoningEffort', 'approvalPolicy', 'approvalsReviewer', 'sandboxPolicy')}
+            state['latestThreadSettings'] = thread_settings(result)
             state['latestModel'] = result.get('model')
             state['latestReasoningEffort'] = result.get('reasoningEffort')
+        from carryon.app_server.goals import read
+        read(self, thread['id'])
         return thread
 
     def watch(self, tid):
@@ -204,10 +220,13 @@ class AppServer:
                     turns.extend(native_turn(turn) for turn in page['data'])
                     cursor = page.get('nextCursor')
                     if not cursor: break
+                from carryon.app_server.goals import value
+                goal = value(self.rpc('thread/goal/get', {'threadId': tid}), tid)
                 state = NativeSnapshot({'id': tid, 'title': thread.get('name') or thread.get('preview', ''),
                     'threadMetadata': thread, 'cwd': thread['cwd'], 'turns': turns, 'threadRuntimeStatus': thread['status'], 'requests': [], 'supportedOperations': sorted(self.supported_operations),
-                    'latestThreadSettings': {k: v for k, v in result.items() if k in ('model', 'reasoningEffort', 'approvalPolicy')},
-                    'latestModel': result.get('model'), 'latestReasoningEffort': result.get('reasoningEffort')})
+                    'queueBackend': 'app-server', 'supportsSkills': True, 'supportedSettings': self.supported_settings, 'latestThreadSettings': thread_settings(result),
+                    'latestModel': result.get('model'), 'latestReasoningEffort': result.get('reasoningEffort'),
+                    'supportsGoal': True, 'threadGoal': goal, '_goalUnknown': False})
                 with self.lock:
                     if not self.connected: raise IPCError('工作区 app-server 已断开')
                     self.snapshots[tid] = state
@@ -217,6 +236,18 @@ class AppServer:
                     return 'app-server', self.snapshots[tid]
             finally:
                 with self.lock: self.loading.pop(tid, None)
+
+    def read_turns(self, tid):
+        """Read persisted turn evidence without resuming a task or its goal."""
+        result, cursor, seen = [], None, set()
+        while True:
+            page = self.rpc('thread/turns/list', {'threadId': tid, 'cursor': cursor,
+                'sortDirection': 'asc', 'limit': 100, 'itemsView': 'full'})
+            result.extend(native_turn(turn) for turn in page['data'])
+            cursor = page.get('nextCursor')
+            if not cursor: return result
+            if cursor in seen: raise IPCError('原生历史分页游标重复')
+            seen.add(cursor)
 
     def refresh_snapshot(self, tid):
         # Reading never resumes unloaded conversations. Loaded histories continue
@@ -237,7 +268,7 @@ class AppServer:
         with self.lock:
             state = self.snapshots.setdefault(tid, NativeSnapshot({'id': tid,
                 'title': thread.get('name') or thread.get('preview', ''), 'cwd': thread['cwd'],
-                'turns': [], 'requests': [], 'supportedOperations': sorted(self.supported_operations), 'threadRuntimeStatus': thread['status'], '_metadataOnly': True}))
+                'turns': [], 'requests': [], 'supportsSkills': False, 'supportedSettings': self.supported_settings, 'supportedOperations': sorted(self.supported_operations - {'review'}), 'threadRuntimeStatus': thread['status'], '_metadataOnly': True}))
         return 'app-server', state
 
     def _event(self, event):
@@ -257,6 +288,9 @@ class AppServer:
                 self.loading[tid].append(event)
                 return
             self._apply(event, tid)
+        if event['method'] == 'turn/completed':
+            from carryon.app_server.review_history import schedule
+            schedule(self, tid, params['turn']['id'])
         self.on_change()
 
     def _apply(self, event, tid):
@@ -273,7 +307,7 @@ class AppServer:
             thread = params['thread']
             self.snapshots[tid] = NativeSnapshot({'id': tid, 'title': thread.get('name') or thread.get('preview', ''),
                 'cwd': thread['cwd'], 'turns': [native_turn(t) for t in thread.get('turns', [])],
-                'threadRuntimeStatus': thread['status'], 'requests': [], 'supportedOperations': sorted(self.supported_operations)})
+                'threadRuntimeStatus': thread['status'], 'requests': [], 'queueBackend': 'app-server', 'supportsSkills': True, 'supportsGoal': True, '_goalUnknown': True, 'threadGoal': None, 'supportedSettings': self.supported_settings, 'supportedOperations': sorted(self.supported_operations)})
             self.following[tid] = 'app-server'
             return
         if old is None: return
@@ -284,10 +318,33 @@ class AppServer:
             state['requests'] = [r for r in old['requests'] if r['id'] != params.get('requestId')]
         elif method == 'thread/status/changed': state['threadRuntimeStatus'] = params['status']
         elif method == 'thread/name/updated': state['title'] = params.get('threadName') or ''
-        elif method == 'thread/settings/updated': state['latestThreadSettings'] = params['threadSettings']
+        elif method in ('thread/goal/updated', 'thread/goal/cleared'):
+            from carryon.app_server.goals import value
+            try:
+                state['threadGoal'] = value({'goal': params.get('goal') if method.endswith('/updated') else None}, tid)
+                state['_goalUnknown'] = False
+            except IPCError:
+                state['_goalUnknown'] = True
+            state['_goalRevision'] = old.get('_goalRevision', 0) + 1
+        elif method == 'thread/settings/updated':
+            state['latestThreadSettings'] = params['threadSettings']
+            state['latestModel'] = params['threadSettings'].get('model')
+            state['latestReasoningEffort'] = params['threadSettings'].get('effort')
+            if params['threadSettings'].get('cwd'):
+                state['cwd'] = params['threadSettings']['cwd']
+                if 'threadMetadata' in state: state['threadMetadata'] = {**state['threadMetadata'], 'cwd': state['cwd']}
+        elif method == 'thread/queue/changed':
+            state.pop('nativeQueue', None)
+        elif method == 'turn/diff/updated':
+            if not isinstance(params.get('diff'), str): return
+            state['turns'] = [{**turn, 'diff': params['diff']} if turn['turnId'] == params.get('turnId') else turn
+                              for turn in old['turns']]
         elif method in ('turn/started', 'turn/completed'):
             turn = native_turn(params['turn'])
+            if method == 'turn/started': state['threadRuntimeStatus'] = {'type': 'active', 'activeFlags': []}
             previous = next((t for t in old['turns'] if t['turnId'] == turn['turnId']), None)
+            if previous and 'diff' not in turn and 'diff' in previous:
+                turn['diff'] = previous['diff']
             if previous and (not params['turn'].get('items') or params['turn'].get('itemsView') in ('summary', 'notLoaded')):
                 # A completion summary is not a replacement for streamed items.
                 # Apply the native updates by id without losing omitted inputs
@@ -317,24 +374,72 @@ class AppServer:
         else: return
         self.snapshots[tid] = state
 
-    def start(self, tid, text, owner, client_message_id, before_send, images=None):
+    def record_started(self, tid, turn):
+        with self.lock:
+            state = self.current(tid)
+            if state is not None and not any(t['turnId'] == turn['id'] for t in state['turns']):
+                self._event({'method': 'turn/started', 'params': {'threadId': tid, 'turn': turn}})
+
+    def start_turn(self, tid, request, before_send=None):
         self.require_account()
-        result = self.rpc('turn/start', {'threadId': tid, 'clientUserMessageId': client_message_id,
+        with self._queue_lock(tid):
+            from carryon.sessions.skills import guard_inputs
+            before_send = guard_inputs(self, tid, request['input'], before_send)
+            def guarded(write):
+                def checked():
+                    with self.lock:
+                        if not self.queue_idle(self.current(tid)): raise IPCError('会话不再空闲')
+                        write()
+                if before_send: before_send(checked)
+                else: checked()
+            result = self.rpc('turn/start', request, guarded)
+            self.record_started(tid, result['turn'])
+            return result
+
+    def start(self, tid, text, owner, client_message_id, before_send, images=None, skills=None):
+        from carryon.sessions.skills import inputs
+        return self.start_turn(tid, {'threadId': tid, 'clientUserMessageId': client_message_id,
             'input': ([{'type': 'text', 'text': text, 'text_elements': []}] if text else []) +
-                     [{'type': 'image', 'url': url} for url in (images or [])]}, before_send)
-        return result['turn']
+                     [{'type': 'image', 'url': url} for url in (images or [])] + inputs(skills)}, before_send)['turn']
 
     def request(self, method, params, version=0, target=None, before_send=None, timeout_ms=15000):
         tid = params.get('conversationId')
         if method == 'thread-follower-interrupt-turn':
             result = self.rpc('turn/interrupt', {'threadId': tid, 'turnId': params['expectedTurnId']}, before_send)
         elif method == 'thread-follower-steer-turn':
+            from carryon.sessions.skills import guard_inputs
+            before_send = guard_inputs(self, tid, params['input'], before_send)
             state = self.current(tid)
             active = next((t for t in reversed(state['turns']) if t['status'] == 'inProgress'), None)
             if active is None: raise IPCError('执行轮次已改变')
             result = self.rpc('turn/steer', {'threadId': tid, 'expectedTurnId': active['turnId'], 'input': params['input']}, before_send)
         elif method == 'thread-follower-compact-thread':
             result = self.rpc('thread/compact/start', {'threadId': tid}, before_send)
+        elif method == 'thread-follower-update-thread-settings':
+            from carryon.contracts import settings
+            values = settings(params.get('threadSettings'), tid)
+            if 'activePermissionProfile' in values:
+                raise IPCError('app-server 不支持桌面权限配置标识')
+            self.rpc('thread/settings/update', {'threadId': tid, **values}, before_send)
+            result = {'applied': True}
+        elif method == 'thread-follower-set-queued-follow-ups-state':
+            from carryon.app_server.queue import replace
+            from carryon.contracts import digest
+            with self._queue_lock(tid):
+                state = self.current(tid) or {}
+                expected = params.get('expectedQueueFingerprint')
+                if expected is None and 'nativeQueue' in state: expected = digest(state['nativeQueue'])
+                result = replace(self, tid, params['state'][tid], expected, before_send)
+                # A confirmed mutation stays confirmed if a later refresh fails.
+                with self.lock:
+                    state = self.current(tid)
+                    if state is not None:
+                        updated = dict(state); updated.pop('nativeQueue', None)
+                        self.snapshots[tid] = NativeSnapshot(updated)
+        elif method == 'thread-follower-start-turn':
+            request = params['turnStart']['request']
+            if request != {'threadId': tid, 'input': []}: raise IPCError('无效继续执行请求')
+            result = self.start_turn(tid, request, before_send)
         elif method in ('thread-follower-command-approval-decision', 'thread-follower-file-approval-decision',
                          'thread-follower-permissions-request-approval-response', 'thread-follower-submit-user-input',
                          'thread-follower-submit-mcp-server-elicitation-response'):
@@ -342,6 +447,37 @@ class AppServer:
         else:
             raise IPCError('独立 app-server 暂不支持此桌面专属操作')
         return {'result': result}
+
+    def _queue_lock(self, tid):
+        with self.lock: return self.queue_locks.setdefault(tid, threading.RLock())
+
+    @staticmethod
+    def queue_idle(state):
+        return bool(state and not state.get('requests') and state['threadRuntimeStatus']['type'] == 'idle'
+                    and not any(t['status'] == 'inProgress' for t in state['turns']))
+
+    def queue_snapshot(self, tid, refresh=False):
+        from carryon.app_server.queue import messages
+        from copy import deepcopy
+        with self._queue_lock(tid):
+            state = self.current(tid)
+            rows = state.get('nativeQueue') if state is not None and not refresh else None
+            if rows is None:
+                # A notification racing the read invalidates the cache, never writes it back.
+                before = self.current(tid)
+                rows = messages(self, tid)
+                with self.lock:
+                    state = self.current(tid)
+                    if state is before and state is not None:
+                        self.snapshots[tid] = NativeSnapshot({**state, 'nativeQueue': rows, 'queueBackend': 'app-server'})
+            result = deepcopy(rows)
+            if self.queue_idle(self.current(tid)):
+                for row in result: row['pausedReason'] = '等待继续'
+            return result
+
+    def queue_busy(self, tid):
+        state = self.current(tid)
+        return state is None or 'nativeQueue' not in state or bool(state['nativeQueue'])
 
     def respond(self, tid, params, before_send, timeout_ms):
         request_id = params['requestId']

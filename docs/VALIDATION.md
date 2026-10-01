@@ -1,5 +1,7 @@
 # 验证记录与适用边界
 
+> 历史验证记录。当前官方对齐改造的范围、证据和未完成项见 [DELIVERY](parity/DELIVERY.md)；下文旧移动原型已删除，其旧版像素对比结论不适用于当前界面。
+
 ## 临时聊天抽屉（2026-09-11）
 
 - 实测临时聊天 `01a08e2f-1dec-7761-a4c8-bf260c2334e5` 原生属性为 ephemeral=true、sideConversation=true、forkedFromId=`01a08e13-3f4a-7ce3-9d9b-f634219404d3`，runtime 为 active。

@@ -18,6 +18,7 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);
    if(path==='/api/status')data={enabled:true,remoteControl:true};
+   else if(path==='/api/models')data={models:[{id:'fixture-model',name:'Fixture Model',efforts:['medium','high'],defaultEffort:'medium'},{id:'gpt-6-astra',name:'GPT-6 Astra',efforts:['medium','high'],defaultEffort:'medium'}]};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
    else if(path==='/api/activity')data={threads:[threads[1]],total:1,nextOffset:1};
@@ -57,13 +58,13 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chat stays within viewport');
  if(width<761){
   await page.locator('#prompt').fill('短句');await page.waitForTimeout(100);
-  assert(!await page.locator('#composer .input-shell').evaluate(e=>e.classList.contains('expanded')));
-  const gap=await page.evaluate(()=>{const a=document.querySelector('#attach-images').getBoundingClientRect(),b=document.querySelector('#composer .model-button').getBoundingClientRect();return b.x+b.width/2-a.x-a.width/2;});assert.equal(gap,32);
-  await page.locator('#prompt').fill('这是一段连续输入的长文字，用来确认超过一行后会展开输入区域，并且保留现有的发送和停止按钮。');await page.waitForTimeout(100);
-  assert(await page.locator('#composer .input-shell').evaluate(e=>e.classList.contains('expanded')));
+  const layout=()=>page.evaluate(()=>{const input=document.querySelector('#prompt').getBoundingClientRect(),attach=document.querySelector('#attach-images').getBoundingClientRect(),model=document.querySelector('#composer .model-button').getBoundingClientRect(),send=document.querySelector('#send').getBoundingClientRect();return {inputHeight:input.height,inputBottom:input.bottom,controlsTop:attach.top,attachWidth:attach.width,modelWidth:model.width,sendWidth:send.width,aligned:Math.abs(attach.y-send.y)<2};});
+  const short=await layout();assert(short.inputBottom<=short.controlsTop+1,'text stays above controls');assert(short.aligned);assert(short.attachWidth>=44&&short.modelWidth>=44&&short.sendWidth>=44,'controls meet touch targets');
+  await page.locator('#prompt').fill('这是一段连续输入的长文字，用来确认输入区域增高时工具栏仍在下方，并且保留现有的发送和停止按钮。');await page.waitForTimeout(100);
+  const long=await layout();assert(long.inputHeight>short.inputHeight);assert(long.inputBottom<=long.controlsTop+1);assert(long.aligned);
   await page.screenshot({path:prefix+'-expanded.png'});
   await page.locator('#prompt').fill('');await page.waitForTimeout(100);
-  assert(!await page.locator('#composer .input-shell').evaluate(e=>e.classList.contains('expanded')));
+  assert((await layout()).inputBottom<=(await layout()).controlsTop+1);
  }
  assert.deepEqual(errors,[]);assert(writes.every(w=>w.path==='/api/notifications/read'),'only read acknowledgements');
 

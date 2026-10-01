@@ -25,7 +25,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|models|usage|usage/reset|bridge|coordination|threads|side-chats|jobs|threads/[^/]+/(subagents|history|queue|operations|messages|compose|session|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|usage|usage/reset|bridge|coordination|threads|side-chats|jobs|threads/[^/]+/(subagents|history|queue|skills|goal|operations|messages|compose|session|fork|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -75,7 +75,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         valid_id(parent)
         tid = path.split('/')[3]
         if path.endswith('/compose'):
-            respond(202, bridge.compose(tid, data.get('requestId'), data.get('prompt'), data.get('images'), source, authorize, parent_id=parent))
+            respond(202, bridge.compose(tid, data.get('requestId'), data.get('prompt'), data.get('images'), source, authorize, parent_id=parent, skills=data.get('skills')))
         else:
             from carryon.sessions.operations import submit
             respond(202, submit(bridge, tid, data, source, authorize, parent_id=parent))
@@ -87,6 +87,12 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         handler = getattr(bridge, 'session_control', None)
         if handler is None: raise BridgeError('当前工作区未启用会话加载', 409)
         respond(200, handler(path.split('/')[3], data, source, authorize))
+    elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/skills'):
+        from carryon.sessions.skills import discover
+        respond(200, discover(bridge, path.split('/')[3]))
+    elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/goal'):
+        from carryon.app_server.goals import discover
+        respond(200, discover(bridge, path.split('/')[3]))
     elif method == "GET" and path.startswith("/api/threads/") and path.endswith("/history"):
         values = parse_qs(parsed.query, keep_blank_values=True).get('limit', ['40'])
         if len(values) != 1 or not re.fullmatch(r'[0-9]{1,4}', values[0]) or not 1 <= int(values[0]) <= 4000:
@@ -100,19 +106,22 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
     elif method == "POST" and path == "/api/threads":
         if getattr(bridge.catalog, 'independent', False):
             from carryon.app_server.app_creation import submit
-            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize))
+            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize, images=data.get('images'), settings=data.get('settings')))
         else:
             from carryon.sessions.creation import submit
-            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize))
+            respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize, images=data.get('images'), settings=data.get('settings')))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/operations"):
         from carryon.sessions.operations import submit
         if len(path.split('/')) != 5:
             raise ValueError('无效操作路径')
         respond(202, submit(bridge, path.split('/')[3], data, **({'source':source,'authorize':authorize} if source else {})))
+    elif method == 'POST' and path.startswith('/api/threads/') and path.endswith('/fork'):
+        from carryon.sessions.forking import submit
+        respond(202, submit(bridge, path.split('/')[3], data, source, authorize))
     elif method == "POST" and path.startswith('/api/threads/') and path.endswith('/compose'):
-        respond(202,bridge.compose(path.split('/')[3],data.get('requestId'),data.get('prompt'),data.get('images'),source,authorize))
+        respond(202,bridge.compose(path.split('/')[3],data.get('requestId'),data.get('prompt'),data.get('images'),source,authorize,skills=data.get('skills')))
     elif method == "POST" and path.startswith("/api/threads/") and path.endswith("/messages"):
-        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images"), **({"source":source,"authorize":authorize} if source else {})))
+        respond(202, bridge.submit("message", data.get("requestId"), data.get("prompt"), path.split("/")[3], images=data.get("images"), skills=data.get('skills'), **({"source":source,"authorize":authorize} if source else {})))
     elif method == "GET" and path == "/api/jobs":
         jobs = [bridge.refresh_job(j["id"]) for j in bridge.journal.list(limit=100)]
         respond(200, {"jobs": jobs})

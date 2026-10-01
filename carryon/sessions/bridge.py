@@ -307,6 +307,10 @@ class Bridge:
         if parent_id is not None: self.side_state(parent_id, thread_id)
         else: self.catalog.get(thread_id)
         ipc, generation = self.require()
+        if getattr(ipc, 'protocol', None) == 'codex-app-server':
+            result = projection(ipc.queue_snapshot(thread_id, refresh=authoritative), 'app-server')
+            with self.lock: self.check_generation(ipc, generation)
+            return result
         cached = None
         if not authoritative and hasattr(ipc, 'queue_snapshot'):
             cached = ipc.queue_snapshot(thread_id)
@@ -325,17 +329,20 @@ class Bridge:
     def send_snapshot(self, ipc, generation, thread_id, authorize=None, parent_id=None):
         return ipc.snapshot(thread_id)
 
-    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None):
+    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None,skills=None):
         from carryon.contracts import digest, text, validate_request_id
         from carryon.sessions.images import validate_images
         # Idempotency binds the original wire payload, before native text normalization.
         raw_prompt = prompt
         images=validate_images(images)
-        prompt=text(prompt, allow_empty=bool(images))
+        from carryon.sessions.skills import selections
+        skills=selections(skills)
+        if skills and parent_id: raise ValueError('临时聊天不支持技能选择')
+        prompt=text(prompt, allow_empty=bool(images or skills))
         validate_request_id(request_id)
         valid_id(thread_id)
         self.assert_target(thread_id, parent_id)
-        fingerprint=digest([thread_id,raw_prompt,images] + ([parent_id] if parent_id else []))
+        fingerprint=digest([thread_id,raw_prompt,images] + ([parent_id] if parent_id else []) + ([skills] if skills else []))
         ipc,generation=self.require()
         previous=self.journal.get(request_id)
         if previous:
@@ -343,13 +350,13 @@ class Bridge:
             return previous
         return self.prepare_compose(thread_id, request_id, fingerprint, source, authorize,
             lambda reserved: self._compose(thread_id, request_id, prompt, images, source, authorize,
-                                           parent_id, ipc, generation, fingerprint, reserved))
+                                           parent_id, ipc, generation, fingerprint, reserved, skills))
 
     def prepare_compose(self, thread_id, request_id, fingerprint, source, authorize, run):
         return run(None)
 
     def _compose(self, thread_id, request_id, prompt, images, source, authorize,
-                 parent_id, ipc, generation, fingerprint, reserved):
+                 parent_id, ipc, generation, fingerprint, reserved, skills):
         from carryon.sessions.operations import controls, submit as operate
         owner,state=self.send_snapshot(ipc,generation,thread_id,authorize,parent_id)
         with self.lock:
@@ -357,31 +364,36 @@ class Bridge:
             if authorize:authorize()
             self.assert_target(thread_id, parent_id, state)
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
+            if skills and not state.get('supportsSkills'): raise ValueError('当前会话不支持技能选择')
         # Never hold the bridge gate while waiting for a native response: stream
         # updates, cancellation and approval replies must remain able to proceed.
-        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id, _reserved=reserved)
+        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id, _reserved=reserved, skills=skills)
         if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
         data={'requestId':request_id,'prompt':prompt}
         if images:data['images']=images
+        if skills:data['skills']=skills
         if status=='waiting':
             data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id, authoritative=True)['fingerprint'])
         else:
             data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
         return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id, _reserved=reserved)
 
-    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, *, _reserved=None):
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, *, _reserved=None, skills=None):
         if kind != "message": raise ValueError("新建会话请通过项目创建接口提交")
         from carryon.sessions.images import validate_images
         images=validate_images(images)
+        from carryon.sessions.skills import selections
+        skills=selections(skills)
+        if skills and parent_id: raise ValueError('临时聊天不支持技能选择')
         from carryon.contracts import text, validate_request_id
         validate_request_id(request_id)
-        prompt = text(prompt, allow_empty=bool(images))
+        prompt = text(prompt, allow_empty=bool(images or skills))
         ipc, generation = self.require()
         with self.lock:
             if not thread_id:
                 raise BridgeError("请指定目标会话")
             valid_id(thread_id)
-            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else []), ensure_ascii=False).encode()).hexdigest()
+            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else [])+([skills] if skills else []), ensure_ascii=False).encode()).hexdigest()
             previous = self.journal.get(request_id)
             if previous and previous != _reserved:
                 if previous["fingerprint"] != fingerprint:
@@ -389,7 +401,7 @@ class Bridge:
                 return previous
             # Protect concurrent turn-start writes, never the lifetime of a task.
             if any(j['id'] != request_id and j['threadId'] == thread_id and j['state'] in ('preparing', 'dispatching')
-                   and j['kind'] in ('compose', 'message', 'create', 'operation:edit', 'operation:resume', 'operation:compact')
+                   and j['kind'] in ('compose', 'message', 'create', 'operation:edit', 'operation:resume', 'operation:compact', 'operation:review')
                    for j in self.journal.list()):
                 raise BridgeError('会话正在提交操作，请稍后重试')
             self.assert_target(thread_id, parent_id)
@@ -397,6 +409,7 @@ class Bridge:
                    "state": "preparing", "created": time.time(), "fingerprint": fingerprint,
                    "clientMessageId": str(uuid.uuid4())}
             if source:job.update(source)
+            if skills:job['skills']=skills
             if parent_id is not None: job['sideParentId'] = parent_id
             if _reserved is None: self.journal.insert(job)
             else:
@@ -412,6 +425,7 @@ class Bridge:
             owner, state = self.send_snapshot(ipc, generation, job["threadId"], authorize, job.get('sideParentId'))
             self.assert_target(job['threadId'], job.get('sideParentId'), state)
             idle_snapshot(state)
+            if job.get('skills') and not state.get('supportsSkills'): raise ValueError('当前会话不支持技能选择')
 
             def guarded_send(write):
                 nonlocal dispatched
@@ -425,7 +439,7 @@ class Bridge:
                     dispatched = True
                     write()
 
-            turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send, **({"images":images} if images else {}))
+            turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send, **({"images":images} if images else {}), **({'skills':job['skills']} if job.get('skills') else {}))
             self.journal.update(job["id"], state="accepted", turnId=turn["id"], evidence="native-handler-response")
         except Exception as exc:
             uncertain = dispatched and not (isinstance(exc, IPCError) and not exc.uncertain)
@@ -451,8 +465,9 @@ class Bridge:
         ipc, generation = self.require()
         try:
             state = ipc.current(thread_id) if hasattr(ipc, 'current') else None
-            if state is None:
-                _, state = ipc.snapshot(thread_id)
+            if state is None or state.get('_metadataOnly'):
+                if getattr(ipc, 'protocol', None) == 'codex-app-server': state = {'turns': ipc.read_turns(thread_id)}
+                else: _, state = ipc.snapshot(thread_id)
             native = next((turn for turn in reversed(turns(state)) if turn.get('turnId') == turn_id), None)
         except IPCError as exc:
             if str(exc) != 'no-client-found': raise
@@ -469,7 +484,9 @@ class Bridge:
         ipc, generation = self.require()
         try:
             self.assert_target(job['threadId'], job.get('sideParentId'))
-            _, state = ipc.snapshot(job['threadId'])
+            if getattr(ipc, 'protocol', None) == 'codex-app-server':
+                state = {'turns': ipc.read_turns(job['threadId'])}
+            else: _, state = ipc.snapshot(job['threadId'])
             identifier = job['clientMessageId']
             for turn in turns(state):
                 for item in turn.get('items', []):
@@ -486,7 +503,7 @@ class Bridge:
                             evidence='native-message-id')
             if job['kind'] == 'operation:queue-add':
                 queue = self.queue(job['threadId'], job.get('sideParentId'))
-                if any(item.get('id') == identifier for item in queue['messages']):
+                if any(item.get('clientUserMessageId' if queue['source'] == 'app-server' else 'id') == identifier for item in queue['messages']):
                     with self.lock:
                         self.check_generation(ipc, generation)
                         return self.journal.update(job['id'], expected=job, state='completed', error=None,

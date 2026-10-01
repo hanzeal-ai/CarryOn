@@ -28,9 +28,11 @@ public enum LocalFiles {
 public struct DraftSnapshot: Codable, Sendable {
     public var texts: [String: String]
     public var images: [String: [String]]
-    public init(texts: [String: String] = [:], images: [String: [String]] = [:]) {
+    public var skills: [String: [SkillReference]]?
+    public init(texts: [String: String] = [:], images: [String: [String]] = [:], skills: [String: [SkillReference]] = [:]) {
         self.texts = texts.filter { !$0.value.isEmpty }
         self.images = images.filter { !$0.value.isEmpty }
+        self.skills = skills.isEmpty ? nil : skills.filter { !$0.value.isEmpty }
     }
 }
 
@@ -54,6 +56,7 @@ public struct WorkspacePreferences {
 public final class DraftStore {
     public var texts: [String: String] = [:] { didSet { scheduleSave() } }
     public var images: [String: [String]] = [:] { didSet { scheduleSave() } }
+    public var skills: [String: [SkillReference]] = [:] { didSet { scheduleSave() } }
     private let file: URL
     private var activeFile: URL?
     private struct Save: Sendable {
@@ -98,8 +101,9 @@ public final class DraftStore {
             if let pending = unsaved[file] {
                 texts = pending.complete ? pending.snapshot.texts : saved.texts.merging(pending.snapshot.texts) { _, new in new }
                 images = pending.complete ? pending.snapshot.images : saved.images.merging(pending.snapshot.images) { _, new in new }
+                skills = pending.complete ? (pending.snapshot.skills ?? [:]) : (saved.skills ?? [:]).merging(pending.snapshot.skills ?? [:]) { _, new in new }
             } else {
-                texts = saved.texts; images = saved.images
+                texts = saved.texts; images = saved.images; skills = saved.skills ?? [:]
             }
             loaded = true
             dirty = unsaved[file] != nil
@@ -108,6 +112,7 @@ public final class DraftStore {
             guard version == generation, !Task.isCancelled else { return }
             texts = unsaved[file]?.snapshot.texts ?? [:]
             images = unsaved[file]?.snapshot.images ?? [:]
+            skills = unsaved[file]?.snapshot.skills ?? [:]
             report("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存", "读取草稿")
         }
     }
@@ -125,14 +130,14 @@ public final class DraftStore {
         pendingSave?.cancel(); pendingSave = nil
         guard let activeFile else { return }
         var snapshot = DraftSnapshot()
-        snapshot.texts = texts; snapshot.images = images
+        snapshot.texts = texts; snapshot.images = images; snapshot.skills = skills
         guard loaded else {
-            if !texts.isEmpty || !images.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
+            if !texts.isEmpty || !images.isEmpty || !skills.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
             return
         }
         guard dirty else { return }
         dirty = false
-        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images), complete: true)
+        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images, skills: skills), complete: true)
         unsaved[activeFile] = save; queued[activeFile] = save
         guard writer == nil else { return }
         writer = Task {
@@ -154,6 +159,6 @@ public final class DraftStore {
     }
     public func reset() {
         save(); loaded = false; dirty = false; activeFile = nil; generation = UUID()
-        texts = [:]; images = [:]
+        texts = [:]; images = [:]; skills = [:]
     }
 }

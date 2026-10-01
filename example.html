@@ -17,6 +17,12 @@
   <script src="/qrcode.js" defer></script>
   <script src="/console-login.js" defer></script>
   <script src="/subagents.js" defer></script>
+  <link rel="stylesheet" href="/diff-review.css">
+  <script src="/diff-review.js" defer></script>
+  <script src="/skills-picker.js" defer></script>
+  <script src="/review-controls.js" defer></script>
+  <script src="/goal-controls.js" defer></script>
+  <link rel="stylesheet" href="/skills-picker.css">
   <script src="/app.js" defer></script>
   <script src="/workspace-binding.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
@@ -53,9 +59,11 @@
       <section id="requests" aria-label="待处理请求" hidden></section>
       <details class="jobs-panel"><summary>桥接请求记录</summary><div id="jobs" class="jobs" aria-live="polite"></div></details>
       <form id="composer" class="composer">
+        <div id="skill-previews" class="skill-chips"></div>
         <div id="image-previews" class="image-previews" hidden></div>
         <label class="sr-only" for="prompt">新的任务</label><textarea id="prompt" rows="3" maxlength="16000" placeholder="发送新的任务…" disabled></textarea>
-        <div class="composer-footer"><div class="composer-tools"><button id="attach-images" type="button" class="quiet" disabled aria-label="添加图片" title="添加图片（最多 3 张，自动压缩）">＋ 图片</button><input id="image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small></div><button id="send" class="primary" disabled>发送任务 ↑</button></div>
+        <label id="followup-label" class="composer-followup" hidden>发送方式 <select id="followup-mode" aria-label="运行中发送方式"><option value="queue">当前任务结束后执行</option><option value="steer">立即补充当前任务</option></select></label>
+        <div class="composer-footer"><div class="composer-tools"><button id="attach-images" type="button" class="quiet" disabled aria-label="添加图片" title="添加图片（最多 3 张，自动压缩）">＋ 图片</button><button id="attach-skills" type="button" class="quiet" aria-label="添加技能" hidden>技能</button><input id="image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small></div><button id="send" class="primary" disabled>发送任务 ↑</button></div>
       </form>
       <p class="footnote">与你的 Codex 工作空间保持同步</p>
     </section>
@@ -78,7 +86,11 @@
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>
       <label id="new-project-label" for="new-project">项目<select id="new-project" required><option value="">选择项目</option></select></label>
-      <label for="new-prompt">交互文案</label><textarea id="new-prompt" rows="7" required maxlength="16000" placeholder="描述你希望新会话完成的任务…"></textarea>
+      <div id="new-model-home"><div id="new-model-settings"><label>模型<select id="new-model"><option value="">项目默认</option></select></label><label id="new-effort-label" hidden>思考强度<select id="new-effort"></select></label><small id="new-model-status" role="status"></small></div></div>
+      <label for="new-prompt">任务</label><textarea id="new-prompt" rows="7" maxlength="16000" placeholder="描述你希望完成的任务…"></textarea>
+      <div id="new-image-previews" class="image-previews" hidden></div>
+      <input id="new-image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <button id="new-attach-images" type="button" aria-label="添加图片">＋ 添加图片</button>
       <p id="create-error" class="error" role="alert"></p>
       <div class="dialog-actions"><button type="button" id="cancel-create">取消</button><button id="submit-create" class="primary">提交并创建</button></div>
     </form>

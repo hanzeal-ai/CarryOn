@@ -30,7 +30,14 @@ class Runtime:
     def snapshot(self, tid): self.data = state(tid); return 'app-server', self.data
     def current(self, tid): return self.data
     def require_account(self): pass
-    def rpc(self, method, params):
+    def queue_busy(self, tid): return False
+    def start_turn(self, tid, request):
+        result = self.rpc('turn/start', request)
+        if not any(t['turnId'] == result['turn']['id'] for t in self.data['turns']):
+            self._event({'method': 'turn/started', 'params': {'threadId': tid, 'turn': result['turn']}})
+        return result
+    def rpc(self, method, params, before_send=None):
+        if before_send: before_send(lambda: None)
         self.calls.append((method, params))
         if method == 'turn/start': return {'turn': {'id': 'new', 'status': 'inProgress', 'items': []}}
         if method == 'thread/loaded/list': return {'data': [self.data['id']]}
@@ -397,6 +404,17 @@ class AutoReleaseTests(unittest.TestCase):
     def test_load_only_does_not_release_old_finished_history(self):
         self.manager._release_finished()
         self.assertIn(T, self.manager.entries)
+
+    def test_active_or_unknown_goal_retains_owner_between_terminal_turns(self):
+        self.start(); self.finish()
+        self.runtime.data['threadGoal'] = {'status': 'active'}
+        self.manager._release_finished(); self.assertTrue(self.runtime.connected)
+        with self.assertRaises(IPCError): self.manager.release(T)
+        self.runtime.data['threadGoal'] = {'status': 'paused'}
+        self.runtime.data['_goalUnknown'] = True
+        self.manager._release_finished(); self.assertTrue(self.runtime.connected)
+        self.runtime.data['_goalUnknown'] = False
+        self.manager._release_finished(); self.assertFalse(self.runtime.connected)
 
     def follow(self, client, following=True):
         self.manager.broadcast({'method': 'thread-stream-following-changed', 'version': 1,

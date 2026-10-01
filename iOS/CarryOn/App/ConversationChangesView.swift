@@ -9,6 +9,10 @@ struct ConversationChangesView: View {
     var filePath: String? = nil
     @State private var selectedPath: String?
     @State private var projection: ConversationChanges.Snapshot?
+    @State private var commentLine: UnifiedDiff.Line?
+    @State private var commentPath = ""
+    @State private var commentText = ""
+    @State private var commentScope = ""
     private var history: JSONValue { scopedHistory ?? (model.history["thread"]["id"].text == threadID ? model.history : .null) }
     private var selectedFile: ConversationChanges.File? {
         let files = projection?.files ?? []
@@ -35,7 +39,10 @@ struct ConversationChangesView: View {
                                 }
                                 let change = entry["data"]["changes"].array.first ?? .null
                                 if !change["diff"].text.isEmpty {
-                                    CodeBlockView(code: change["diff"].text, language: "diff")
+                                    UnifiedDiffView(patch: change["diff"].text) { line in
+                                        commentScope = model.scope; commentPath = file.path
+                                        commentText = ""; commentLine = line
+                                    }
                                 } else {
                                     Text("此文件没有可展示的文本 diff").font(.subheadline).foregroundStyle(Design.secondary)
                                 }
@@ -43,7 +50,7 @@ struct ConversationChangesView: View {
                         }
                     } else if let projection, !projection.summaries.isEmpty {
                         ForEach(projection.summaries, id: \.stableID) { item in
-                            CodeBlockView(code: item["data"]["diff"].text, language: "diff")
+                            UnifiedDiffView(patch: item["data"]["diff"].text)
                         }
                     } else {
                         Text("当前记录没有文件改动")
@@ -79,8 +86,36 @@ struct ConversationChangesView: View {
                     let result = await Task.detached(priority: .userInitiated) { ConversationChanges.Snapshot(source) }.value
                     if !Task.isCancelled { projection = result }
                 }
+                .sheet(item: $commentLine) { line in
+                    NavigationStack {
+                        Form {
+                            Section(commentPath + " · " + (line.location ?? "")) {
+                                Text(line.text).font(.caption.monospaced()).textSelection(.enabled)
+                                TextField("添加评论…", text: $commentText, axis: .vertical).lineLimit(3...8)
+                            }
+                        }.navigationTitle("评论改动").navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) { Button("取消") { commentLine = nil } }
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button("添加到对话") {
+                                        addComment(line)
+                                    }.disabled(commentScope != model.scope || commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                }
+                            }
+                    }
+                }
         }
     }
+    private func addComment(_ line: UnifiedDiff.Line) {
+        guard commentScope == model.scope, let location = line.location,
+              !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let key = commentScope + "\n" + threadID
+        let existing = model.draftStore.texts[key] ?? ""
+        let note = "关于已加载改动 \(commentPath)（\(location)）：\n\(line.text)\n\(commentText)"
+        model.draftStore.texts[key] = existing + (existing.isEmpty ? "" : "\n\n") + note
+        model.draftStore.save(); commentLine = nil; dismiss()
+    }
+
 }
 
 struct ConversationChangesCard: View {

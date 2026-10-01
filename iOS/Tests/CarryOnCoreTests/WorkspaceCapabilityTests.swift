@@ -29,6 +29,7 @@ import Testing
         }
     }
     #expect(WorkspaceCapability.request(path: "/api/threads", body: .object([:])) == .create)
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/fork", body: .object(["lastTurnId": .string("turn")])) == .create)
     #expect(WorkspaceCapability.request(path: "/api/threads/t/compose", body: .object([:])) == .send)
     #expect(WorkspaceCapability.request(path: "/api/jobs/j/acknowledge", body: .object([:])) == .send)
     #expect(WorkspaceCapability.request(path: "/api/streams/s/read", body: .object([:])) == .view)

@@ -1,6 +1,7 @@
 """Composition root for desktop workspace session ownership."""
 import time
 import threading
+from contextlib import contextmanager
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.catalog import valid_id
 from carryon.contracts import digest, validate_request_id
@@ -30,6 +31,65 @@ class OwnerBridge(Bridge):
             if self.owner_service is None:
                 self.owner_service = OwnerManager(self.catalog.home, self.owner_directory, self.catalog)
             return self.owner_service
+
+    def queue(self, thread_id, parent_id=None, *, authoritative=False):
+        from carryon.sessions.queue import projection
+        service = self.owner_service
+        if service is not None and parent_id is None:
+            with service.lock:
+                entry = service.entries.get(thread_id)
+                runtime = entry['runtime'] if entry and not entry.get('suspended') and not entry['conflict'] else None
+            if runtime is not None:
+                self.assert_target(thread_id)
+                ipc, generation = self.require()
+                result = projection(runtime.queue_snapshot(thread_id, refresh=authoritative), 'app-server')
+                with self.lock: self.check_generation(ipc, generation)
+                service.dirty.set()
+                return result
+        return super().queue(thread_id, parent_id, authoritative=authoritative)
+
+    @contextmanager
+    def native_session(self, tid, authorize, *, loaded_only=False, submitted_turns=None, track_future_turns=False):
+        """Keep an owned runtime alive and serialize native transactions with IPC turns."""
+        service = self.owner_service
+        if service is None:
+            yield None
+            return
+        with service.lock:
+            owned = tid in service.entries
+        if not owned:
+            yield None
+            return
+        with service._thread_lock(tid):
+            if loaded_only:
+                with service.lock:
+                    entry = service.entries.get(tid)
+                    if not entry or entry.get('suspended'):
+                        raise IPCError('此操作需要已加载的原生会话')
+            service.load(tid, authorize)
+            with service.lock:
+                entry = service.entries[tid]
+                runtime = entry['runtime']
+                entry['in_flight'] = entry.get('in_flight', 0) + 1
+                prior_turn_ids = {turn['turnId'] for turn in runtime.current(tid)['turns']}
+            def guarded(write):
+                with service.lock:
+                    if (service.closed.is_set() or service.entries.get(tid) is not entry
+                            or entry['runtime'] is not runtime or entry['conflict'] or entry['disconnect']
+                            or not service.bus.connected or not runtime.connected):
+                        raise IPCError('原生操作期间会话归属已改变')
+                    write()
+                    if track_future_turns: entry['awaiting_new_turn'] = True
+            try:
+                yield runtime, guarded
+            finally:
+                with service.lock:
+                    current = runtime.current(tid)
+                    if current is not None:
+                        entry['submitted_turn_ids'].update(submitted_turns if submitted_turns is not None else
+                            (turn['turnId'] for turn in current['turns'] if turn['turnId'] not in prior_turn_ids))
+                    entry['in_flight'] -= 1
+                service.dirty.set()
 
     def prepare_compose(self, thread_id, request_id, fingerprint, source, authorize, run):
         # Persist identity before slow discovery/resume, so the cloud can return

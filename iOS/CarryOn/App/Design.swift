@@ -5,7 +5,8 @@ enum Design {
     static let canvas = Color(uiColor: .systemBackground)
     static let background = neutral(light: 0.97, dark: 0.07)
     static let surface = neutral(light: 1, dark: 0.12)
-    static let input = neutral(light: 0.95, dark: 0.16)
+    static let input = neutral(light: 0.985, dark: 0.16)
+    static let composerAccent = Color(red: 0.68, green: 0.46, blue: 0.96)
     static let ink = Color.primary
     static let secondary = Color.secondary
     static let border = Color.primary.opacity(0.10)

@@ -140,3 +140,7 @@ dialog { border-radius:20px; }
 .pairing .auth-card input { min-height:46px; background:var(--field); border-color:transparent; font-size:15px; }
 .auth-card #pair { min-height:44px; box-shadow:none; }
 dialog textarea, dialog input, dialog select { background:var(--field); color:var(--ink); border-color:var(--hairline); border-radius:14px; }
+
+.composer-followup { display:flex; align-items:center; gap:8px; margin:0 4px 8px; color:var(--muted-foreground); font-size:12px; }
+.composer-followup[hidden] { display:none; }
+.composer-followup select { width:auto; max-width:100%; min-height:44px; border:0; background:transparent; }

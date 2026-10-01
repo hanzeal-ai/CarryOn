@@ -1,6 +1,7 @@
 """Bounded adapters for the desktop follower protocol (26.924.22138)."""
 import time
 import uuid
+from contextlib import nullcontext
 
 from carryon.desktop_ipc.ipc import IPCError
 from carryon.contracts import digest, text
@@ -48,6 +49,7 @@ def turns(state):
 def controls(state):
     items = turns(state)
     active = next((t for t in reversed(items) if t.get('status') == 'inProgress'), None)
+    reviewing = active is not None and any(item.get('type') == 'enteredReviewMode' for item in active.get('items', []))
     last = items[-1] if items else {}
     user = next((item for item in reversed(last.get('items', [])) if item.get('type') == 'userMessage'), None)
     inputs = user.get('content', []) if user is not None else last.get('params', {}).get('input', [])
@@ -61,14 +63,26 @@ def controls(state):
             requests.append({'id': r.get('id'), 'action': action, 'method': r['method'],
                              'fingerprint': digest(r), 'params': r.get('params', {}),
                              'decisions': approval_choices(action, r.get('params', {}))})
+    writable = set(SCHEMAS['settings']['properties']) - {'threadId', 'multiAgentMode'}
+    current_settings = {k: v for k, v in (state.get('latestThreadSettings') or {}).items() if k in writable}
+    if 'collaborationMode' not in current_settings and state.get('latestCollaborationMode') is not None:
+        current_settings['collaborationMode'] = state['latestCollaborationMode']
     return {**({'supportedOperations': state['supportedOperations']} if 'supportedOperations' in state else {}),
+            'supportsSkills': state.get('supportsSkills') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
+            'supportsGoal': state.get('supportsGoal') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
+            'goal': state.get('threadGoal'), 'goalUnknown': state.get('_goalUnknown', False),
+            'supportedSettings': sorted(writable.intersection(state.get('supportedSettings', writable))),
             'activeTurnId': active.get('turnId') if active else None,
+            'activeTurnKind': 'review' if reviewing else None, 'canSteer': active is not None and not reviewing,
             'lastTurnId': last.get('turnId'), 'lastTurnStatus': last.get('status'), 'lastUserText': text,
-            'settings': {k: v for k, v in (state.get('latestThreadSettings') or {}).items()
-                         if k in SCHEMAS['settings']['properties'] and k not in ('threadId', 'multiAgentMode')}, 'requests': requests}
+            'settings': current_settings, 'requests': requests}
 
 
 def build(action, data, state):
+    from carryon.sessions.skills import selections, inputs
+    skills = selections(data.get('skills'))
+    if skills and (action not in ('steer', 'queue-add') or not state.get('supportsSkills')):
+        raise ValueError('当前操作不支持技能选择')
     if action not in METHODS:
         raise ValueError('不支持的会话操作')
     c = controls(state)
@@ -80,17 +94,19 @@ def build(action, data, state):
         if action == 'interrupt':
             params.update(mode='user-stop', expectedTurnId=c['activeTurnId'])
         else:
+            if not c['canSteer']: raise ValueError('当前原生审查轮不支持立即补充，请使用排队')
             from carryon.sessions.images import validate_images
             images = validate_images(data.get('images'))
             prompt = data.get('prompt')
-            prompt = text(prompt, allow_empty=bool(images))
-            params.update(input=([{'type': 'text', 'text': prompt, 'text_elements': []}] if prompt else []) + [{'type': 'image', 'url': url} for url in images],
+            prompt = text(prompt, allow_empty=bool(images or skills))
+            params.update(input=([{'type': 'text', 'text': prompt, 'text_elements': []}] if prompt else []) + [{'type': 'image', 'url': url} for url in images] + inputs(skills),
                           clientUserMessageId=str(uuid.uuid4()), attachments=[],
-                          restoreMessage=queued_message(prompt, state, images))
+                          restoreMessage=queued_message(prompt, state, images, skills))
     elif action in QUEUE_ACTIONS:
         if runtime not in ('active', 'idle'):
             raise ValueError('会话运行状态尚未确认')
         params['state'] = {state['id']: transform(action, data, state, state['nativeQueue'])}
+        if state.get('queueBackend') == 'app-server': params['expectedQueueFingerprint'] = data['queueFingerprint']
     elif action == 'settings':
         if runtime not in ('active', 'idle'):
             raise ValueError('会话运行状态尚未确认')
@@ -170,15 +186,17 @@ def permission_subset(granted, requested):
 
 
 def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, parent_id=None, *, _reserved=None):
+    from carryon.sessions.skills import selections
     from carryon.errors import BridgeError
     from carryon.sessions.catalog import valid_id
     valid_id(thread_id)
+    if parent_id and data.get('skills'): raise ValueError('临时聊天不支持技能选择')
     bridge.assert_target(thread_id, parent_id)
     ipc, generation = bridge.require()
     action, request_id = data.get('action'), data.get('requestId')
     if hasattr(ipc, 'supported_operations') and action not in ipc.supported_operations:
         raise ValueError('此工作区不支持该操作')
-    if action not in METHODS:
+    if action not in METHODS and action not in ('review', 'goal-set', 'goal-pause', 'goal-clear'):
         raise ValueError('不支持的会话操作')
     from carryon.contracts import validate_request_id
     validate_request_id(request_id)
@@ -195,11 +213,12 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
                 continue
             if action in QUEUE_ACTIONS and previous['kind'] in {'operation:' + a for a in QUEUE_ACTIONS} and previous['state'] in ('preparing', 'dispatching', 'uncertain'):
                 raise BridgeError('原生队列写入尚未确认，请先核对队列；其他操作不受影响')
-            if action in ('compact', 'edit', 'resume') and previous['kind'] in ('compose', 'message', 'create', 'operation:compact', 'operation:edit', 'operation:resume') and previous['state'] in ('preparing', 'dispatching'):
+            if action in ('compact', 'edit', 'resume', 'review') and previous['kind'] in ('compose', 'message', 'create', 'operation:compact', 'operation:edit', 'operation:resume', 'operation:review') and previous['state'] in ('preparing', 'dispatching'):
                 raise BridgeError('会话正在提交操作，请稍后重试')
         job = {'id': request_id, 'fingerprint': fingerprint, 'kind': 'operation:' + action,
                'threadId': thread_id, 'created': time.time(), 'state': 'preparing'}
         if source:job.update(source)
+        if data.get('skills'): job['skills'] = selections(data['skills'])
         if parent_id is not None: job['sideParentId'] = parent_id
         if _reserved is None: bridge.journal.insert(job)
         else:
@@ -211,6 +230,16 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
 
 
 def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
+    if data['action'] in ('goal-set', 'goal-pause', 'goal-clear'):
+        from carryon.app_server.goals import dispatch as goal
+        goal(bridge, ipc, generation, job, data, authorize)
+        return
+    if data['action'] == 'review':
+        from carryon.app_server.review import dispatch as review
+        review(bridge, ipc, generation, job, data, authorize)
+        return
+    if data['action'] == 'edit' and dispatch_native_edit(bridge, ipc, generation, job, data, authorize):
+        return
     sent = False
     try:
         if prepared is not None and hasattr(ipc, 'current') and ipc.current(job['threadId']) is prepared[1]:
@@ -223,6 +252,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
         method, version, params = build(data['action'], data, state)
         def guarded(write):
             nonlocal sent
+            queue = bridge.queue(job['threadId'], job.get('sideParentId'), authoritative=True)['messages'] if data['action'] in QUEUE_ACTIONS else None
             with bridge.lock:
                 bridge.check_generation(ipc, generation)
                 if authorize:authorize()
@@ -232,7 +262,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
                 if prepared is not None and current is None:
                     raise IPCError('会话状态正在重新同步，此请求未投递')
                 if data['action'] in QUEUE_ACTIONS:
-                    current = {**(current or state), 'nativeQueue': bridge.queue(job['threadId'], job.get('sideParentId'), authoritative=True)['messages']}
+                    current = {**(current or state), 'nativeQueue': queue}
                 if current is not None:
                     build(data['action'], data, current)
                 bridge.journal.update(job['id'], state='dispatching')
@@ -242,6 +272,9 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
             bridge.journal.update(job['id'], clientMessageId=params['clientUserMessageId'])
         elif data['action'] == 'queue-add':
             bridge.journal.update(job['id'], clientMessageId=params['state'][job['threadId']][-1]['id'])
+        elif data['action'] == 'queue-resume' and state.get('queueBackend') == 'app-server':
+            row = next(row for row in state['nativeQueue'] if row['id'] == data['messageId'])
+            bridge.journal.update(job['id'], clientMessageId=row['clientUserMessageId'])
         native_response = getattr(ipc, 'protocol', None) == 'codex-app-server' and data['action'] in REQUEST_METHODS
         if native_response:
             bridge.journal.update(job['id'], nativeResponse={'session': ipc.session_id, 'requestId': params['requestId']})
@@ -259,3 +292,55 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
     except Exception as exc:
         uncertain = sent and (not isinstance(exc, IPCError) or exc.uncertain)
         bridge.journal.update(job['id'], state='uncertain' if uncertain else 'failed', error=str(exc))
+
+
+def dispatch_native_edit(bridge, ipc, generation, job, data, authorize):
+    """Native edits need one durable receipt and a fresh guard for each phase."""
+    tid = job['threadId']
+    if job.get('sideParentId'): return False
+    def authorized():
+        with bridge.lock:
+            bridge.check_generation(ipc, generation)
+            bridge.assert_target(tid)
+            if authorize: authorize()
+    if getattr(ipc, 'protocol', None) == 'codex-app-server':
+        session = nullcontext((ipc, lambda write: write()))
+    elif hasattr(bridge, 'native_session'):
+        session = bridge.native_session(tid, authorized)
+    else:
+        return False
+    phase, attempted, reverted = 'preparing', False, False
+    try:
+        with session as target:
+            if target is None: return False
+            runtime, owner_guard = target
+            authorized()
+            _, state = runtime.snapshot(tid)
+            build('edit', data, state)
+            client_id = str(uuid.uuid4())
+            bridge.journal.update(job['id'], nativeEdit=True, originalTurnId=data['turnId'], clientMessageId=client_id)
+            def before_write(stage, write):
+                nonlocal phase, attempted
+                with bridge.lock:
+                    authorized()
+                    def commit():
+                        nonlocal phase, attempted
+                        phase, attempted = stage, True
+                        bridge.journal.update(job['id'], state='dispatching', editPhase=stage)
+                        write()
+                    owner_guard(commit)
+            def progress(stage, evidence):
+                nonlocal phase, attempted, reverted
+                phase, attempted, reverted = stage, False, True
+                bridge.journal.update(job['id'], editPhase=stage, **evidence)
+            from carryon.app_server.editing import edit_last
+            result = edit_last(runtime, tid, data['turnId'], text(data.get('prompt')), client_id, before_write, progress)
+            bridge.journal.update(job['id'], state='completed', editPhase='completed', result=result,
+                turnId=result['turn']['id'], evidence='native-revert-and-start')
+            return True
+    except Exception as exc:
+        uncertain = attempted and (not isinstance(exc, IPCError) or exc.uncertain)
+        message = str(exc)
+        if reverted: message = ('上一轮已回退；新消息发送结果待核对：' if uncertain else '上一轮已回退，新消息未发送：') + message
+        bridge.journal.update(job['id'], state='uncertain' if uncertain else 'failed', editPhase=phase, error=message)
+        return True

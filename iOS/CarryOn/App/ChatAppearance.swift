@@ -30,7 +30,7 @@ extension ChatView {
         localization(.init(inputPlaceholder: "继续对话…", signatureText: "添加说明", cancelButtonText: "取消",
                            recentToggleText: "最近", waitingForNetwork: "等待连接", recordingText: "录音", replyToText: "回复"))
             .chatTheme(colors: .init(mainBG: Design.canvas, mainTint: Design.ink, inputBG: Design.input,
-                                    inputText: Design.ink, sendButtonBackground: Design.ink))
+                                    inputText: Design.ink, sendButtonBackground: Design.composerAccent))
     }
 }
 
@@ -42,7 +42,10 @@ struct OutgoingMessageStatusView: View {
     let dismiss: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
+            if !item["prompt"].text.isEmpty || item["skills"].array.isEmpty {
+                Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
+            }
+            MessageSkillReferences(skills: item["skills"].array)
             if !["sending", "preparing", "dispatching"].contains(item["state"].text) {
                 let labels = ["failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
                 Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
@@ -63,7 +66,6 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
-    @ScaledMetric(relativeTo: .body) private var lineHeight = 22
     var disabled = false
     var draftEditable = true
     var sendAllowed = true
@@ -72,21 +74,23 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var stopping = false
     var submitting = false
     var resuming = false
+    var sendLabel: String? = nil
+    var placeholder = "继续对话…"
     let send: () -> Void
     var stop: (() -> Void)?
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
     private var action: ComposerAction { submitting ? .pause : .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
     private var actionDisabled: Bool { disabled || submitting || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
-    private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : stopping ? "立即补充" : "发送" }
+    private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : sendLabel ?? (stopping ? "补充到当前任务" : "发送") }
     var body: some View {
-        ComposerLayout(lineHeight: lineHeight) {
-            HStack(spacing: 0) { accessories }
-                .foregroundStyle(theme.colors.mainTint)
-            TextField(stopping ? "补充要求…" : "继续对话…", text: $text, axis: .vertical)
-                .font(.body).lineLimit(1...6).disabled(!draftEditable || !sendAllowed)
-                .foregroundStyle(theme.colors.inputText)
+        VStack(alignment: .leading, spacing: 2) {
+            TextField(stopping ? "补充要求…" : placeholder, text: $text, axis: .vertical)
+                .font(.body).lineLimit(1...6).fixedSize(horizontal: false, vertical: true).disabled(!draftEditable || !sendAllowed)
+                .foregroundStyle(theme.colors.inputText).tint(Design.composerAccent)
+                .padding(.horizontal, 12).padding(.top, 10)
             HStack(alignment: .center, spacing: 0) {
+                accessories.foregroundStyle(theme.colors.mainTint)
                 if action == .send, stopping, let stop {
                     Button(action: stop) {
                         Image(systemName: "stop.fill")
@@ -100,19 +104,19 @@ struct CarryOnChatComposer<Accessories: View>: View {
                             ComposerLoadingRing()
                                 .accessibilityHidden(true)
                         }
-                        Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
+                        if !submitting { Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
                             .font(.system(size: submitting ? 9 : 17, weight: .semibold))
-                            .foregroundStyle(Design.onAccent)
-                    }.frame(width: 36, height: 36).background(theme.colors.sendButtonBackground, in: Circle())
+                            .foregroundStyle(.white) }
+                    }.frame(width: 32, height: 32).background(actionDisabled && !submitting ? Design.secondary.opacity(0.25) : theme.colors.sendButtonBackground, in: Circle())
                         .frame(width: 44, height: 44)
                 }.disabled(actionDisabled)
-                    .opacity(actionDisabled && !submitting ? 0.35 : 1)
                     .accessibilityLabel(buttonLabel)
             }
-        }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: text)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: action)
+        }.animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: action)
             .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 24))
+            .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 28))
+            .overlay(RoundedRectangle(cornerRadius: 28).stroke(Design.surface.opacity(0.85), lineWidth: 1))
+            .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: 5)
             .padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
     }
 }
@@ -130,37 +134,6 @@ private struct ComposerLoadingRing: View {
                 .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: rotating)
         }.frame(width: 24, height: 24)
             .onAppear { rotating = true }
-    }
-}
-
-/// Measures the editor at its compact width, while keeping the same TextField
-/// mounted during reflow so keyboard focus and selection remain intact.
-private struct ComposerLayout: Layout {
-    let lineHeight: CGFloat
-    private func metrics(_ proposal: ProposedViewSize, _ views: Subviews) -> (CGFloat, CGSize, CGSize, CGSize, Bool) {
-        let width = proposal.width ?? 320
-        let accessories = views[0].sizeThatFits(.unspecified)
-        let actions = views[2].sizeThatFits(.unspecified)
-        let compactWidth = max(1, width - accessories.width - actions.width - 8)
-        let compact = views[1].sizeThatFits(.init(width: compactWidth, height: nil))
-        let expanded = compact.height > lineHeight * 1.5
-        let editor = expanded ? views[1].sizeThatFits(.init(width: max(1, width - 20), height: nil)) : compact
-        return (width, accessories, actions, editor, expanded)
-    }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let (width, accessories, actions, editor, expanded) = metrics(proposal, subviews)
-        let controls = max(accessories.height, actions.height)
-        return CGSize(width: width, height: expanded ? editor.height + controls + 14 : max(controls, editor.height))
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let (_, accessories, actions, editor, expanded) = metrics(.init(width: bounds.width, height: nil), subviews)
-        let controls = max(accessories.height, actions.height)
-        let centerY = expanded ? bounds.maxY - controls / 2 : bounds.midY
-        subviews[0].place(at: CGPoint(x: bounds.minX, y: centerY), anchor: .leading, proposal: .init(accessories))
-        subviews[2].place(at: CGPoint(x: bounds.maxX, y: centerY), anchor: .trailing, proposal: .init(actions))
-        subviews[1].place(at: CGPoint(x: bounds.minX + (expanded ? 10 : accessories.width + 4),
-                                     y: expanded ? bounds.minY + 10 : bounds.midY - editor.height / 2),
-                          anchor: .topLeading, proposal: .init(width: expanded ? max(1, bounds.width - 20) : max(1, bounds.width - accessories.width - actions.width - 8), height: editor.height))
     }
 }
 

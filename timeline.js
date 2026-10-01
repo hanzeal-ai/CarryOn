@@ -312,7 +312,9 @@ const Timeline = (() => {
       article.append(el('div','text',user?(item.displayText??item.text??''):displayText(item)));
       artifacts({...item,artifacts:refs.filter(ref=>ref.kind!=='image')},article);
       for(const question of item.asyncQuestions||[])questionCard(question,article);
-      for(const part of parts)if(!['image','localImage','text'].includes(part.type))article.append(block('附件 / 引用 · '+part.type,part));
+      const skills=parts.filter(part=>part.type==='skill');
+      if(skills.length){const references=el('div','skill-chips');for(const skill of skills){const label=el('span','skill-chip',skill.name);label.title=skill.path;references.append(label);}article.append(references);}
+      for(const part of parts)if(!['image','localImage','text','skill'].includes(part.type))article.append(block('附件 / 引用 · '+part.type,part));
       const extra={...item.data};delete extra.text;delete extra.content;delete extra.input;delete extra.phase;delete extra.questions;delete extra.delivery;
       if(Object.values(extra).some(v=>v!==null && v!==undefined)){
         const info=el('details','raw-event');info.dataset.key=item.id+':extra';info.append(el('summary','','引用与消息详情'),block('消息信息',extra));article.append(info);

@@ -114,7 +114,7 @@ class CarryOnClient {
     sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
     const scope=this.epoch;
     const composing=path.endsWith('/compose');
-    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,state:'sending',begin:true});
+    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,skills:body.skills,state:'sending',begin:true});
     let job, admitted=false;
     try {
       job = await this.request(path, {...body, requestId});
@@ -134,6 +134,19 @@ class CarryOnClient {
       throw error;
     }
     if(composing&&scope===this.epoch)this.onSubmission({...job,id:requestId,threadId:path.split('/')[2]});
+    if(path.endsWith('/fork')&&['accepted','completed','inProgress'].includes(job.state)&&
+      (job.state!=='completed'||typeof job.createdThreadId!=='string'||!job.createdThreadId)){
+      job={...job,state:'uncertain',error:'分叉身份尚未确认，请核对原请求；不会自动再次创建'};
+    }
+    if(body.action==='review'&&['accepted','inProgress','completed'].includes(job.state)&&
+      (job.state!=='completed'||job.reviewThreadId!==path.split('/')[2]||typeof job.turnId!=='string'||!job.turnId)){
+      job={...job,state:'uncertain',error:'尚未确认审查启动，请核对原请求；不会自动再次启动'};
+    }
+    if(['goal-set','goal-pause','goal-clear'].includes(body.action)&&['accepted','inProgress','completed'].includes(job.state)&&
+      (job.state!=='completed'||(body.action==='goal-clear'?job.result?.cleared!==true:
+        job.result?.goal?.threadId!==path.split('/')[2]||(body.action==='goal-pause'&&job.result?.goal?.status!=='paused')))){
+      job={...job,state:'uncertain',error:'尚未确认目标变更，请核对原请求；不会自动再次执行'};
+    }
     // Retain ambiguous receipts only; explicit rejections may be retried.
     if (['accepted','completed','inProgress','failed','interrupted','acknowledged'].includes(job.state)) {
       pending.delete(key);
@@ -142,24 +155,37 @@ class CarryOnClient {
     return job;
   }
 
-  async submit(kind, target, prompt, images=[], isCurrent=()=>true) {
+  async submit(kind, target, prompt, images=[], isCurrent=()=>true, skills=[]) {
+    images=[...images];
+    skills=JSON.parse(JSON.stringify(skills));
     const epoch=this.epoch;
     let key=kind+':'+target+':'+prompt;
-    if(images.length){
-      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images])));
+    if(images.length||skills.length){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images,skills])));
       key=kind+':'+target+':images:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob('/threads/' + target + (kind==='compose'?'/compose':'/messages'),
-      {prompt,...(images.length?{images}:{})}, key, this.pending, 'carryon-pending');
+      {prompt,...(images.length?{images}:{}),...(skills.length?{skills}:{})}, key, this.pending, 'carryon-pending');
   }
 
-  async createInProject(projectId,prompt,isCurrent=()=>true){
+  skills(target){return this.request('/threads/'+encodeURIComponent(target)+'/skills');}
+  goal(target){return this.request('/threads/'+encodeURIComponent(target)+'/goal');}
+
+  review(target,reviewTarget,isCurrent=()=>true){return this.operation(target,'review',{target:reviewTarget},isCurrent);}
+
+  async createInProject(projectId,prompt,isCurrent=()=>true,images=[],settings=null){
+    images=[...images];settings=settings===null?null:JSON.parse(JSON.stringify(settings));
+    const epoch=this.epoch;
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([projectId,prompt,images,settings])));
+    if(epoch!==this.epoch)throw Error('配对已改变，请重新读取状态');
     if(!isCurrent())throw Error('工作区或项目已改变');
-    return this.requestJob('/threads',{projectId,prompt},'project:'+projectId+':'+prompt,this.pending,'carryon-pending');
+    const key='project:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
+    return this.requestJob('/threads',{projectId,prompt,images,settings},key,this.pending,'carryon-pending');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
+    fields=JSON.parse(JSON.stringify(fields));
     const epoch = this.epoch;
     const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([target, action, fields])));
     if (epoch !== this.epoch) throw Error('配对已改变，请重新读取状态');
@@ -169,9 +195,17 @@ class CarryOnClient {
       key, this.operations, 'carryon-operations');
   }
 
+  async fork(target,lastTurnId=null,isCurrent=()=>true){
+    const epoch=this.epoch;
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(['fork',target,lastTurnId])));
+    if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新操作');
+    const key='fork:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
+    return this.requestJob('/threads/'+target+'/fork',lastTurnId===null?{}:{lastTurnId},key,this.operations,'carryon-operations');
+  }
+
   async sideAction(parent, target, action, fields, isCurrent = () => true) {
     const epoch = this.epoch;
-    const body = {parentId: parent, ...fields, ...(action === 'compose' ? {} : {action})};
+    const body = JSON.parse(JSON.stringify({parentId: parent, ...fields, ...(action === 'compose' ? {} : {action})}));
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([parent, target, action, body])));
     if (epoch !== this.epoch || !isCurrent()) throw Error('当前临时聊天已改变，请重新操作');
     const key = 'side:' + Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, '0')).join('');

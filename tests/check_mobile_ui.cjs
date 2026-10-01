@@ -37,7 +37,7 @@ const assert=require('node:assert/strict');
  await page.locator('#mobile-session-list .project-row').first().waitFor();
  await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected},()=>true));
  await page.screenshot({path:'.runtime/mobile-projects.png'});await checkLayout(['.mobile-list-page .toolbar', '.search', '#mobile-session-list .project-row', '.bottom-nav']);
- await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await checkLayout(['#create-dialog .toolbar', '#create-dialog .group', '#create-dialog .production-composer', '#create-dialog .input-shell']);
+ await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await checkLayout(['#create-dialog .toolbar', '#create-dialog .new-project-context', '#create-dialog .production-composer', '#create-dialog .input-shell']);
  assert.equal(await page.locator('#create-dialog').evaluate(el=>Math.round(el.getBoundingClientRect().height)),844);
  assert(await page.locator('#new-project').isVisible());await page.locator('#new-project').selectOption('p1');assert.equal(await page.locator('#new-project').inputValue(),'p1');await page.locator('#close-dialog').click();
  await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().waitFor();await page.screenshot({path:'.runtime/mobile-sessions.png'});
@@ -49,8 +49,8 @@ const assert=require('node:assert/strict');
  await page.screenshot({path:'.runtime/mobile-chat.png'});await checkLayout(['.conversation-head', '#composer', '#composer .input-shell']);assert.equal(await page.locator('#send').getAttribute('data-mode'),'stop');
  for(const value of ['', '第一行\n第二行\n第三行', '短句']){
   await page.locator('#prompt').fill(value);await page.waitForTimeout(60);
-  const layout=await page.evaluate(()=>{const shell=document.querySelector('#composer .input-shell'),a=document.querySelector('#attach-images').getBoundingClientRect(),b=document.querySelector('#composer .model-button').getBoundingClientRect();return {expanded:shell.classList.contains('expanded'),gap:b.x+b.width/2-a.x-a.width/2,focused:document.activeElement===document.querySelector('#prompt')};});
-  assert.equal(layout.expanded,value.includes('\n'));assert.equal(layout.gap,32);assert(layout.focused,'reflow retains editor focus');
+  const layout=await page.evaluate(()=>{const input=document.querySelector('#prompt').getBoundingClientRect(),a=document.querySelector('#attach-images').getBoundingClientRect(),b=document.querySelector('#composer .model-button').getBoundingClientRect();return {twoRows:input.bottom<=a.top+1,touchTargets:a.width>=44&&b.width>=44,focused:document.activeElement===document.querySelector('#prompt')};});
+  assert(layout.twoRows);assert(layout.touchTargets);assert(layout.focused,'resizing retains editor focus');
  }
  await page.locator('#prompt').fill('保留独立草稿');assert.equal(await page.locator('#send').getAttribute('data-mode'),'send');
  await page.getByRole('button',{name:'查看当前模型与思考强度',exact:true}).click();assert(await page.locator('#mobile-model').isVisible());assert.equal(await page.locator('#mobile-model select').first().inputValue(),'gpt-6-astra');await page.screenshot({path:'.runtime/mobile-model.png'});await checkLayout(['#mobile-model']);await page.keyboard.press('Escape');

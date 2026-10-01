@@ -29,10 +29,14 @@ def resolve_project(catalog, project_id):
     return project
 
 
-def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
-    prompt = text(prompt)
+def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, images=None, settings=None):
+    from carryon.sessions.images import validate_images
+    images = validate_images(images)
+    from carryon.sessions.creation_settings import validate
+    settings = validate(settings)
+    prompt = text(prompt, allow_empty=bool(images))
     validate_request_id(request_id)
-    fingerprint = digest(['owner-create', project_id, prompt])
+    fingerprint = digest(['owner-create', project_id, prompt, images, settings])
     ipc, generation = bridge.require()
     with bridge.lock:
         bridge.check_generation(ipc, generation)
@@ -46,14 +50,14 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None):
         service = bridge.owners()
         job = {'id': request_id, 'kind': 'create', 'threadId': '', 'state': 'preparing',
                'created': time.time(), 'fingerprint': fingerprint, 'creationProject': project,
-               'clientMessageId': str(uuid.uuid4()), **(source or {})}
+               'clientMessageId': str(uuid.uuid4()), 'creationSettings': settings, **(source or {})}
         bridge.journal.insert(job)
-    threading.Thread(target=dispatch, args=(bridge, ipc, generation, service, job, prompt, authorize),
+    threading.Thread(target=dispatch, args=(bridge, ipc, generation, service, job, prompt, authorize, images),
                      daemon=True, name='owner-create').start()
     return bridge.journal.get(request_id)
 
 
-def dispatch(bridge, ipc, generation, service, job, prompt, authorize):
+def dispatch(bridge, ipc, generation, service, job, prompt, authorize, images=None):
     runtime = None
     tid = None
     adopted = False
@@ -93,12 +97,14 @@ def dispatch(bridge, ipc, generation, service, job, prompt, authorize):
         if (thread.get('projectId') != project['id'] or Path(thread.get('cwd', '')).resolve() != Path(project['cwd']).resolve() or
                 thread.get('historyMode') != 'paginated'):
             raise IPCError('原生创建结果与目标项目不符，未投递任务')
+        from carryon.sessions.creation_settings import apply
+        apply(runtime, tid, job.get('creationSettings'), turn_write)
         owner = service.adopt(tid, runtime, check)['owner']
         adopted = True
         check()
         discovered, _ = ipc.snapshot(tid)
         if discovered != owner: raise IPCError('创建后的会话 owner 已改变，未投递任务')
-        turn = ipc.start(tid, prompt, owner, job['clientMessageId'], turn_write)
+        turn = ipc.start(tid, prompt, owner, job['clientMessageId'], turn_write, images=images)
         bridge.journal.update(job['id'], state='completed', turnId=turn['id'],
                               evidence='app-server-create-owner-start')
         bridge.notify()

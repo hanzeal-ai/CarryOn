@@ -1,0 +1,11 @@
+.skills-picker{width:min(520px,calc(100vw - 32px));max-height:80dvh;padding:20px;border:1px solid var(--border,#e5e5e5);border-radius:20px}
+.skills-picker input{box-sizing:border-box;width:100%;padding:12px;border-radius:10px;border:1px solid var(--border,#ddd);font:inherit}
+.skills-picker [role=status]{white-space:pre-line;font-size:13px;color:var(--muted,#666)}
+.skill-options{display:flex;flex-direction:column;gap:4px}
+.skill-option{display:flex;flex-direction:column;gap:5px;align-items:flex-start;text-align:left;padding:12px;background:transparent;border:0;border-radius:12px;color:inherit;font:inherit}
+.skill-option small{font-size:13px;color:var(--muted,#666);line-height:1.45}
+.skill-option[aria-pressed=true]{background:#edf3ff;box-shadow:inset 0 0 0 1px #b9ceff}
+.skill-chips{display:flex;overflow-x:auto;gap:8px;padding:4px 0 8px}
+.skill-chips:empty{display:none}
+.skill-chips button,.skill-chips .skill-chip{flex-shrink:0;border:0;border-radius:999px;background:#edf3ff;color:#326cce;padding:8px 12px;font:inherit;font-size:13px}
+@media(prefers-color-scheme:dark){.skill-option[aria-pressed=true],.skill-chips button,.skill-chips .skill-chip{background:#172c46;color:#8ebaff}}

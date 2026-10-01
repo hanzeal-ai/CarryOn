@@ -4,18 +4,85 @@ import CarryOnCore
 struct ProjectsView: View {
     @State var listState = RecordListState()
     @State var threadListState = RecordListState()
+    @State var homeLoader = WorkspaceHomeLoader()
     @Environment(AppModel.self) private var model
     @State private var creating = false
-    @AppStorage("carryon.projectView") private var projectView = true
+    @State private var choosingWorkspace = false
+    @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
+    @State private var projectSearch = RecordListState()
+    @State private var threadSearch = RecordListState()
+    @State private var browsingProjects = false
+    @State private var browsingThreads = false
     var body: some View {
         @Bindable var model = model
-        VStack(spacing: 0) {
-            RecordListView(path: projectView ? "/api/projects" : "/api/workspace/threads",
-                           key: projectView ? "projects" : "threads", isProjectList: projectView,
-                           create: { creating = true }, state: projectView ? listState : threadListState) { record in
-                if projectView { model.selectedProject = record } else { model.open(record) }
-            }.id(projectView)
+        ScrollViewReader { proxy in
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4)
+                VStack(alignment: .leading, spacing: 8) {
+                    homeHeading("项目", more: listState.records.count > 5) { browsingProjects = true }
+                    VStack(spacing: 0) {
+                    ForEach(Array(listState.records.prefix(5))) { record in
+                        Button { model.selectedProject = record } label: {
+                            HStack(spacing: 16) {
+                                Image(systemName: "folder").font(.system(size: 20)).frame(width: 24)
+                                Text(record.title).font(.body).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }.frame(minHeight: 44).contentShape(Rectangle())
+                        }.buttonStyle(.plain).id(record.id)
+                    }
+                    }.scrollTargetLayout()
+                    homeStatus(listState)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    homeHeading("最近会话", more: threadListState.total > 20) { browsingThreads = true }
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(threadListState.records.prefix(20))) { record in
+                            Button { model.open(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
+                                .onAppear { threadListState.visibleThreadIDs.insert(record.id); watchRecents() }
+                                .onDisappear { threadListState.visibleThreadIDs.remove(record.id); watchRecents() }
+                        }
+                    }.scrollTargetLayout()
+                    homeStatus(threadListState)
+                }
+            }.padding(.horizontal, 24).padding(.bottom, 24).frame(maxWidth: .infinity, alignment: .leading)
+        }.scrollPosition(id: $listState.scrollID, anchor: .top).background(Design.canvas)
+            .task {
+                if let anchor = listState.scrollID {
+                    await Task.yield()
+                    if !Task.isCancelled { proxy.scrollTo(anchor, anchor: .top) }
+                }
+            }
         }
+            .refreshable { await loadHome(refresh: true, fullSync: true) }
+            .task(id: model.scope) { projectSearch.reset(); threadSearch.reset(); await loadHome(refresh: false) }
+            .onChange(of: showInactiveConversations) { _, _ in Task { await loadHome(refresh: true) } }
+            .onChange(of: model.workspaceRevision) { _, _ in Task { await loadHome(refresh: true) } }
+            .onChange(of: model.connected) { _, connected in if connected { Task { await loadHome(refresh: true) } } }
+            .onAppear { threadListState.isVisible = true; watchRecents() }
+            .onDisappear { threadListState.isVisible = false; model.watchList(threadListState.watchID, threads: []) }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { creating = true } label: { Label("新建会话", systemImage: "square.and.pencil") }.disabled(!model.canWrite(.create))
+                        Button { choosingWorkspace = true } label: { Label("切换工作区", systemImage: "desktopcomputer") }
+                        Button { browsingProjects = true } label: { Label("全部项目", systemImage: "folder") }
+                        Button { browsingThreads = true } label: { Label("搜索会话", systemImage: "magnifyingglass") }
+                    } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }.accessibilityLabel("更多操作")
+                }
+            }
+            .sheet(isPresented: $browsingProjects) {
+                NavigationStack {
+                    RecordListView(path: "/api/projects", key: "projects", isProjectList: true, state: projectSearch) { record in browsingProjects = false; model.selectedProject = record }
+                        .navigationTitle("项目").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { browsingProjects = false } } }
+                }
+            }
+            .sheet(isPresented: $browsingThreads) {
+                NavigationStack {
+                    RecordListView(path: "/api/workspace/threads", key: "threads", state: threadSearch) { record in browsingThreads = false; model.open(record) }
+                        .navigationTitle("会话").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { browsingThreads = false } } }
+                }
+            }
         .navigationDestination(isPresented: Binding(get: { model.selectedProject != nil }, set: { if !$0 { model.selectedProject = nil } })) {
             if let project = model.selectedProject {
                 RecordListView(path: "/api/projects/\(ConsoleAddress.component(project.id))/threads", key: "threads") { model.open($0) }
@@ -27,8 +94,38 @@ struct ProjectsView: View {
                         if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
                     }
             }
-        }.fullScreenCover(isPresented: $creating) { NewConversationView() }
+        }.background(Design.canvas)
+            .sheet(isPresented: $choosingWorkspace) { WorkspaceSwitcher() }
+            .fullScreenCover(isPresented: $creating) { NewConversationView() }
     }
+    private func homeHeading(_ title: String, more: Bool, action: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title).font(.subheadline.weight(.medium))
+            Spacer()
+            if more { Button("查看全部", action: action).font(.caption).foregroundStyle(Design.secondary).frame(minHeight: 44) }
+        }.frame(minHeight: 28)
+    }
+    @ViewBuilder private func homeStatus(_ state: RecordListState) -> some View {
+        if !state.records.isEmpty, let failure = state.failure {
+            Button { Task { await loadHome(refresh: true) } } label: {
+                Label("刷新失败，显示缓存 · " + failure, systemImage: "arrow.clockwise").font(.caption).foregroundStyle(Design.secondary)
+            }.frame(minHeight: 44)
+        }
+        if state.records.isEmpty {
+            if state.loadKind != nil { ProgressView().padding(.vertical, 12) }
+            else if let failure = state.failure {
+                Button { Task { await loadHome(refresh: true) } } label: { Label(failure + " · 重试", systemImage: "arrow.clockwise").font(.caption) }
+            } else { Text("暂无内容").font(.subheadline).foregroundStyle(Design.secondary).padding(.vertical, 12) }
+        }
+    }
+    private func watchRecents() {
+        model.watchList(threadListState.watchID, threads: threadListState.isVisible ? threadListState.visibleThreadIDs : [])
+    }
+    private func loadHome(refresh: Bool, fullSync: Bool = false) async {
+        await homeLoader.load(model: model, projects: listState, threads: threadListState,
+                              includeInactive: showInactiveConversations, refresh: refresh, fullSync: fullSync)
+    }
+
 }
 @MainActor @Observable final class RecordListState {
     enum LoadKind { case initial, refresh, more, background }
@@ -98,9 +195,9 @@ struct RecordListView: View {
                         HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
                     }
                     if isProjectList {
-                        LazyVStack(spacing: 12) {
+                        LazyVStack(spacing: 0) {
                             ForEach(state.records) { record in
-                                Button { select(record) } label: { Paper { projectRow(record) } }
+                                Button { select(record) } label: { projectRow(record) }
                                     .buttonStyle(.plain).id(record.id)
                             }
                         }.scrollTargetLayout()
@@ -124,8 +221,7 @@ struct RecordListView: View {
                     }
                 }.padding(.bottom, 8)
             }.scrollPosition(id: $state.scrollID, anchor: .top).frame(minHeight: 0, maxHeight: .infinity)
-                .background(isProjectList ? Color.clear : Design.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Design.corner))
+                .background(Design.canvas)
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await load(reset: true, kind: .refresh) }
                 .padding(.horizontal, 20).padding(.bottom, 12)
@@ -202,7 +298,7 @@ struct RecordListView: View {
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-        }.padding(.horizontal, 16).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.padding(.horizontal, 4).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
     }
     @ViewBuilder private func counts(_ record: Record) -> some View {
         let waiting = record.value["waiting"].int ?? 0, running = record.value["running"].int ?? 0, unread = record.value["unread"].int ?? 0

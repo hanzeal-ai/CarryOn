@@ -7,9 +7,7 @@ struct RootView: View {
     @State private var projectList = RecordListState()
     @State private var threadList = RecordListState()
     @State private var activityList = RecordListState()
-    @Namespace private var tabSelection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("carryon.projectView") private var projectView = true
+    @State private var homeLoader = WorkspaceHomeLoader()
     var body: some View {
         @Bindable var model = model
         Group {
@@ -23,19 +21,25 @@ struct RootView: View {
                         switch tab {
                         case 1: ActivityView(listState: activityList)
                         case 2: SettingsView()
-                        default: ProjectsView(listState: projectList, threadListState: threadList)
+                        default: ProjectsView(listState: projectList, threadListState: threadList, homeLoader: homeLoader)
                         }
                     }.id(model.selectedDevice)
                         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                         .clipped()
-                    HStack(spacing: 3) {
-                        tabButton(0, "会话", "bubble")
-                        tabButton(1, "动态", "clock.arrow.circlepath")
-                        tabButton(2, "我的", "person.crop.circle")
+                }.background(Design.canvas)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Button { tab = 0 } label: { Label("会话", systemImage: "bubble") }
+                            Button { tab = 1 } label: { Label(model.activityBadgeCount > 0 ? "动态（\(model.activityBadgeCount)）" : "动态", systemImage: "clock.arrow.circlepath") }
+                            Button { tab = 2 } label: { Label("设置", systemImage: "gearshape") }
+                        } label: { VStack(alignment: .leading, spacing: 5) {
+                            Capsule().fill(Design.ink).frame(width: 18, height: 1.5)
+                            Capsule().fill(Design.ink).frame(width: 12, height: 1.5)
+                        }.frame(width: 28, height: 28) }
+                            .accessibilityLabel("导航菜单")
                     }
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: tab)
-                    .padding(5).background(Design.surface, in: Capsule()).padding(.horizontal, 14).padding(.bottom, 4)
-                }.background(Design.background)
+                }
                 .navigationDestination(isPresented: Binding(get: { (model.selectedProject == nil || tab != 0) && model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                     if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
                 }
@@ -56,43 +60,8 @@ struct RootView: View {
             Button("好", role: .cancel) { model.notice = nil }
         } message: { Text(model.notice ?? "") }
     }
-    private func tabButton(_ index: Int, _ label: String, _ icon: String) -> some View {
-        Button {
-            if index == 0 && tab == 0 {
-                if model.authenticated {
-                    model.selectedProject = nil
-                    projectView.toggle()
-                }
-            }
-            tab = index
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 22)).overlay(alignment: .topTrailing) {
-                    let count = model.activityBadgeCount
-                    if index == 1 && count > 0 {
-                        Text(count > 99 ? "99+" : "\(count)").font(.system(size: 9, weight: .medium)).foregroundStyle(.white).padding(.horizontal, 4).frame(minWidth: 15, minHeight: 15).background(.red, in: Capsule()).offset(x: 12, y: -6)
-                    }
-                }
-                HStack(spacing: 3) {
-                    Text(label)
-                    if index == 0 {
-                        Image(systemName: "arrow.left.arrow.right")
-                    }
-                }.font(.system(size: 10))
-            }
-                .foregroundStyle(tab == index ? Design.ink : Design.secondary)
-                .frame(maxWidth: .infinity).frame(minHeight: 54)
-                .background {
-                    if tab == index {
-                        Capsule().fill(Design.background)
-                            .matchedGeometryEffect(id: "tabSelection", in: tabSelection)
-                    }
-                }
-        }.accessibilityAddTraits(tab == index ? .isSelected : [])
-            .accessibilityValue(index == 0 ? (projectView ? "项目视图" : "会话视图") : "")
-            .accessibilityHint(index == 0 ? (tab == 0 ? "再次点击切换项目和会话视图" : "打开会话") : "")
-    }
 }
+
 struct StartupView: View {
     @Environment(AppModel.self) private var model
     var body: some View {

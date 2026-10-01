@@ -5,6 +5,35 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const {webcrypto} = require('node:crypto');
 
+test('skills snapshot contributes to the durable submission identity', async()=>{
+  const f=fixture();f.respond(async()=>{throw Error('lost');});
+  const skills=[{name:'fixture',path:'/repo/SKILL.md'}];
+  const first=f.client.submit('compose','thread','',[],()=>true,skills);
+  skills[0].name='changed';
+  await assert.rejects(first,/lost/);
+  assert.equal(f.requests[0].body.skills[0].name,'fixture');
+  const id=f.requests[0].body.requestId;
+  await assert.rejects(f.client.submit('compose','thread','',[],()=>true,[{name:'fixture',path:'/repo/SKILL.md'}]),/lost/);
+  assert.equal(f.requests[1].body.requestId,id);
+  await assert.rejects(f.client.submit('compose','thread','',[],()=>true,skills),/lost/);
+  assert.notEqual(f.requests[2].body.requestId,id);
+});
+
+test('fork unconfirmed receipts retain identity across reload until the child is confirmed', async()=>{
+  for(const receipt of [{state:'inProgress'},{state:'accepted'},{state:'completed'}]){
+    const f=fixture();f.respond(async()=>({ok:true,json:async()=>receipt}));
+    assert.equal((await f.client.fork('source','turn')).state,'uncertain');
+    const original=f.requests[0].body.requestId;
+    const restored=fixture(f.storage);
+    restored.respond(async()=>({ok:true,json:async()=>({state:'completed',createdThreadId:'22222222-2222-4222-8222-222222222222'})}));
+    await restored.client.fork('source','turn');
+    assert.equal(restored.requests[0].body.requestId,original);
+    assert.equal(restored.requests[0].body.lastTurnId,'turn');
+    await restored.client.fork('source','turn');
+    assert.notEqual(restored.requests[1].body.requestId,original);
+  }
+});
+
 function fixture(storage = new Map()) {
   const sockets = [], timers = new Map(), requests = [], updates = [], disconnects = [], auth = [];
   let response = async () => ({ok: true, json: async () => ({state: 'accepted'})});
@@ -250,4 +279,53 @@ test('local workspace identity isolates pending jobs and invalidates old HTTP re
  f.respond(async()=>({ok:true,json:async()=>({state:'accepted'})}));await f.client.submit('compose','same-thread','hello');
  assert.notEqual(f.requests.at(-1).body.requestId,original);
  assert(f.storage.has('carryon-local:workspace-one:pending'));
+});
+
+test('project creation images participate in retry identity without persisting bytes',async()=>{
+ const f=fixture();f.respond(async()=>({ok:true,json:async()=>({state:'uncertain'})}));
+ await f.client.createInProject('project-a','',()=>true,['image-one']);
+ await f.client.createInProject('project-a','',()=>true,['image-one']);
+ await f.client.createInProject('project-a','',()=>true,['image-two']);
+ assert.equal(f.requests[0].body.requestId,f.requests[1].body.requestId);
+ assert.notEqual(f.requests[1].body.requestId,f.requests[2].body.requestId);
+ assert.equal(f.requests[0].body.images[0],'image-one');
+ assert(![...f.storage.values()].some(value=>value.includes('image-one')));
+});
+
+ test('creation snapshots settings and images before asynchronous hashing',async()=>{
+ const f=fixture();f.respond(async()=>({ok:true,json:async()=>({state:'completed'})}));
+ const settings={model:'test-model',effort:'high'},images=['first-image'];
+ const pending=f.client.createInProject('project','task',()=>true,images,settings);
+ settings.effort='low';images[0]='changed-image';
+ await pending;
+ assert.equal(f.requests[0].body.settings.effort,'high');
+ assert.deepEqual(f.requests[0].body.images,['first-image']);
+});
+
+
+test('review start must be completed before releasing the retry identity',async()=>{
+ const f=fixture();const target={type:'baseBranch',branch:'main'};
+ for(const state of ['accepted','inProgress']){
+  f.respond(async()=>({ok:true,json:async()=>({state})}));
+  assert.equal((await f.client.operation('thread','review',{target})).state,'uncertain');
+ }
+ assert.equal(f.requests[0].body.requestId,f.requests[1].body.requestId);
+ f.respond(async()=>({ok:true,json:async()=>({state:'completed',reviewThreadId:'thread',turnId:'review-turn'})}));
+ await f.client.operation('thread','review',{target});assert.equal(f.requests[2].body.requestId,f.requests[0].body.requestId);
+ await f.client.operation('thread','review',{target});assert.notEqual(f.requests[3].body.requestId,f.requests[0].body.requestId);
+});
+
+test('goal mutations retain identity until a matching native result is confirmed',async()=>{
+ for(const action of ['goal-set','goal-pause','goal-clear']){
+  const f=fixture(),fields=action==='goal-set'?{objective:'finish fixture',status:'active'}:{};
+  for(const result of [{state:'accepted'},{state:'completed',result:{goal:{threadId:'other',status:'paused'},cleared:false}}]){
+   f.respond(async()=>({ok:true,json:async()=>result}));
+   assert.equal((await f.client.operation('thread',action,fields)).state,'uncertain');
+  }
+  assert.equal(f.requests[0].body.requestId,f.requests[1].body.requestId);
+  f.respond(async()=>({ok:true,json:async()=>({state:'completed',result:action==='goal-clear'?{cleared:true}:{goal:{threadId:'thread',status:'paused'}}})}));
+  assert.equal((await f.client.operation('thread',action,fields)).state,'completed');
+  assert.equal(f.requests[2].body.requestId,f.requests[0].body.requestId);
+  await f.client.operation('thread',action,fields);assert.notEqual(f.requests[3].body.requestId,f.requests[0].body.requestId);
+ }
 });

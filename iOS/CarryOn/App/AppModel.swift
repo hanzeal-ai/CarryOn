@@ -184,6 +184,11 @@ import CarryOnCore
         set { draftStore.images[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
 
+    var draftSkills: [SkillReference] {
+        get { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
+
     func login(register: Bool = false, inviteCode: String = "") async {
         guard !busy else { return }
         busy = true; error = nil

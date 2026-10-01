@@ -70,7 +70,7 @@ class WorkspaceBackendTests(unittest.TestCase):
         self.assertEqual(app.current(tid)['requests'],[])
         app._event({'method':'turn/completed','params':{'threadId':tid,'turn':{'id':turn,'status':'completed','items':[]}}})
         self.assertEqual(app.current(tid)['turns'][0]['items'][0]['text'],'hello')
-        self.assertNotIn('settings',controls(app.current(tid))['supportedOperations'])
+        self.assertIn('settings',controls(app.current(tid))['supportedOperations'])
 
     def test_refused_rpc_is_definite_and_disconnect_after_write_is_uncertain(self):
         app=AppServer(self.root/'a')

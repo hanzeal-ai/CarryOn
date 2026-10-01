@@ -4,7 +4,7 @@ Base URL：`http://127.0.0.1:8769/api`。UTF-8 JSON，普通请求体最多 100,
 
 每个请求都需要 `Authorization: Bearer <Token>`，POST 另需 `Content-Type: application/json`。Token 保存在状态目录的 `token` 文件（默认 `~/Library/Application Support/CarryOn/token`）；普通启动日志不输出 Token，`carryon open` 自动配对页面。所有调用方共享一个桥接开关和请求日志；当前不是多租户 API。
 
-桌面 Codex 工作区新建会话必须传入 `/projects` 返回的 `projectId`。临时 app-server 使用该项目的原生 ID、当前目录和分页历史创建会话，由 Owner 接管同一进程，再通过桌面 IPC 投递原始 `prompt`。无需已有控制会话，也不创建 worktree。`completed` 表示创建及首条任务投递已确认，不代表任务执行结束。创建或投递结果未知时保留原请求编号及已知会话 ID，不自动重发。独立 app-server 工作区仍可不传 `projectId` 创建无项目会话。
+桌面 Codex 工作区新建会话必须传入 `/projects` 返回的 `projectId`。临时 app-server 使用该项目的原生 ID、当前目录和分页历史创建会话，由 Owner 接管同一进程，再通过 Owner 投递首轮 `prompt`、可选 `images` 和原生模型/思考强度设置。无需已有控制会话，也不创建 worktree。`completed` 表示创建及首条任务投递已确认，不代表任务执行结束。创建或投递结果未知时保留原请求编号及已知会话 ID，不自动重发。独立 app-server 工作区仍可不传 `projectId` 创建无项目会话。
 
 ## 路由
 
@@ -217,7 +217,8 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 | action | 额外字段 | 条件 |
 |---|---|---|
 | interrupt | expectedTurnId | 当前 active 轮次，使用原生 user-stop / v4 |
-| steer | expectedTurnId、prompt | 当前 active 轮次，纯文本补充 |
+| steer | expectedTurnId、prompt，可选 images/skills | 当前可补充的 active 轮次；原生审查不接受 steer |
+| review | target: 原生审查范围 | 已加载 native、空闲、无队列和待处理请求，固定 inline，需 send 权限 |
 | compact | 无 | 空闲，无待处理请求 |
 | settings | settings: 原生设置对象 | 空闲或执行中，至少一个字段；影响后续轮次 |
 | edit | turnId、prompt、confirmed: true | 空闲，必须是最后一轮；替换并重新执行 |
@@ -233,7 +234,7 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 契约保存于 `carryon/native_contracts.json`，来自本机 App 所带 codex 的 `app-server generate-json-schema --experimental`；activePermissionProfile 来自桌面 j9t/N9t 处理逻辑。仅接受已知字段，嵌套结构、枚举和必填项均校验；`permissions` 或 `activePermissionProfile` 与 `sandboxPolicy` 不可同时指定。cwd 使用绝对路径。CarryOn 不自行猜测权限配置 ID。
 
 
-`GET /api/threads/{id}/history` 和 WS history 中新增 `controls`：activeTurnId、lastTurnId、lastUserText、settings、requests。每个可回应请求包含 id（保留原生数字/字符串类型）、action、method、fingerprint、params、decisions（可提交的完整审批值）。回应必须原样携带 id 和 fingerprint，后端重新获取原生快照，校验请求仍存在、方法匹配、内容未变。未适配的请求继续使用 Codex App。
+`GET /api/threads/{id}/history` 和 WS history 中新增 `controls`：activeTurnId、activeTurnKind、canSteer、lastTurnId、lastUserText、settings、supportedSettings、supportedOperations、supportsSkills、requests。每个可回应请求包含 id（保留原生数字/字符串类型）、action、method、fingerprint、params、decisions（可提交的完整审批值）。回应必须原样携带 id 和 fingerprint，后端重新获取原生快照，校验请求仍存在、方法匹配、内容未变。未适配的请求继续使用 Codex App。
 
 ```json
 {"requestId":"answer-operation-001","action":"user-input","nativeRequestId":7,"requestFingerprint":"从 controls.requests 获取","answers":{"question-id":["继续"]}}
@@ -246,22 +247,22 @@ HTTP 子会话历史同样分页，默认最近 40 项，可通过 `limit` 扩�
 
 ### 队列管理
 
-`GET /api/threads/{id}/queue` 返回 `{messages, fingerprint, source}`。相同对象也随 HTTP history 和 WS history.queue 返回。先从 Codex 的 queued-follow-ups 持久状态只读加载，随后接收该会话 owner 的原生队列广播。读取失败时不把未知队列当成空队列。
+`GET /api/threads/{id}/queue` 返回 `{messages, fingerprint, source}`。相同对象也随 HTTP history 和 WS history.queue 返回。桌面 Owner 从 queued-follow-ups 原生状态读取并接收广播；CarryOn Owner 与独立 app-server 使用 thread/queue/list 及原生队列通知。读取失败时不把未知队列当成空队列。
 
 以下操作使用同一个 `/operations` 入口，均须携带刚读取的 `queueFingerprint`：
 
 | action | 额外字段 |
 |---|---|
-| queue-add | prompt |
+| queue-add | prompt，可选 images/skills；有附件时允许空正文 |
 | queue-edit | messageId、prompt |
 | queue-delete | messageId |
 | queue-reorder | messageIds：当前全部消息 ID，按目标顺序排列且每个仅出现一次 |
-| queue-resume | messageId：清除原生 pausedReason，交回原生调度器 |
+| queue-resume | messageId：桌面清除原生 pausedReason；native thread/queue/start 恢复原生执行 |
 | clear-queue | confirmed: true |
 
 队列可以在执行中或空闲时管理；执行时机由 Codex 原生调度器决定。新增消息使用原生 id/text/context/cwd/createdAt 结构；编辑和重排保留已有附件及其他上下文。存在需原生确认的 untrusted app input 时不会移除标记来绕过确认。
 
-指纹不匹配将拒绝投递；CarryOn 内的操作串行并且不自动重试。原生接口是整组队列替换，没有原子 CAS：即使写入前再次检查，仍不能完全避免另一 App 窗口恰好同时改队列。不要同时在两个界面编辑队列；有冲突或结果不明应重新读取并人工核对，而不是盲目重放。
+指纹不匹配将拒绝投递；CarryOn 内的操作串行并且不自动重试。桌面 follower 接口采用整组队列替换，native 使用各项 thread/queue RPC；两者没有跨进程原子 CAS：即使写入前再次检查，仍不能完全避免另一 App 窗口恰好同时改队列。不要同时在两个界面编辑队列；有冲突或结果不明应重新读取并人工核对，而不是盲目重放。
 
 ```json
 {"requestId":"queue-request-001","action":"queue-add","queueFingerprint":"从 queue 接口获取","prompt":"当前任务结束后继续检查测试结果"}
@@ -353,3 +354,24 @@ example 支持选择或粘贴图片、预览与移除，浏览器将图片转成
 沿用Journal返回任务状态，`kind`为`quota-reset`。原生成功回执的`result.outcome`为`reset`、`alreadyRedeemed`、`nothingToReset`或`noCredit`，均表示本次调用有确定结果；后两种不表示额度已重置。发送前失败为`failed`，发送后超时或回执无法识别为`uncertain`。明确重试沿用同一requestId及原生idempotencyKey；云端按绑定隔离requestId。同一账号的未确认请求阻止换ID发起另一次重置；读请求和后台刷新不会兑换，未知结果不能手动标成已核对。原生发出前再次检查桥接代际和云端连接授权。
 
 手机端保存待确认请求标识；确认兑换成功后刷新额度和卡数量。更新失败不撤回已完成兑换；卸载客户端或清空本地请求记录不能作为重试方式。没有新增数据库表或迁移；回退代码须保留Journal及客户端PendingWrites，真实已消费的卡无法由代码回退恢复。
+
+
+### 技能、分叉与仓库审查
+
+`GET /threads/{id}/skills` 返回 `{cwd,skills,errors}`，保留原生 SkillMetadata/SkillErrorInfo；仅已加载的 app-server 或 CarryOn Owner 会话支持，需 view 权限。`controls.supportsSkills` 为 false 时不可调用技能。`compose`、`messages`、`steer`、`queue-add` 可带 `skills:[{name,path}]`，最多20个不重复引用，有技能时正文可空。后端在实际写入前从同一 runtime/cwd 重新发现并验证 enabled；不接受客户端任意路径。原生队列编辑与最后一轮重发保留已有技能引用并重新验证。
+
+`POST /threads/{id}/fork` 接受 `{requestId,lastTurnId?}`，需 create 权限，仅支持已加载 native。省略 lastTurnId 保留当前完整历史，指定值必须为源会话已结束的轮次。使用原生 thread/fork，不自动发送新任务或延续目标。只在 `completed` 且返回有效 `createdThreadId` 时确认创建；未知结果保留同一请求ID，不能根据新出现的会话猜测结果。
+
+`review` 的 target 为 `{type:"uncommittedChanges"}`、`{type:"baseBranch",branch}`、`{type:"commit",sha,title?}` 或 `{type:"custom",instructions}`。只向当前会话执行原生 `review/start`，不开放 deprecated detached 模式。成功 job 为 `completed`，必须含匹配源会话的 `reviewThreadId` 和非空 `turnId`；这只表示启动已确认，执行终态来自原生轮次。accepted/inProgress或身份缺失不释放请求ID。审查轮的 enteredReviewMode 原生 item 投影 `canSteer=false`，允许按原生能力排队和停止，不改成普通 prompt 重发。
+
+### 原生目标（已加载 app-server / CarryOn Owner）
+
+`GET /api/threads/{id}/goal` 返回 `{goal: null | ThreadGoal}`。同一原生数据投影到 `controls.goal`，`controls.supportsGoal` 为真实能力；状态、累计 Token 和耗时来自 app-server 事件。
+
+通过现有 `/operations` 提交：
+
+- `goal-set`：`objective?`、正整数 `tokenBudget?`、`status?`（`active` 或 `complete`），需要 `send`。创建需要目标描述；省略预算表示不设置或不改现有预算。
+- `goal-pause`：需要 `stop`，原生设置 `paused`。
+- `goal-clear`：需要 `stop`，移除目标。
+
+激活目标会启动原生自动执行。暂停和移除不保证中断当前轮，停止当前轮仍用 `interrupt`。完成回执必须包含对应线程的原生 `result.goal`；暂停还须 `status=paused`，移除须 `result.cleared=true`。未知回执保留请求 ID，不自动重新执行。
