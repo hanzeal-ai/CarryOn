@@ -124,9 +124,35 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual([call[0] for call in Creator.instances[0].calls], ['thread/start', 'thread/settings/update', 'turn/start'])
         self.assertEqual(Creator.instances[0].last_settings, settings)
         with self.assertRaises(BridgeError): submit(self.bridge, job['id'], 'task', self.project, settings={'model': 'other'})
-    def test_creation_model_settings_cannot_change_permissions(self):
-        with self.assertRaises(ValueError): submit(self.bridge, 'bad-settings', 'task', self.project, settings={'approvalPolicy': 'never'})
+    def test_creation_settings_cannot_change_destination_or_readonly_fields(self):
+        for key, value in [('cwd', '/other'), ('projectId', 'other'), ('activePermissionProfile', None), ('multiAgentMode', None)]:
+            with self.assertRaises(ValueError): submit(self.bridge, 'bad-settings', 'task', self.project, settings={key: value})
         self.assertEqual(Creator.instances, [])
+
+    def test_native_configuration_is_applied_before_first_turn(self):
+        config = {'model': 'fixture', 'effort': 'high', 'approvalPolicy': 'on-request',
+                  'collaborationMode': {'mode': 'plan', 'settings': {'model': 'fixture', 'reasoning_effort': 'high', 'developer_instructions': None}}}
+        job = self.settled(submit(self.bridge, 'configured-create', 'task', self.project, settings=config))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(Creator.instances[0].last_settings, config)
+        self.assertEqual([call[0] for call in Creator.instances[0].calls], ['thread/start', 'thread/settings/update', 'turn/start'])
+
+    def test_revoked_between_configuration_and_first_turn_retains_created_id(self):
+        allowed = [True]
+        def authorize():
+            if not allowed[0]: raise BridgeError('revoked', 403)
+        original = Creator.request
+        def configure(runtime, method, params, before_send):
+            result = original(runtime, method, params, before_send)
+            allowed[0] = False
+            return result
+        with patch.object(Creator, 'request', configure):
+            job = self.settled(submit(self.bridge, 'configured-revoked', 'task', self.project, settings={'approvalPolicy': 'on-request'}, authorize=authorize))
+        self.assertEqual(job['state'], 'uncertain')
+        self.assertEqual(job['createdThreadId'], CHILD)
+        self.assertFalse(any(call[0] == 'turn/start' for call in Creator.instances[0].calls))
+        self.assertEqual(submit(self.bridge, job['id'], 'task', self.project, settings={'approvalPolicy': 'on-request'})['id'], job['id'])
+        self.assertEqual(len(Creator.instances), 1)
     def test_invalid_project_and_missing_directory_do_not_start_runtime(self):
         for project in (None, project_identity('/other')[0]):
             with self.assertRaises((ValueError, BridgeError)): submit(self.bridge, 'bad-project', 'hello', project)
@@ -170,7 +196,9 @@ class ProjectCreationTests(unittest.TestCase):
             result = original(tid); allowed[0] = False; return result
         self.bridge.ipc.snapshot = snapshot
         job = self.settled(submit(self.bridge, 'revoke-adopt', 'hello', self.project, authorize=authorize))
-        self.assertEqual(job['state'], 'uncertain'); self.assertEqual(len(Creator.instances[0].calls), 1)
+        self.assertEqual(job['state'], 'uncertain')
+        self.assertEqual([call[0] for call in Creator.instances[0].calls], ['thread/start', 'thread/backgroundTerminals/list'])
+        self.assertEqual(Creator.instances[0].calls[1][1], {'threadId': CHILD, 'limit': 1})
         self.assertFalse(Creator.instances[0].connected); self.assertEqual(self.manager.entries, {})
     def test_lost_turn_reply_retains_owner_and_does_not_replay(self):
         original = self.bridge.ipc.start

@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 import tempfile
@@ -43,7 +44,7 @@ class SubagentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
-        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as conn, conn:
             conn.execute('CREATE TABLE threads(id,title,name,cwd,created_at,updated_at,archived,source,thread_source,history_mode,rollout_path)')
             for tid, parent, name in [(P, None, 'Parent'), (C, P, 'worker'), (R, P, 'review')]:
                 source = json.dumps({'subagent': {'thread_spawn': {'parent_thread_id': parent, 'agent_path': '/root/' + name}}}) if parent else 'vscode'
@@ -186,7 +187,7 @@ class SubagentTests(unittest.TestCase):
     def test_descendants_are_complete_without_duplicate_or_unrelated_threads(self):
         with self.bridge.catalog.connection() as conn:
             self.assertEqual([row['id'] for row in self.bridge.catalog.children(P)], [C, R])
-        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as conn, conn:
             conn.execute('UPDATE threads SET source=? WHERE id=?', (json.dumps({'subagent': {'thread_spawn': {'parent_thread_id': C}}}), R))
         self.assertEqual([row['id'] for row in self.bridge.catalog.children(P)], [C, R])
         self.assertEqual([row['id'] for row in self.bridge.catalog.children(C)], [R])
@@ -195,13 +196,13 @@ class SubagentTests(unittest.TestCase):
         item = project_item({'type': 'subAgentActivity', 'id': 'event', 'agentThreadId': R,
                              'agentPath': '/root/old_task_name', 'kind': 'completed'}, {'turnId': 't'}, 0)
         history = {'timeline': [item], 'historyRevision': 'original'}
-        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as conn, conn:
             conn.execute('UPDATE threads SET title=? WHERE id=?', ('实际子会话标题', R))
         result = self.bridge.subagents.resolve_titles(history)
         self.assertEqual(result['timeline'][0]['subagents'][0]['title'], '实际子会话标题')
         self.assertEqual(self.bridge.subagents.list(P)['threads'][1]['title'], '实际子会话标题')
         self.assertEqual(item['subagents'][0]['title'], 'Old task name')
-        with sqlite3.connect(self.home / 'state_5.sqlite') as conn:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as conn, conn:
             conn.execute('UPDATE threads SET title=? WHERE id=?', ('重命名后', R))
         renamed = self.bridge.subagents.resolve_titles(history)
         self.assertEqual(renamed['timeline'][0]['subagents'][0]['title'], '重命名后')

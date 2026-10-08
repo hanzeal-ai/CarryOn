@@ -29,7 +29,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   await page.waitForFunction(()=>typeof selectThread==='function'&&enabled);
   const parent=async()=>{await page.evaluate(id=>selectThread(id),P);await page.locator('#messages .subagent-links button').waitFor({state:'attached'});await page.locator('#messages details.activity-group > summary').click();};
   const menu=async()=>{if(width<760){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'子会话',exact:true}).click();}else{await page.locator('summary[aria-label="会话菜单"]').click();await page.locator('#open-subagents').click();}};
-  await parent();await page.locator('#prompt').fill('parent draft');await menu();
+  await parent();await page.locator('#prompt > [contenteditable]').fill('parent draft');await menu();
   await page.getByRole('button',{name:'Sol release review · 只读',exact:true}).waitFor();
   await page.screenshot({path:`${screenshots}/${width}-list.png`});
   await page.getByRole('button',{name:'Sol release review · 只读',exact:true}).click();
@@ -39,7 +39,7 @@ function history(id){const thread=rows.find(t=>t.id===id)||{id:P,title:'Main con
   await page.locator('#messages details.activity-group').evaluate(e=>e.open=true);await page.locator('#messages details.activity').evaluate(e=>e.open=true);
   assert((await page.locator('#messages').innerText()).includes('verified'));
   await page.screenshot({path:`${screenshots}/${width}-readonly.png`});
-  await parent();assert.equal(await page.locator('#prompt').inputValue(),'parent draft');
+  await parent();assert.equal(await page.locator('#prompt').evaluate(el=>el.value),'parent draft');
   await page.locator('#messages .subagent-links button').click();await page.waitForFunction(id=>selected===id,R);
   children=[rows[0]];await parent();await menu();await page.waitForFunction(id=>selected===id&&composeHistory?.thread.id===id,C);
   assert.equal(await page.locator('.subagents-dialog').count(),0);assert.equal(await page.locator('#composer').isVisible(),true);

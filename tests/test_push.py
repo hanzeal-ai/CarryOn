@@ -1,3 +1,4 @@
+from contextlib import closing
 import copy
 import json
 import tempfile
@@ -118,7 +119,7 @@ class PushTests(unittest.TestCase):
     def test_old_schema_is_rejected_without_rewriting_file(self):
         import sqlite3
         path=Path(self.temp.name)/'old.sqlite'
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE installations(id TEXT PRIMARY KEY)')
         before=path.read_bytes()
         with self.assertRaisesRegex(ValueError,'不是当前结构'):

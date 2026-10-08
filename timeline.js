@@ -110,6 +110,24 @@ const Timeline = (() => {
   document.addEventListener('toggle',scheduleNavigation,{capture:true,signal:navigationEvents.signal});
   window.addEventListener('resize',scheduleNavigation,{signal:navigationEvents.signal});
   new MutationObserver(scheduleNavigation).observe(document.body,{attributes:true,attributeFilter:['class','data-mobile-page']});
+  let sideSelection=null, selectionAction=null;
+  function configureSideSelection(callback){sideSelection=callback;}
+  function hideSelectionAction(){selectionAction?.remove();selectionAction=null;}
+  document.addEventListener('selectionchange',()=>{
+    hideSelectionAction();
+    if(!sideSelection||!current)return;
+    const selection=window.getSelection();if(!selection||selection.isCollapsed||!selection.rangeCount)return;
+    const range=selection.getRangeAt(0),article=range.startContainer.parentElement?.closest('article.message');
+    if(!article||!current.container.contains(article)||!article.contains(range.endContainer))return;
+    const text=selection.toString().trim();if(!text)return;
+    const rect=range.getBoundingClientRect();if(!rect.width&&!rect.height)return;
+    selectionAction=el('button','side-selection-action','在临时聊天中提问');selectionAction.type='button';
+    selectionAction.style.left=Math.max(8,Math.min(rect.left,innerWidth-190))+'px';
+    selectionAction.style.top=Math.max(8,Math.min(rect.bottom+6,innerHeight-48))+'px';
+    selectionAction.onpointerdown=event=>event.preventDefault();
+    selectionAction.onclick=()=>{hideSelectionAction();sideSelection(text);selection.removeAllRanges();};document.body.append(selectionAction);
+  },{signal:navigationEvents.signal});
+  document.addEventListener('scroll',hideSelectionAction,{capture:true,passive:true,signal:navigationEvents.signal});
   const imageCache = new Map();
   let entryCache = new Map();
   let loadEarlier=null,expandingHistory=false;
@@ -309,12 +327,12 @@ const Timeline = (() => {
       artifacts({...item,artifacts:refs.filter(ref=>ref.kind==='image')},pictures);
       article.append(head);
       if(pictures.childNodes.length)article.append(pictures);
-      article.append(el('div','text',user?(item.displayText??item.text??''):displayText(item)));
+      article.append(user?el('div','text',item.displayText??item.text??''):MessageMarkdown.render(displayText(item)));
       artifacts({...item,artifacts:refs.filter(ref=>ref.kind!=='image')},article);
       for(const question of item.asyncQuestions||[])questionCard(question,article);
-      const skills=parts.filter(part=>part.type==='skill');
+      const skills=parts.filter(part=>part.type==='skill'||part.type==='mention');
       if(skills.length){const references=el('div','skill-chips');for(const skill of skills){const label=el('span','skill-chip',skill.name);label.title=skill.path;references.append(label);}article.append(references);}
-      for(const part of parts)if(!['image','localImage','text','skill'].includes(part.type))article.append(block('附件 / 引用 · '+part.type,part));
+      for(const part of parts)if(!['image','localImage','text','skill','mention'].includes(part.type))article.append(block('附件 / 引用 · '+part.type,part));
       const extra={...item.data};delete extra.text;delete extra.content;delete extra.input;delete extra.phase;delete extra.questions;delete extra.delivery;
       if(Object.values(extra).some(v=>v!==null && v!==undefined)){
         const info=el('details','raw-event');info.dataset.key=item.id+':extra';info.append(el('summary','','引用与消息详情'),block('消息信息',extra));article.append(info);
@@ -332,6 +350,11 @@ const Timeline = (() => {
   }
   function render(data, container, loadImage) {
     imageObserver?.disconnect();
+    const selection=window.getSelection();
+    // Moving cached entries through the fragment collapses native selections.
+    // Restore only endpoints in retained nodes; changed/removed text is not guessed.
+    const selected=selection&&!selection.isCollapsed&&selection.anchorNode!==container&&selection.focusNode!==container&&container.contains(selection.anchorNode)&&container.contains(selection.focusNode)
+      ?{anchor:selection.anchorNode,anchorOffset:selection.anchorOffset,focus:selection.focusNode,focusOffset:selection.focusOffset}:null;
     const focused=document.activeElement;
     const editing=focused?.dataset?.questionKey?{key:focused.dataset.questionKey,start:focused.selectionStart,end:focused.selectionEnd}:null;
     current={data,container,loadImage};
@@ -372,6 +395,8 @@ const Timeline = (() => {
     if(!all.length)fragment.append(typeof viewState==='function'?viewState(data.syncing?'正在同步会话…':'暂无会话记录',{loading:data.syncing===true,symbol:'chat'}):el('div','empty-small',data.syncing?'正在同步会话…':'暂无会话记录。'));
     container.replaceChildren(fragment);
     entryCache=nextEntries;
+    if(selected&&container.contains(selected.anchor)&&container.contains(selected.focus))
+      selection.setBaseAndExtent(selected.anchor,selected.anchorOffset,selected.focus,selected.focusOffset);
     renderNavigation(all);
     if(editing){const input=[...container.querySelectorAll('[data-question-key]')].find(n=>n.dataset.questionKey===editing.key);if(input&&!input.disabled){input.focus({preventScroll:true});input.setSelectionRange(editing.start,editing.end);}}
     imageObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){imageObserver.unobserve(entry.target);entry.target.loadImage();}},{root:viewport,rootMargin:'300px'});
@@ -400,8 +425,8 @@ const Timeline = (() => {
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }
   function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity, details.activity-group'))d.open=value;}}
-  function reset(){hidePreview();navigator?.remove();navigator=null;navigationSignature=null;activeAnchor=null;pendingAnchor=null;navigationPinned=false;for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
-  return {render,reset,setExpanded,configureQuestions,configureHistory,configureSubagents,navigateTo,activityAnchor,notificationAnchor};
+  function reset(){hideSelectionAction();hidePreview();navigator?.remove();navigator=null;navigationSignature=null;activeAnchor=null;pendingAnchor=null;navigationPinned=false;for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
+  return {render,reset,configureSideSelection,setExpanded,configureQuestions,configureHistory,configureSubagents,navigateTo,activityAnchor,notificationAnchor};
  }
  return {...create(),create};
 })();

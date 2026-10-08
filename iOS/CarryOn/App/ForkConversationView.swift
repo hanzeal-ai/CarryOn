@@ -6,7 +6,9 @@ struct ForkConversationView: View {
     @Environment(\.dismiss) private var dismiss
     let thread: Record
     let scope: String
+    var autoCreate = false
     var completed: () -> Void
+    @State private var launched = false
     @State private var lastTurnID = ""
     @State private var submitting = false
     @State private var failure: String?
@@ -46,9 +48,10 @@ struct ForkConversationView: View {
                     }
                 }
         }.interactiveDismissDisabled(submitting)
+            .task { if autoCreate, !launched { launched = true; await fork() } }
     }
     private func fork() async {
-        guard current, !submitting, validTurn else { return }
+        guard current, !submitting, validTurn, model.canWrite(.create), model.state == "idle", model.history["controls"]["supportedOperations"].array.contains(.string("fork")) else { failure = "当前会话暂不可分叉"; return }
         submitting = true; failure = nil; defer { submitting = false }
         let body: JSONValue = lastTurnID.isEmpty ? .object([:]) : .object(["lastTurnId": .string(lastTurnID)])
         let accepted = await model.write(path: "/api/threads/" + ConsoleAddress.component(thread.id) + "/fork", target: thread.id, body: body) { job in

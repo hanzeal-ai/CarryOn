@@ -1,4 +1,5 @@
 """Single-owner example console embedding the device gateway in its backend."""
+from carryon.web_assets import ASSETS
 import argparse
 import hashlib
 from http.cookies import SimpleCookie, CookieError
@@ -241,8 +242,7 @@ class ConsoleHandler(Handler):
 
     def static(self,path):
         name=path.lstrip('/') or 'example.html'
-        allowed={'logo.svg','favicon.png','apple-touch-icon.png','example.html','style.css','shadcn.css','shadcn-ui.js','mobile.css','mobile-ui.js','app.js','subagents.js','notification-client.js','workspace-binding.js','client.js',
-                 'diff-review.js', 'skills-picker.js', 'review-controls.js', 'goal-controls.js', 'skills-picker.css','diff-review.css','cloud-console-client.js','console-mode.js','operations.js','timeline.js','console-login.js','qrcode.js'}
+        allowed = set(ASSETS) | {'console-mode.js'}
         if name not in allowed:return False
         payload=b'window.CARRYON_CLOUD=true;' if name=='console-mode.js' else (assets()/name).read_bytes()
         if name=='example.html':
@@ -335,7 +335,7 @@ class ConsoleHandler(Handler):
             if path in ('/console/binding/inspect', '/console/binding/accept') and method == 'POST':
                 action = self.server.binding_invites.inspect if path.endswith('/inspect') else self.server.binding_invites.accept
                 self.reply(200, action(self.body(), self.server.auth.identity(key))); return
-            from carryon.workspaces.workspace_access import granted, require, capability
+            from carryon.workspaces.workspace_access import granted, require, required_capabilities
             if path.startswith('/console/qr/') and method=='POST':
                 action=path.rsplit('/',1)[-1];data=self.body()
                 with self.server.auth_lock:
@@ -411,7 +411,7 @@ class ConsoleHandler(Handler):
                         self.server.release_stream(parts[5]);self.reply(200,{'closed':True});return
                 # Delegate to the same authoritative gateway routes after console auth.
                 body = self.body() if method == 'POST' else None
-                needed = capability(body.get('method'), body.get('path', ''), body.get('body')) if parts[4:] == ['request'] and body else capability(method, '/api/'+'/'.join(parts[4:]), body)
+                needed = required_capabilities(body.get('method'), body.get('path', ''), body.get('body')) if parts[4:] == ['request'] and body else required_capabilities(method, '/api/'+'/'.join(parts[4:]), body)
                 require(self.server, key, parts[3], needed)
                 self.access_context = (key, parts[3], needed)
                 self.activity_owner = self.server.auth.identity(key)

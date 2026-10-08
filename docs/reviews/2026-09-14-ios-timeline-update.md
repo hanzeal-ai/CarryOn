@@ -24,20 +24,12 @@ ExyteChat 默认将列表差异拆成多次带动画的 UITableView 更新。发
 
 ## 重放发送回归
 
-`tests/fixtures/ios_timeline_regression.swift` 是独立模拟器测试入口。复制当前 iOS 目录到临时目录（排除 .build、build、.swiftpm），以该文件替换副本中的 CarryOn/App/CarryOnApp.swift，使用现有 Xcode 项目构建。仅将测试包安装到新建的专用模拟器。
+当前入口已接入统一隔离运行器，包含千条较早历史和稳定消息ID的CADisplayLink采样：
 
 ```sh
-fixture_root=$(mktemp -d /tmp/carryon-timeline-check.XXXXXX)
-rsync -a --exclude=.build --exclude=build --exclude=.swiftpm iOS/ "$fixture_root/iOS/"
-cp tests/fixtures/ios_timeline_regression.swift "$fixture_root/iOS/CarryOn/App/CarryOnApp.swift"
-xcodebuild -project "$fixture_root/iOS/CarryOn.xcodeproj" -scheme CarryOn -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$fixture_root/build" CODE_SIGNING_ALLOWED=NO build
-fixture_device=$(xcrun simctl create CarryOn-Timeline-Test com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro com.apple.CoreSimulator.SimRuntime.iOS-26-5)
-xcrun simctl boot "$fixture_device"
-xcrun simctl bootstatus "$fixture_device" -b
-xcrun simctl install "$fixture_device" "$fixture_root/build/Build/Products/Debug-iphonesimulator/CarryOn.app"
-xcrun simctl launch "$fixture_device" com.hanzeal.carryon
+CARRYON_SWIFT_PACKAGES=iOS/.build/SourcePackages python3 tests/run_ios_navigation_regression.py <booted-test-simulator-id> timeline
 ```
 
-运行约 10 秒后，用 `xcrun simctl get_app_container "$fixture_device" com.hanzeal.carryon data` 获取测试容器，检查 Documents/result.json 的 passed 为 true、animatedSendFrames 为 0。Documents/samples.json 保留逐帧证据。结束后关闭该专用模拟器。
+结果为 `.runtime/timeline-regression/result.json`，逐帧记录为 `samples.json`，实际渲染为 `timeline.png`。验收比较发送前每个既有消息的基线高度及呈现高度（容差1pt），新增发送提示行的展开动画单独保留观测；不能用所有行的动画数量推断旧正文压缩。历史记录中的零动画结果只适用于当时短历史fixture，不代表所有当前状态。2026-10-02千条历史复核观察到新提示行与位置动画，但既有正文高度保持一致；Debug模拟器帧间隔不能代替真机性能验收。
 
 恢复：撤回本次 ConversationView 的事务/快照修改及 ChatAppearance 的 disclosure 组件和对应调用；保留这些文件中原有并发修改。

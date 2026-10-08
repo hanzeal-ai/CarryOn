@@ -32,6 +32,9 @@ def input_items(value):
         elif item.get('type') == 'skill':
             from carryon.sessions.skills import selections
             selections([{k: v for k, v in item.items() if k != 'type'}])
+        elif item.get('type') == 'mention':
+            from carryon.sessions.mentions import selections
+            selections([{k: v for k, v in item.items() if k != 'type'}])
         else: raise IPCError('unsupported-input-type')
     return value
 

@@ -1,4 +1,4 @@
-"""Bounded adapters for the desktop follower protocol (26.924.22138)."""
+"""Bounded adapters for the verified desktop follower method contract."""
 import time
 import uuid
 from contextlib import nullcontext
@@ -67,9 +67,13 @@ def controls(state):
     current_settings = {k: v for k, v in (state.get('latestThreadSettings') or {}).items() if k in writable}
     if 'collaborationMode' not in current_settings and state.get('latestCollaborationMode') is not None:
         current_settings['collaborationMode'] = state['latestCollaborationMode']
-    return {**({'supportedOperations': state['supportedOperations']} if 'supportedOperations' in state else {}),
+    # Desktop follower operations come from this pinned contract; app-server advertises its own set.
+    return {'supportedOperations': state.get('supportedOperations', sorted(METHODS)),
+            'supportsMentions': state.get('supportsMentions') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
+            'supportsFileReferences': state.get('supportsFileReferences') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
             'supportsSkills': state.get('supportsSkills') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
             'supportsGoal': state.get('supportsGoal') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
+            'supportsBackgroundTerminals': state.get('supportsBackgroundTerminals') is True and not state.get('_metadataOnly') and state.get('threadRuntimeStatus', {}).get('type') in ('idle', 'active'),
             'goal': state.get('threadGoal'), 'goalUnknown': state.get('_goalUnknown', False),
             'supportedSettings': sorted(writable.intersection(state.get('supportedSettings', writable))),
             'activeTurnId': active.get('turnId') if active else None,
@@ -81,10 +85,20 @@ def controls(state):
 def build(action, data, state):
     from carryon.sessions.skills import selections, inputs
     skills = selections(data.get('skills'))
+    from carryon.sessions.mentions import selections as mention_selections, inputs as mention_inputs
+    mentions = mention_selections(data.get('mentions'))
+    if mentions and (action not in ('steer', 'queue-add') or not state.get('supportsMentions')):
+        raise ValueError('当前操作不支持插件或应用引用')
     if skills and (action not in ('steer', 'queue-add') or not state.get('supportsSkills')):
         raise ValueError('当前操作不支持技能选择')
     if action not in METHODS:
         raise ValueError('不支持的会话操作')
+    from carryon.sessions.file_references import selections as file_selections, project
+    files = file_selections(data.get('files'))
+    if files and (action not in ('steer', 'queue-add') or not state.get('supportsFileReferences')):
+        raise ValueError('当前操作不支持项目文件引用')
+    if files:
+        data = {**data, 'prompt': project(text(data.get('prompt'), allow_empty=True), files)}
     c = controls(state)
     runtime = state.get('threadRuntimeStatus', {}).get('type')
     params = {'conversationId': state['id']}
@@ -98,10 +112,10 @@ def build(action, data, state):
             from carryon.sessions.images import validate_images
             images = validate_images(data.get('images'))
             prompt = data.get('prompt')
-            prompt = text(prompt, allow_empty=bool(images or skills))
-            params.update(input=([{'type': 'text', 'text': prompt, 'text_elements': []}] if prompt else []) + [{'type': 'image', 'url': url} for url in images] + inputs(skills),
+            prompt = text(prompt, allow_empty=bool(images or skills or mentions))
+            params.update(input=([{'type': 'text', 'text': prompt, 'text_elements': []}] if prompt else []) + [{'type': 'image', 'url': url} for url in images] + inputs(skills) + mention_inputs(mentions),
                           clientUserMessageId=str(uuid.uuid4()), attachments=[],
-                          restoreMessage=queued_message(prompt, state, images, skills))
+                          restoreMessage=queued_message(prompt, state, images, skills, mentions))
     elif action in QUEUE_ACTIONS:
         if runtime not in ('active', 'idle'):
             raise ValueError('会话运行状态尚未确认')
@@ -190,13 +204,13 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
     from carryon.errors import BridgeError
     from carryon.sessions.catalog import valid_id
     valid_id(thread_id)
-    if parent_id and data.get('skills'): raise ValueError('临时聊天不支持技能选择')
+    if parent_id and (data.get('skills') or data.get('mentions') or data.get('files')): raise ValueError('临时聊天不支持技能、插件、应用或项目文件引用')
     bridge.assert_target(thread_id, parent_id)
     ipc, generation = bridge.require()
     action, request_id = data.get('action'), data.get('requestId')
     if hasattr(ipc, 'supported_operations') and action not in ipc.supported_operations:
         raise ValueError('此工作区不支持该操作')
-    if action not in METHODS and action not in ('review', 'goal-set', 'goal-pause', 'goal-clear'):
+    if action not in METHODS and action not in ('review', 'goal-set', 'goal-pause', 'goal-clear', 'voice-start', 'voice-stop'):
         raise ValueError('不支持的会话操作')
     from carryon.contracts import validate_request_id
     validate_request_id(request_id)
@@ -207,7 +221,7 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
         if previous and previous != _reserved:
             if previous['fingerprint'] != fingerprint:
                 raise BridgeError('requestId 已用于不同内容')
-            return previous
+            return bridge.refresh_job(request_id) if action in ('voice-start', 'voice-stop') and previous['state'] == 'uncertain' else previous
         for previous in bridge.journal.list():
             if previous['threadId'] != thread_id or previous['id'] == request_id:
                 continue
@@ -219,6 +233,12 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
                'threadId': thread_id, 'created': time.time(), 'state': 'preparing'}
         if source:job.update(source)
         if data.get('skills'): job['skills'] = selections(data['skills'])
+        if data.get('mentions'):
+            from carryon.sessions.mentions import selections as mention_selections
+            job['mentions'] = mention_selections(data['mentions'])
+        if data.get('files'):
+            from carryon.sessions.file_references import selections as file_selections
+            job['files'] = file_selections(data['files'])
         if parent_id is not None: job['sideParentId'] = parent_id
         if _reserved is None: bridge.journal.insert(job)
         else:
@@ -230,6 +250,10 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
 
 
 def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
+    if data['action'] in ('voice-start', 'voice-stop'):
+        from carryon.app_server.realtime_voice import dispatch as voice
+        voice(bridge, ipc, generation, job, data, authorize)
+        return
     if data['action'] in ('goal-set', 'goal-pause', 'goal-clear'):
         from carryon.app_server.goals import dispatch as goal
         goal(bridge, ipc, generation, job, data, authorize)
@@ -278,7 +302,18 @@ def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
         native_response = getattr(ipc, 'protocol', None) == 'codex-app-server' and data['action'] in REQUEST_METHODS
         if native_response:
             bridge.journal.update(job['id'], nativeResponse={'session': ipc.session_id, 'requestId': params['requestId']})
-        response = ipc.request(method, params, version, owner, guarded)
+        if job.get("files"):
+            from carryon.sessions.file_references import guard, delivery_session
+            def authorized():
+                with bridge.lock:
+                    bridge.check_generation(ipc, generation)
+                    bridge.assert_target(job['threadId'])
+                    if authorize: authorize()
+            with delivery_session(bridge, job['threadId'], ipc, authorized, starts_turn=data['action'] == 'queue-add') as (runtime, owner_guard):
+                response = runtime.request(method, params, version, owner,
+                    guard(runtime, job['threadId'], job['files'], lambda write: guarded(lambda: owner_guard(write))))
+        else:
+            response = ipc.request(method, params, version, owner, guarded)
         result = response['result']
         if data['action'] == 'settings':
             if not isinstance(result, dict) or type(result.get('applied')) is not bool:

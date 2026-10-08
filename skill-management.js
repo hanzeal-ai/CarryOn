@@ -1,0 +1,22 @@
+'use strict';
+const SkillManagement=(()=>{
+ let config,target,busy=false;
+ const el=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
+ const dialog=el('dialog'),head=el('header'),close=el('button','关闭'),body=el('section'),records=el('div'),status=el('p'),refresh=el('button','刷新'),query=el('button','核对原请求');
+ dialog.id='skill-management-dialog';dialog.className='archive-dialog';head.className='archive-head';body.className='archive-body';status.setAttribute('role','status');records.className='native-management-list';head.append(el('strong','管理技能'),close);body.append(records,el('p','启用状态保存在此工作区，并影响使用该技能的会话。'),status,refresh,query);dialog.append(head,body);document.body.append(dialog);
+ const current=t=>t&&target===t&&dialog.open&&config.scope()===t.scope&&config.client.epoch===t.epoch&&config.thread()===t.id&&config.canView();
+ const supported=()=>config.snapshot()?.controls?.supportsSkills===true&&config.snapshot()?.access?.canInteract!==false&&config.snapshot()?.access?.nativeReady!==false;
+ function render(){if(!target)return;if(records.contains(document.activeElement))target.focusKey=document.activeElement.dataset.focusKey;status.textContent=[target.writeError,target.readError].filter(Boolean).join('\n');const t=target,pending=config.client.operations.has('skill-config');records.replaceChildren();for(const row of t.rows){const item=el('article'),name=el('strong',row.interface?.displayName||row.name),description=el('p',row.interface?.shortDescription||row.description||''),state=el('p',row.enabled?'已启用':'已停用'),toggle=el('button',row.enabled?'停用':'启用');toggle.dataset.focusKey=row.path;toggle.disabled=busy||pending||!config.canEdit()||!supported();toggle.onclick=()=>perform({path:row.path,enabled:!row.enabled});item.append(name,description,state,toggle);records.append(item);}if(t.loaded&&!t.rows.length)records.append(el('p','当前项目没有技能'));refresh.disabled=busy;query.hidden=!pending;query.disabled=busy;close.disabled=busy;if(!busy&&target.focusKey&&(document.activeElement===document.body||records.contains(document.activeElement))){const item=[...records.querySelectorAll('button')].find(b=>b.dataset.focusKey===target.focusKey&&!b.disabled);(item||(pending?query:refresh)).focus();}}
+ async function load(){const t=target;if(busy||!current(t))return;busy=true;render();try{const page=await config.request('/threads/'+encodeURIComponent(t.id)+'/skills');if(!current(t))return;
+  if(!Array.isArray(page.skills)||page.skills.some(r=>typeof r.path!=='string'||!r.path||typeof r.name!=='string'||!r.name||typeof r.enabled!=='boolean')||new Set(page.skills.map(r=>r.path)).size!==page.skills.length)throw Error('技能目录格式无效');
+  t.rows=page.skills;t.loaded=true;t.readError=(page.errors||[]).map(r=>r.message||r.path).join('\n')||null;
+ }catch(error){if(current(t)){t.readError=error.message;}}finally{if(target===t){busy=false;render();}}}
+ async function perform(body=null){const t=target;if(busy||!current(t)||body&&(!config.canEdit()||!supported()||config.client.operations.has('skill-config')||!t.rows.some(row=>row.path===body.path&&row.enabled!==body.enabled)))return;busy=true;t.writeError=null;render();
+  try{const job=body?await config.client.configureSkill(t.id,body,()=>current(t)):await config.client.querySkillConfiguration(config.client.operations.get('skill-config'),()=>current(t));if(!current(t))return;t.writeError=job.state==='completed'?null:job.error||'结果待核对，原请求已保留';}
+  catch(error){if(current(t))t.writeError=error.message;}finally{if(target===t){busy=false;render();}}
+  if(current(t)&&!config.client.operations.has('skill-config'))await load();
+ }
+ async function open(){if(!config.canView()||!supported()||!config.thread())return;target={id:config.thread(),scope:config.scope(),epoch:config.client.epoch,rows:[],loaded:false};status.textContent='';dialog.showModal();render();await load();}
+ close.onclick=()=>dialog.close();refresh.onclick=()=>load();query.onclick=()=>perform();dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+ return {configure(value){config=value;document.getElementById('manage-skills').onclick=open;},open,update(){if(!config)return;if(target&&!current(target)){dialog.close();target=null;busy=false;records.replaceChildren();}const button=document.getElementById('manage-skills');button.hidden=!supported();button.disabled=!config.canView()||!config.thread();if(target)render();}};
+})();

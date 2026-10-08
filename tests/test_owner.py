@@ -23,6 +23,7 @@ class Runtime:
     instances = []
     def __init__(self, *args, **kwargs):
         self.lock = threading.RLock()
+        self.process = object(); self.session_id = "fixture"
         self.connected = False; self.data = None; self.calls = []; self.on_change = lambda: None
         self.instances.append(self)
     def connect(self): self.connected = True
@@ -36,10 +37,11 @@ class Runtime:
         if not any(t['turnId'] == result['turn']['id'] for t in self.data['turns']):
             self._event({'method': 'turn/started', 'params': {'threadId': tid, 'turn': result['turn']}})
         return result
-    def rpc(self, method, params, before_send=None):
+    def rpc(self, method, params, before_send=None, timeout_ms=15000):
         if before_send: before_send(lambda: None)
         self.calls.append((method, params))
         if method == 'turn/start': return {'turn': {'id': 'new', 'status': 'inProgress', 'items': []}}
+        if method == 'thread/backgroundTerminals/list': return {'data': [], 'nextCursor': None}
         if method == 'thread/loaded/list': return {'data': [self.data['id']]}
         return {}
     def _event(self, event):
@@ -67,6 +69,50 @@ class OwnerTests(unittest.TestCase):
     def envelope(self, method='thread-owner-discovery', version=1, tid=T, **params):
         return {'method': method, 'version': version, 'requestId': 'wire-1', 'sourceClientId': 'desktop',
                 'params': {'hostId': 'local', 'conversationId': tid, **params}}
+
+    def test_native_session_tracks_late_queue_turn_and_releases_owner(self):
+        from carryon.owner.integration import OwnerBridge
+        from carryon.sessions.file_references import delivery_session
+        self.manager.load(T)
+        bridge = OwnerBridge('unused', self.catalog, Mock(), owner_directory=Path(self.tmp.name))
+        bridge.owner_service = self.manager
+        runtime = self.manager.entries[T]['runtime']
+        with delivery_session(bridge, T, self.manager.bus, lambda: None, starts_turn=True) as (_, guarded):
+            guarded(lambda: None)
+        self.assertTrue(self.manager.entries[T]['awaiting_new_turn'])
+        self.assertFalse(self.manager.entries[T]['submitted_turn_ids'])
+        runtime.data['turns'].append({'turnId': 'late-queued', 'status': 'completed', 'items': []})
+        self.manager._release_finished()
+        self.assertNotIn(T, self.manager.entries)
+        self.assertFalse(runtime.connected)
+
+    def test_native_session_does_not_track_definitely_rejected_queue(self):
+        from carryon.owner.integration import OwnerBridge
+        from carryon.sessions.file_references import delivery_session
+        self.manager.load(T)
+        bridge = OwnerBridge('unused', self.catalog, Mock(), owner_directory=Path(self.tmp.name))
+        bridge.owner_service = self.manager
+        with self.assertRaises(IPCError):
+            with delivery_session(bridge, T, self.manager.bus, lambda: None, starts_turn=True) as (_, guarded):
+                guarded(lambda: None)
+                raise IPCError('explicit native rejection')
+        self.assertFalse(self.manager.entries[T]['awaiting_new_turn'])
+
+    def test_native_session_local_guard_rejection_does_not_track_future_turn(self):
+        from carryon.owner.integration import OwnerBridge
+        from carryon.sessions.file_references import delivery_session
+        from carryon.errors import BridgeError
+        self.manager.load(T)
+        bridge = OwnerBridge('unused', self.catalog, Mock(), owner_directory=Path(self.tmp.name))
+        bridge.owner_service = self.manager
+        writes = []
+        def reject(): raise BridgeError('revoked', 403)
+        with self.assertRaises(BridgeError):
+            with delivery_session(bridge, T, self.manager.bus, lambda: None, starts_turn=True) as (_, guarded):
+                guarded(reject)
+                writes.append('sent')
+        self.assertEqual(writes, [])
+        self.assertFalse(self.manager.entries[T]['awaiting_new_turn'])
 
     def test_shutdown_during_connect_closes_late_connection(self):
         entered, unblock = threading.Event(), threading.Event()
@@ -401,6 +447,44 @@ class AutoReleaseTests(unittest.TestCase):
         self.runtime.data['turns'][-1]['status'] = status
         self.runtime.data['threadRuntimeStatus'] = {'type': 'idle'}
 
+    def test_background_terminal_keeps_writer_and_blocks_explicit_release(self):
+        self.start(); self.finish(); original = self.runtime.rpc
+        def live(method, params, **kwargs):
+            if method == 'thread/backgroundTerminals/list': return {'data': [{'processId': 'native-process', 'itemId': 'item', 'command': 'fixture sleep', 'cwd': '/fixture'}], 'nextCursor': None}
+            return original(method, params, **kwargs)
+        self.runtime.rpc = live
+        self.manager._release_finished(); self.assertTrue(self.runtime.connected)
+        with self.assertRaisesRegex(IPCError, 'background terminals'): self.manager.release(T)
+        self.runtime.rpc = original; self.manager._release_finished(); self.assertFalse(self.runtime.connected)
+
+    def test_slow_terminal_read_does_not_hold_other_owner_lock(self):
+        self.start(); self.finish(); self.manager.load(U)
+        entered, unblock = threading.Event(), threading.Event(); original = self.runtime.rpc
+        def slow(method, params, **kwargs):
+            if method == 'thread/backgroundTerminals/list': entered.set(); unblock.wait(3)
+            return original(method, params, **kwargs)
+        self.runtime.rpc = slow
+        worker = threading.Thread(target=self.manager._release_finished); worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            other = self.envelope('thread-follower-start-turn', 2, tid=U, turnStart={'request': {'threadId': U, 'input': [{'type': 'text', 'text': 'other'}]}})
+            done = threading.Event()
+            request = threading.Thread(target=lambda: (self.manager.handle(other), done.set())); request.start()
+            self.assertTrue(done.wait(1), 'native terminal read blocked another owner'); request.join()
+        finally: unblock.set(); worker.join(3)
+
+    def test_unknown_terminal_inventory_preserves_writer_and_late_new_identity(self):
+        self.start(); self.finish(); original = self.runtime.rpc
+        def unreadable(method, params, **kwargs):
+            if method == 'thread/backgroundTerminals/list': return {'data': []}
+            return original(method, params, **kwargs)
+        self.runtime.rpc = unreadable; self.manager._release_finished(); self.assertTrue(self.runtime.connected)
+        def changed(method, params, **kwargs):
+            result = original(method, params, **kwargs)
+            if method == 'thread/backgroundTerminals/list': self.runtime.session_id = 'replacement'
+            return result
+        self.runtime.rpc = changed; self.manager._release_finished(); self.assertTrue(self.runtime.connected)
+
     def test_load_only_does_not_release_old_finished_history(self):
         self.manager._release_finished()
         self.assertIn(T, self.manager.entries)
@@ -556,7 +640,9 @@ class AutoReleaseTests(unittest.TestCase):
         self.assertFalse(self.runtime.connected); self.assertTrue(other.connected)
 
     def test_lost_start_response_releases_after_native_terminal_evidence(self):
-        def uncertain_start(method, params):
+        original = self.runtime.rpc
+        def uncertain_start(method, params, **kwargs):
+            if method != 'turn/start': return original(method, params, **kwargs)
             self.runtime.data['turns'].append({'turnId': 'lost-reply', 'status': 'completed', 'items': []})
             raise IPCError('reply lost', uncertain=True)
         self.runtime.rpc = uncertain_start

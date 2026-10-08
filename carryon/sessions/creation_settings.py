@@ -1,11 +1,15 @@
-"""The optional model selection for the first turn of a new conversation."""
-from carryon.contracts import settings
+"""Native first-turn configuration without changing the destination or ownership."""
+from carryon.contracts import SCHEMAS, settings
+
+
+def supported():
+    return sorted(set(SCHEMAS['settings']['properties']) - {'threadId', 'cwd', 'projectId', 'activePermissionProfile', 'multiAgentMode'})
 
 
 def validate(value):
     if value is None: return None
-    if not isinstance(value, dict) or set(value) - {'model', 'effort'}:
-        raise ValueError('新会话设置仅支持模型与思考强度')
+    if not isinstance(value, dict) or set(value) - set(supported()):
+        raise ValueError('新会话设置不能改变目标目录、归属或只读原生字段')
     return settings(value, 'new')
 
 

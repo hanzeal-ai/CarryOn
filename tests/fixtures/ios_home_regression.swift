@@ -3,7 +3,7 @@ import CarryOnCore
 
 @main struct HomeRegressionApp: App {
     @State private var fixture = HomeFixture()
-    var body: some Scene { WindowGroup { VStack { Text("首页刷新隔离验收"); Text(fixture.projects.failure ?? "读取中"); Text(fixture.threads.records.first?.title ?? "") }.sheet(isPresented: $fixture.showPicker) { CreationModelPicker(selection: $fixture.selection, scope: fixture.model.scope) }.environment(fixture.model).onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.state"))) { fixture.pickerState = $0.object as? [String: Any] ?? [:] }.task { await fixture.run() } } }
+    var body: some Scene { WindowGroup { VStack { Text("首页刷新隔离验收"); Text(fixture.projects.failure ?? "读取中"); Text(fixture.threads.records.first?.title ?? "") }.sheet(isPresented: $fixture.showPicker) { CreationModelPicker(selection: $fixture.selection, scope: fixture.model.scope) }.sheet(isPresented: $fixture.showConfiguration) { CreationConfigurationView(selection: $fixture.selection, scope: fixture.model.scope) }.environment(fixture.model).onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.state"))) { fixture.pickerState = $0.object as? [String: Any] ?? [:] }.task { await fixture.run() } } }
 }
 private final class HomeTransport: URLProtocol, @unchecked Sendable {
     static let store = Store()
@@ -46,6 +46,7 @@ private final class HomeTransport: URLProtocol, @unchecked Sendable {
 }
 @MainActor @Observable final class HomeFixture {
     let model = AppModel(), projects = RecordListState(), threads = RecordListState(), loader = WorkspaceHomeLoader()
+    var showConfiguration = false
     var showPicker = false
     var selection: JSONValue = .null
     var pickerState: [String: Any] = [:]
@@ -54,8 +55,9 @@ private final class HomeTransport: URLProtocol, @unchecked Sendable {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [HomeTransport.self]
         model.fixtureClient(ConsoleAPI(address: try! ConsoleAddress("https://home-regression.invalid/"), configuration: config))
         model.addressText = "https://home-regression.invalid/"; model.selectedDevice = "fixture"
-        model.devices = [try! Record(.object(["id": .string("fixture"), "permissions": .array([.string("view")])]))]
-        model.connected = true
+        model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true), "supportedCreationSettings": .array(["collaborationMode", "approvalPolicy"].map(JSONValue.string))])
+        model.devices = [try! Record(.object(["id": .string("fixture"), "permissions": .array([.string("view"), .string("create"), .string("edit")])]))]
+        model.authenticated = true; model.connected = true
     }
     func load(_ full: Bool = false) async { await loader.load(model: model, projects: projects, threads: threads, includeInactive: false, refresh: true, fullSync: full) }
     func openPicker() async {
@@ -94,7 +96,19 @@ private final class HomeTransport: URLProtocol, @unchecked Sendable {
         HomeTransport.store.removeChoice()
         await openPicker()
         NotificationCenter.default.post(name: Notification.Name("fixture.model.inspect"), object: nil)
-        checks["removedModelShowsDefaultAndReason"] = pickerState["selected"] as? String == "" && !(pickerState["failure"] as? String ?? "").isEmpty && pickerState["loading"] as? Bool == false
+        checks["removedModelRetainedWithReason"] = pickerState["selected"] as? String == "fixture-model" && !(pickerState["failure"] as? String ?? "").isEmpty && pickerState["loading"] as? Bool == false
+        showPicker = false; try? await Task.sleep(for: .milliseconds(400))
+        showConfiguration = true; try? await Task.sleep(for: .milliseconds(400))
+        NotificationCenter.default.post(name: Notification.Name("fixture.configuration.choose"), object: nil)
+        let before = selection
+        model.devices = [try! Record(.object(["id": .string("fixture"), "permissions": .array(["view", "create"].map(JSONValue.string))]))]
+        NotificationCenter.default.post(name: Notification.Name("fixture.configuration.save"), object: nil)
+        try? await Task.sleep(for: .milliseconds(100))
+        checks["configurationRevokedPreservesSelection"] = selection == before
+        model.devices = [try! Record(.object(["id": .string("fixture"), "permissions": .array(["view", "create", "edit"].map(JSONValue.string))]))]
+        NotificationCenter.default.post(name: Notification.Name("fixture.configuration.save"), object: nil)
+        try? await Task.sleep(for: .milliseconds(400))
+        checks["configurationUsesNativeModeAndApproval"] = selection["approvalPolicy"].text == "never" && selection["collaborationMode"]["mode"].text == "plan" && selection["collaborationMode"]["settings"]["model"].text == "fixture-model" && selection["collaborationMode"]["settings"]["reasoning_effort"].text == "high"
         if let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: \.isKeyWindow) {
             let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
             try? image.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("home.png"))

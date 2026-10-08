@@ -86,6 +86,49 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>{const v=document.querySelector('#messages').closest('.mobile-chat-scroll')||document.querySelector('#messages');v.dispatchEvent(new WheelEvent('wheel',{bubbles:true}));v.scrollTop=v.scrollHeight/2;});
  await page.waitForFunction(()=>!['later','m0','result'].includes(document.querySelector('.conversation-navigator button.active')?.dataset.anchor));
  await page.screenshot({path:'.runtime/navigation-'+width+'.png'});
+ // A new streamed item must not cancel text selected in an unchanged message.
+ for(const backwards of [false,true]){
+  const selection=await page.evaluate(backwards=>{
+   const container=document.querySelector('#messages');
+   const data={thread:{id:'selection'},timeline:[{id:'stable',type:'agentMessage',text:'保留这段选中的正文，等待新消息。'},{id:'streaming',type:'agentMessage',text:'正在生成'}]};
+   Timeline.reset();Timeline.render(data,container);
+   const text=container.querySelector('[data-navigation-id="stable"] .text p').firstChild;
+   const selected=window.getSelection();selected.setBaseAndExtent(text,backwards?10:2,text,backwards?2:10);
+   const before=selected.toString();
+   Timeline.render({...data,timeline:[data.timeline[0],{...data.timeline[1],text:'正在生成新的回答'}]},container);
+   return {before,after:selected.toString(),anchor:selected.anchorOffset,focus:selected.focusOffset};
+  },backwards);
+  assert.equal(selection.after,selection.before,'streaming must preserve selected unchanged text');
+  assert.equal(selection.anchor,backwards?10:2);assert.equal(selection.focus,backwards?2:10);
+ }
+ const replacedSelection=await page.evaluate(()=>{
+  const container=document.querySelector('#messages'),selected=window.getSelection();
+  Timeline.render({thread:{id:'selection'},timeline:[{id:'stable',type:'agentMessage',text:'这段正文已被原生更新'}]},container);
+  return selected.toString();
+ });
+ assert.equal(replacedSelection,'','changed text must not inherit a stale selection');
+ const containerSelection=await page.evaluate(()=>{
+  const container=document.querySelector('#messages'),selection=window.getSelection();
+  Timeline.render({thread:{id:'boundary'},timeline:[{id:'one',type:'agentMessage',text:'第一段'},{id:'two',type:'agentMessage',text:'第二段'}]},container);
+  selection.setBaseAndExtent(container,0,container,2);
+  Timeline.render({thread:{id:'boundary'},timeline:[{id:'one',type:'agentMessage',text:'第一段'}]},container);
+  return {text:selection.toString(),count:container.querySelectorAll('article.message').length};
+ });
+ assert.deepEqual(containerSelection,{text:'',count:1},'container child offsets must not restore across removal');
+ const performance=await page.evaluate(()=>{
+  const container=document.querySelector('#messages'),viewport=container.closest('.mobile-chat-scroll')||container;
+  const data={thread:{id:'long'},timeline:Array.from({length:1000},(_,i)=>({id:'long-'+i,type:'agentMessage',text:'第 '+i+' 条回答\n\n'+('用于验证长历史中的阅读位置与流式更新。'.repeat(10))}))};
+  Timeline.reset();const started=window.performance.now();Timeline.render(data,container);const firstMs=window.performance.now()-started;
+  viewport.scrollTop=viewport.scrollHeight/2;
+  const top=viewport.getBoundingClientRect().top,node=[...container.querySelectorAll('[data-navigation-id]')].find(n=>n.getBoundingClientRect().bottom>top),y=node.getBoundingClientRect().top;
+  const update=window.performance.now();Timeline.render({...data,timeline:[...data.timeline.slice(0,-1),{...data.timeline.at(-1),text:'最后一条继续生成'}]},container);
+  return {firstMs,updateMs:window.performance.now()-update,count:container.querySelectorAll('article.message').length,reused:container.contains(node),drift:Math.abs(node.getBoundingClientRect().top-y)};
+ });
+ assert.equal(performance.count,120,'long history keeps a bounded rendered window');
+ assert(performance.reused,'unchanged entries must retain DOM identity');assert(performance.drift<2,'streaming must preserve reading position: '+JSON.stringify(performance));
+ assert(performance.firstMs<1000&&performance.updateMs<1000,'rendering must not block for a second: '+JSON.stringify(performance));
+ console.log('Long history '+width+': '+JSON.stringify(performance));
+ await page.evaluate(()=>window.getSelection().removeAllRanges());
  await page.evaluate(()=>{Timeline.reset();Timeline.render({thread:{id:'fold'},timeline:[{id:'tool-image',type:'mcpToolCall',title:'图片输出',artifacts:[{id:'art',kind:'image'}]},{id:'running-command',type:'commandExecution',status:'inProgress',title:'运行命令',data:{command:'pwd'}}]},document.querySelector('#messages'));});
  assert.equal(await page.locator('#messages details[open]').count(),0);
  await page.evaluate(()=>Timeline.reset());

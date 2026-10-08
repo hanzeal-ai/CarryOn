@@ -1,6 +1,6 @@
 'use strict';
 const Operations = (() => {
-  let selected = null, signature = '', transport, notify, writable=false;
+  let selected = null, signature = '', transport, notify, writable=false, currentHistory=null;
   const seenQuestions=new Set();
   let modelCatalog=null;
   const modelWrites=new Set();
@@ -12,9 +12,9 @@ const Operations = (() => {
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
   box('question-later').onclick=()=>box('question-dialog').close();
-  function reset() {modelCatalog=null;messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  function reset() {currentHistory=null;modelCatalog=null;messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
   async function send(target, action, fields, button) {
-    if(target!==selected||!writable)return;
+    if(target!==selected||!writable||!currentHistory?.controls?.supportedOperations?.includes(action))return;
     button.disabled=true;
     try {
       const job=await transport.operation(target,action,fields,()=>target===selected);
@@ -35,7 +35,7 @@ const Operations = (() => {
     const key=JSON.stringify([threadId,c?.lastTurnId,last?.id]);
     if(key!==messageEditorKey){messageEditor?.remove();messageEditor=null;messageEditorKey=key;}
     const row=last&&[...box('messages').querySelectorAll('.message.user')].find(el=>el.dataset.messageId===last.id);
-    if(c?.supportedOperations&&!c.supportedOperations.includes('edit')||!writable||history.syncing===true||history.status?.state!=='idle'||!c?.lastUserText||!c.lastTurnId||last?.turnId!==c.lastTurnId||!row){messageEditor?.remove();return;}
+    if(!c?.supportedOperations?.includes('edit')||!writable||history.syncing===true||history.status?.state!=='idle'||!c?.lastUserText||!c.lastTurnId||last?.turnId!==c.lastTurnId||!row){messageEditor?.remove();return;}
     if(!messageEditor){
       const editor=el('details');editor.className='message-editor';editor.append(el('summary','编辑'));
       const input=field(editor,'修改最后一条消息',c.lastUserText,true);
@@ -51,7 +51,8 @@ const Operations = (() => {
     }
     row.append(messageEditor);
   }
-  function renderModelSettings(parent,history,threadId,api,drafts) {
+  function renderModelSettings(parent,history,threadId,api,drafts,presentation='all') {
+    const configuration=presentation==='configuration';
     const epoch=api.epoch, current=()=>parent.isConnected&&selected===threadId&&transport===api&&api.epoch===epoch;
     const c=history.controls;
     const selectedModel=drafts.get('模型')??c.settings.model??history.metadata?.latestModel??'';
@@ -60,10 +61,12 @@ const Operations = (() => {
     model.dataset.draftKey='模型';effort.dataset.draftKey='思考强度';
     model.setAttribute('aria-label','模型');effort.setAttribute('aria-label','思考强度');
     const modelLabel=el('label','模型'), effortLabel=el('label','思考强度');
-    modelLabel.append(model);effortLabel.append(effort);parent.append(modelLabel,effortLabel,status);
+    modelLabel.append(model);effortLabel.append(effort);parent.append(modelLabel,effortLabel,status);modelLabel.hidden=effortLabel.hidden=configuration;
     const originalMode=c.settings.collaborationMode?.mode||'default';
     mode.append(new Option('执行','default'),new Option('计划','plan'));mode.value=drafts.get('工作模式')||originalMode;mode.dataset.draftKey='工作模式';mode.setAttribute('aria-label','工作模式');
-    const modeLabel=el('label','工作模式');modeLabel.append(mode);parent.insertBefore(modeLabel,status);
+    const modeLabel=el('label','工作模式');modeLabel.append(mode);modeLabel.hidden=presentation==='model';parent.insertBefore(modeLabel,status);
+    const approval=el('select'),approvalLabel=el('label','执行审批');for(const [name,value]of [['按需请求','on-request'],['不可信命令请求','untrusted'],['不请求','never']])approval.append(new Option(name,value));
+    const originalApproval=c.settings.approvalPolicy;if(typeof originalApproval!=='string'){approval.append(new Option('当前自定义策略','custom'));approval.value='custom';}else approval.value=originalApproval;approval.setAttribute('aria-label','执行审批');approvalLabel.append(approval);approvalLabel.hidden=!configuration;parent.insertBefore(approvalLabel,status);
     model.append(new Option(selectedModel||'未提供',selectedModel));
     effort.append(new Option(selectedEffort||'未提供',selectedEffort));
     let choices=[], loading=true;
@@ -71,9 +74,9 @@ const Operations = (() => {
     const choice=()=>choices.find(item=>item.id===model.value);
     const update=()=>{
       const saving=!!pendingWrite();
-      model.disabled=!writable||loading||saving||!choices.length;mode.disabled=model.disabled;
+      model.disabled=!writable||loading||saving||!choices.length;mode.disabled=model.disabled||!c.supportedSettings?.includes('collaborationMode');approval.disabled=!writable||loading||saving||!c.supportedSettings?.includes('approvalPolicy');
       effort.disabled=!writable||loading||saving||!choice()?.efforts.length;
-      save.disabled=!writable||loading||saving||!choice()?.efforts.includes(effort.value);
+      save.disabled=!writable||loading||saving||(!configuration&&!choice()?.efforts.includes(effort.value));
     };
     const syncEfforts=(preferred)=>{
       const item=choice(), values=item?.efforts||[];
@@ -83,10 +86,12 @@ const Operations = (() => {
       effort.value=value;update();
     };
     const save=button(parent,'保存设置',async b=>{
-      if(!current()||pendingWrite()||!choice()?.efforts.includes(effort.value))return;
+      if(!current()||pendingWrite()||(!configuration&&!choice()?.efforts.includes(effort.value)))return;
       const pending={api,epoch,threadId};modelWrites.add(pending);
-      const settings={model:model.value,effort:effort.value};
-      if(mode.value!==originalMode)settings.collaborationMode={mode:mode.value,settings:{...(c.settings.collaborationMode?.settings||{}),model:model.value,reasoning_effort:effort.value,developer_instructions:c.settings.collaborationMode?.settings?.developer_instructions??null}};
+      const settings=configuration?{}:{model:model.value,effort:effort.value};
+      if(configuration&&approval.value!=='custom'&&approval.value!==originalApproval)settings.approvalPolicy=approval.value;
+      if(((configuration||presentation==='all')&&mode.value!==originalMode)||(!configuration&&c.settings.collaborationMode))settings.collaborationMode={mode:mode.value,settings:{...(c.settings.collaborationMode?.settings||{}),model:model.value,reasoning_effort:effort.value,developer_instructions:c.settings.collaborationMode?.settings?.developer_instructions??null}};
+      if(!Object.keys(settings).length){modelWrites.delete(pending);status.textContent='设置未改变';update();return;}
       pending.promise=send(threadId,'settings',{settings},b).finally(()=>modelWrites.delete(pending));
       update();await pending.promise;update();
     });
@@ -118,6 +123,7 @@ const Operations = (() => {
     load();
   }
   function render(history, threadId, api, notice, canWrite=true, forkOptions) {
+    currentHistory=history;
     writable=canWrite&&history.access?.canInteract!==false;
     if(history.access?.canInteract===false){reset();return;}
     transport=api;notify=notice;
@@ -173,7 +179,7 @@ const Operations = (() => {
       const updateFork=()=>{const pending=!!pendingFork();turn.disabled=pending;forkButton.disabled=pending||!writable||!forkOptions.allowed||!idle||!validTurn();};turn.onchange=updateFork;updateFork();
       const pending=pendingFork();if(pending){const settle=()=>{if(current())updateFork();};pending.promise.then(settle,settle);}
     }
-    if(['active','idle'].includes(history.runtime?.type)&&(!c.supportedOperations||c.supportedOperations.includes('settings'))){
+    if(['active','idle'].includes(history.runtime?.type)&&c.supportedOperations?.includes('settings')){
       const settings=el('details');settings.classList.add('mobile-session-settings');settings.append(el('summary','会话设置'));root.append(settings);
       renderModelSettings(settings,history,threadId,api,allDrafts);
       const advanced=el('details');advanced.append(el('summary','全部设置'));settings.append(advanced);
@@ -187,28 +193,32 @@ const Operations = (() => {
       if(editable.permissions!=null||editable.activePermissionProfile!=null)delete editable.sandboxPolicy;
       const raw=field(advanced,'高级设置 JSON',JSON.stringify(editable,null,2),true);raw.rows=10;
       button(advanced,'应用全部设置',b=>{try{const patch=JSON.parse(raw.value);if(confirm('确认将填写的设置应用于此会话后续任务？'))send(threadId,'settings',{settings:patch},b);}catch(e){notice('设置 JSON 格式错误：'+e.message);}});
+    }
+    if(['active','idle'].includes(history.runtime?.type)&&(c.supportedOperations||[]).some(action=>action.startsWith('queue-')||action==='clear-queue')){
       const queue=el('details');queue.classList.add('mobile-queue');queue.append(el('summary','排队任务'));root.append(queue);
       if(!history.queue||history.queue.error){queue.append(el('p',history.queue?.error||'队列尚未同步'));}
       else{
         const q=history.queue, base={queueFingerprint:q.fingerprint};
+        if(c.supportedOperations.includes('queue-add')){
         const input=field(queue,'下一轮任务','',true);
         input.parentElement.classList.add('mobile-redundant-operation');
         button(queue,'加入队列',b=>send(threadId,'queue-add',{...base,prompt:input.value},b)).classList.add('mobile-redundant-operation');
+        }
         const list=el('div');queue.append(list);
         if(!q.messages.length)list.append(el('p','暂无排队任务'));
         q.messages.forEach((m,index)=>{
           const card=el('section');card.className='queue-item';list.append(card);
           const text=field(card,`第 ${index+1} 条排队任务`,m.text||'',true);
-          text.dataset.draftKey='queue:'+m.id;
+          text.dataset.draftKey='queue:'+m.id;text.readOnly=!c.supportedOperations.includes('queue-edit');
           if(m.pausedReason)card.append(el('p','已暂停：'+m.pausedReason));
-          button(card,'保存内容',b=>send(threadId,'queue-edit',{...base,messageId:m.id,prompt:text.value},b));
+          if(c.supportedOperations.includes('queue-edit'))button(card,'保存内容',b=>send(threadId,'queue-edit',{...base,messageId:m.id,prompt:text.value},b));
           const move=(delta,b)=>{const ids=q.messages.map(m=>m.id);[ids[index],ids[index+delta]]=[ids[index+delta],ids[index]];send(threadId,'queue-reorder',{...base,messageIds:ids},b);};
-          if(index)button(card,'上移',b=>move(-1,b));
-          if(index<q.messages.length-1)button(card,'下移',b=>move(1,b));
-          if(m.pausedReason)button(card,'恢复执行',b=>send(threadId,'queue-resume',{...base,messageId:m.id},b));
-          button(card,'删除',b=>{if(confirm('删除这条尚未执行的排队任务？'))send(threadId,'queue-delete',{...base,messageId:m.id},b);});
+          if(index&&c.supportedOperations.includes('queue-reorder'))button(card,'上移',b=>move(-1,b));
+          if(index<q.messages.length-1&&c.supportedOperations.includes('queue-reorder'))button(card,'下移',b=>move(1,b));
+          if(m.pausedReason&&c.supportedOperations.includes('queue-resume'))button(card,'恢复执行',b=>send(threadId,'queue-resume',{...base,messageId:m.id},b));
+          if(c.supportedOperations.includes('queue-delete'))button(card,'删除',b=>{if(confirm('删除这条尚未执行的排队任务？'))send(threadId,'queue-delete',{...base,messageId:m.id},b);});
         });
-        if(q.messages.length&&(!c.supportedOperations||c.supportedOperations.includes('clear-queue')))button(queue,'清空排队消息',b=>{if(confirm('清空此会话全部排队任务？'))send(threadId,'clear-queue',{...base,confirmed:true},b);});
+        if(q.messages.length&&c.supportedOperations?.includes('clear-queue'))button(queue,'清空排队消息',b=>{if(confirm('清空此会话全部排队任务？'))send(threadId,'clear-queue',{...base,confirmed:true},b);});
       }
     }
     if(!active&&!idle)root.append(el('small','当前状态不支持会话操作；待处理请求可在下方回应。'));

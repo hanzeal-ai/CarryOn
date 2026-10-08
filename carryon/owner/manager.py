@@ -1,4 +1,5 @@
 """Explicit, removable owner service. Each loaded thread owns one runtime lifetime."""
+from carryon.app_server.realtime_voice import held as voice_held
 import threading
 import weakref
 from contextlib import contextmanager, nullcontext
@@ -299,39 +300,30 @@ class OwnerManager:
             entry['awaiting_new_turn'] = True
 
     def _release_finished(self):
-        # Serialize with new requests; do not close the bus before their replies are sent.
+        # Native terminal reads serialize only their thread, never all owners.
         with self.lock, self.follower_lock:
             self._drain_followers()
             if self.bus.requests_in_flight: return
-            for tid, entry in list(self.entries.items()):
-                if tid in self.loading or entry.get('in_flight'): continue
+            candidates = list(self.entries.items())
+        for tid, entry in candidates:
+            with self.lock:
+                if self.entries.get(tid) is not entry or tid in self.loading or entry.get('in_flight'): continue
+                state = entry.get('snapshot') if entry.get('suspended') else entry['runtime'].current(tid)
+                if not state: continue
+                if state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active' or voice_held(state): continue
                 if entry.get('suspended'):
-                    state = entry.get('snapshot') or {}
-                    if state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active': continue
-                    if not self.bus.connected or not entry['followers']: self.release(tid)
-                    continue
-                state = entry['runtime'].current(tid)
-                if not entry['runtime'].connected or not state: continue
-                if state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active': continue
-                if state['threadRuntimeStatus']['type'] != 'idle' or state.get('requests'): continue
-                turns = state['turns']
-                if any(t['status'] == 'inProgress' for t in turns): continue
-                watched = entry['submitted_turn_ids']
-                if entry['awaiting_new_turn']:
-                    watched = watched | ({t['turnId'] for t in turns} - entry['initial_turn_ids'])
-                terminal = {t['turnId'] for t in turns if t['status'] in ('completed', 'failed', 'interrupted')}
-                if watched and watched <= terminal:
-                    try:
-                        if self.bus.connected and entry['followers']:
-                            # Keep the routable owner, but release the native writer
-                            # so desktop archival remains possible between turns.
-                            self.publish(tid, force=True)
-                            self._assert_releasable(tid, entry)
-                            entry['suspended'] = True
-                            entry['runtime'].close()
-                        else: self.release(tid)
-                    except IPCError:
-                        continue  # Native state changed; retry without stopping other owners.
+                    ready = not self.bus.connected or not entry['followers']
+                else:
+                    if not entry['runtime'].connected or state['threadRuntimeStatus']['type'] != 'idle' or state.get('requests'): continue
+                    turns = state['turns']
+                    if any(t['status'] == 'inProgress' for t in turns): continue
+                    watched = entry['submitted_turn_ids']
+                    if entry['awaiting_new_turn']: watched = watched | ({t['turnId'] for t in turns} - entry['initial_turn_ids'])
+                    terminal = {t['turnId'] for t in turns if t['status'] in ('completed', 'failed', 'interrupted')}
+                    ready = bool(watched and watched <= terminal)
+            if ready:
+                try: self._retire(tid, expected_entry=entry, suspend_if_followed=True)
+                except (OSError, IPCError): continue
 
     def broadcast(self, message):
         params = message.get('params') or {}
@@ -469,9 +461,10 @@ class OwnerManager:
                         self.entries[tid]['conflict'] = True
 
     @staticmethod
-    def _assert_releasable(tid, entry):
+    def _assert_idle(tid, entry):
         if entry.get('in_flight'): raise IPCError('cannot release a session with pending operations')
         state = entry.get('snapshot') if entry.get('suspended') else entry['runtime'].current(tid)
+        if voice_held(state): raise IPCError('cannot release a session with active or unconfirmed voice')
         if state and (state.get('_goalUnknown') or (state.get('threadGoal') or {}).get('status') == 'active'):
             raise IPCError('cannot release a session with an active or unknown goal')
         if entry['runtime'].connected and (not state or state.get('requests') or entry['runtime'].queue_busy(tid) or
@@ -480,25 +473,55 @@ class OwnerManager:
             raise IPCError('cannot release a running or waiting session')
 
     def release(self, tid, authorize=lambda: None):
+        return self._retire(tid, authorize=authorize)
+
+    def _retire(self, tid, authorize=lambda: None, expected_entry=None, suspend_if_followed=False):
+        from carryon.app_server.background_terminals import empty, verify
         with self.lock:
             authorize()
             if tid in self.loading: raise IPCError('cannot release a loading session')
-            entry = self.entries.get(tid)
-            if entry is None: return {'threadId': tid, 'state': 'released'}
-            self._assert_releasable(tid, entry)
-            # One process per thread prevents releasing another session's runtime.
-            entry['conflict'] = True
-            try:
-                self.publish(tid, force=True)
-            except (OSError, IPCError):
-                pass  # A lost invalidation must not retain the native writer lock.
-            entry['runtime'].close()
-            self.entries.pop(tid)
-            if not entry['receipts']: self.receipts.pop(tid, None)
-            # Closing the owner connection invalidates follower caches. Other owners are
-            # kept on this bus, so reconnect is deferred until all entries are released.
-            if not self.entries and not self.loading: self.bus.close()
-            return {'threadId': tid, 'state': 'released'}
+            existing = self.entries.get(tid)
+            if existing is not None: self._assert_idle(tid, existing)
+        with self._thread_lock(tid):
+            with self.lock:
+                authorize()
+                if tid in self.loading: raise IPCError('cannot release a loading session')
+                entry = self.entries.get(tid)
+                if entry is None: return {'threadId': tid, 'state': 'released'}
+                if expected_entry is not None and entry is not expected_entry: raise IPCError('owner changed before release')
+                self._assert_idle(tid, entry)
+                runtime = entry['runtime']
+            # The owning process must report no active terminal before being closed.
+            proof = empty(runtime, tid) if runtime.connected else None
+            with self.lock, self.follower_lock:
+                authorize()
+                if self.entries.get(tid) is not entry or entry['runtime'] is not runtime: raise IPCError('owner changed during release')
+                if tid in self.loading: raise IPCError('cannot release a loading session')
+                self._assert_idle(tid, entry)
+                if proof is not None: verify(runtime, tid, proof)
+                elif runtime.connected: raise IPCError('native writer changed during release')
+                if suspend_if_followed:
+                    self._drain_followers()
+                    if self.bus.requests_in_flight: raise IPCError('cannot release before follower replies are sent')
+                if suspend_if_followed and self.bus.connected and entry['followers']:
+                    self.publish(tid, force=True)
+                    self._assert_idle(tid, entry)
+                    if proof is not None: verify(runtime, tid, proof)
+                    entry['suspended'] = True; runtime.close()
+                    return {'threadId': tid, 'state': 'suspended'}
+                previous_conflict = entry['conflict']; entry['conflict'] = True
+                try: self.publish(tid, force=True)
+                except (OSError, IPCError): pass
+                try:
+                    self._assert_idle(tid, entry)
+                    if proof is not None: verify(runtime, tid, proof)
+                except IPCError:
+                    entry['conflict'] = previous_conflict; entry['snapshot'] = None; self.dirty.set()
+                    raise
+                runtime.close(); self.entries.pop(tid)
+                if not entry['receipts']: self.receipts.pop(tid, None)
+                if not self.entries and not self.loading: self.bus.close()
+                return {'threadId': tid, 'state': 'released'}
 
     def close(self):
         self.closed.set()

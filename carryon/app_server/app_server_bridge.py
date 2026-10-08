@@ -54,7 +54,8 @@ class AppServerBridge(Bridge):
         catalog.bridge = self
 
     def status(self):
-        return {**super().status(), 'protocol':'codex-app-server', 'backend':'app-server', 'supportsDirectCreation':True, 'accountAuthenticated':bool(self.ipc and self.ipc.account_ready)}
+        from carryon.sessions.creation_settings import supported
+        return {**super().status(), 'protocol':'codex-app-server', 'backend':'app-server', 'supportsPluginManagement': True, 'supportsThreadSections': True, 'supportsFullTextSearch':True, 'supportsArchiving':True, 'supportsDirectCreation':True, 'supportsCreationReferences':True, 'supportedCreationSettings':supported(), 'accountAuthenticated':bool(self.ipc and self.ipc.account_ready)}
 
     def _refresh_job(self, job_id):
         job = self.journal.get(job_id)

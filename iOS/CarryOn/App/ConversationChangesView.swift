@@ -7,12 +7,25 @@ struct ConversationChangesView: View {
     let threadID: String
     var scopedHistory: JSONValue? = nil
     var filePath: String? = nil
+    @State private var wrapLines = false
     @State private var selectedPath: String?
     @State private var projection: ConversationChanges.Snapshot?
     @State private var commentLine: UnifiedDiff.Line?
     @State private var commentPath = ""
     @State private var commentText = ""
     @State private var commentScope = ""
+    @State private var reviewScope: String?
+    @State private var commentSourceID = ""
+    @State private var commentPatch = ""
+    @State private var editingComment: ReviewComment?
+    private var draftKey: String { (reviewScope ?? "") + "\n" + threadID }
+    private var current: Bool { reviewScope == model.scope && model.selectedThread?.id == threadID }
+    private func comments(for source: String, patch: String, path: String) -> [ReviewComment] {
+        let comments = model.draftStore.comments[draftKey] ?? []
+        guard current, !comments.isEmpty else { return [] }
+        let digest = ReviewComment.patchIdentity(patch)
+        return comments.filter { $0.sourceID == source && $0.patchID == digest && $0.path == path }
+    }
     private var history: JSONValue { scopedHistory ?? (model.history["thread"]["id"].text == threadID ? model.history : .null) }
     private var selectedFile: ConversationChanges.File? {
         let files = projection?.files ?? []
@@ -38,11 +51,16 @@ struct ConversationChangesView: View {
                                     ConversationStatusLabel(state: .activity(entry))
                                 }
                                 let change = entry["data"]["changes"].array.first ?? .null
+                                let sourceID = entry["id"].string ?? entry["nativeId"].string ?? ""
                                 if !change["diff"].text.isEmpty {
-                                    UnifiedDiffView(patch: change["diff"].text) { line in
+                                    UnifiedDiffView(patch: change["diff"].text, filePath: file.path, wrapLines: wrapLines,
+                                                    comments: comments(for: sourceID, patch: change["diff"].text, path: file.path),
+                                                    editComment: { editingComment = $0 }, removeComment: removeComment,
+                                                    comment: current && !sourceID.isEmpty ? { line in
                                         commentScope = model.scope; commentPath = file.path
+                                        commentSourceID = sourceID; commentPatch = change["diff"].text
                                         commentText = ""; commentLine = line
-                                    }
+                                    } : nil)
                                 } else {
                                     Text("此文件没有可展示的文本 diff").font(.subheadline).foregroundStyle(Design.secondary)
                                 }
@@ -50,7 +68,7 @@ struct ConversationChangesView: View {
                         }
                     } else if let projection, !projection.summaries.isEmpty {
                         ForEach(projection.summaries, id: \.stableID) { item in
-                            UnifiedDiffView(patch: item["data"]["diff"].text)
+                            UnifiedDiffView(patch: item["data"]["diff"].text, wrapLines: wrapLines)
                         }
                     } else {
                         Text("当前记录没有文件改动")
@@ -79,9 +97,17 @@ struct ConversationChangesView: View {
                             }.accessibilityLabel("切换文件").accessibilityValue(file.path)
                         }
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { wrapLines.toggle() } label: { Image(systemName: "arrow.turn.down.left") }
+                            .accessibilityLabel("自动换行").accessibilityValue(wrapLines ? "已开启" : "已关闭")
+                            .accessibilityAddTraits(wrapLines ? .isSelected : [])
+                    }
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
                 }
-                .task(id: model.scope + threadID + String(model.historyRevision)) {
+                .onAppear { if reviewScope == nil { reviewScope = model.scope } }
+                .task(id: ChangesSource(scope: model.scope, threadID: threadID,
+                                        revision: scopedHistory == nil ? model.historyRevision : 0,
+                                        scopedHistory: scopedHistory)) {
                     let source = history
                     let result = await Task.detached(priority: .userInitiated) { ConversationChanges.Snapshot(source) }.value
                     if !Task.isCancelled { projection = result }
@@ -97,25 +123,41 @@ struct ConversationChangesView: View {
                             .toolbar {
                                 ToolbarItem(placement: .cancellationAction) { Button("取消") { commentLine = nil } }
                                 ToolbarItem(placement: .confirmationAction) {
-                                    Button("添加到对话") {
+                                    Button("添加评论") {
                                         addComment(line)
-                                    }.disabled(commentScope != model.scope || commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }.disabled(!current || commentScope != model.scope || commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                 }
                             }
+                    }
+                }
+                .sheet(item: $editingComment) { note in
+                    ReviewCommentEditor(comment: note) { updated in
+                        guard current, let index = model.draftStore.comments[draftKey]?.firstIndex(where: { $0.id == updated.id }),
+                              model.draftStore.comments[draftKey]?[index] == note else { return false }
+                        model.draftStore.comments[draftKey]?[index] = updated
+                        return true
                     }
                 }
         }
     }
     private func addComment(_ line: UnifiedDiff.Line) {
-        guard commentScope == model.scope, let location = line.location,
-              !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let key = commentScope + "\n" + threadID
-        let existing = model.draftStore.texts[key] ?? ""
-        let note = "关于已加载改动 \(commentPath)（\(location)）：\n\(line.text)\n\(commentText)"
-        model.draftStore.texts[key] = existing + (existing.isEmpty ? "" : "\n\n") + note
-        model.draftStore.save(); commentLine = nil; dismiss()
+        guard current, commentScope == model.scope,
+              let note = ReviewComment(sourceID: commentSourceID, path: commentPath, patch: commentPatch, line: line, text: commentText) else { return }
+        model.draftStore.comments[draftKey, default: []].append(note)
+        model.draftStore.save(); commentLine = nil
+    }
+    private func removeComment(_ note: ReviewComment) {
+        guard current else { return }
+        model.draftStore.comments[draftKey]?.removeAll { $0.id == note.id }
     }
 
+}
+
+private struct ChangesSource: Equatable {
+    let scope: String
+    let threadID: String
+    let revision: Int
+    let scopedHistory: JSONValue?
 }
 
 struct ConversationChangesCard: View {

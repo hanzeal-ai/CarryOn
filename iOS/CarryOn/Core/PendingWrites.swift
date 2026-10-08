@@ -20,6 +20,17 @@ import CryptoKit
         let prefix = hash(scope + "\n" + target)
         return entries.keys.contains { $0 == prefix || $0.hasPrefix(prefix + ":") }
     }
+    public func requestIDs(scope: String, target: String) throws -> Set<String> {
+        guard !unreadable else { throw APIError("本地请求记录无法读取，请保留 App 数据并核对原请求。") }
+        let prefix = hash(scope + "\n" + target)
+        return Set(entries.filter { $0.key == prefix || $0.key.hasPrefix(prefix + ":") }.values.map(\.requestID))
+    }
+    public func existingRequestID(scope: String, target: String, path: String, body: JSONValue) throws -> String? {
+        guard !unreadable else { throw APIError("本地请求记录无法读取，已暂停写入，请保留 App 数据并核对原请求。") }
+        let prefix = hash(scope + "\n" + target)
+        let digest = hash(path + "\n" + String(decoding: try body.encoded(), as: UTF8.self))
+        return entries[prefix + ":" + digest]?.requestID ?? entries[prefix].flatMap { $0.digest == digest ? $0.requestID : nil }
+    }
     public func requestID(scope: String, target: String, path: String, body: JSONValue) throws -> String {
         guard !unreadable else { throw APIError("本地请求记录无法读取，已暂停写入。请保留 App 数据并核对原请求，勿重新安装后重发。") }
         let prefix = hash(scope + "\n" + target)
@@ -45,7 +56,57 @@ import CryptoKit
         var changed = false
         for job in jobs where requestIDs.contains(job["id"].text) {
             guard ["accepted", "completed", "inProgress", "acknowledged", "failed", "interrupted"].contains(job["state"].text) else { continue }
-            if job["kind"].text == "create" && job["state"].text == "accepted" && job["createdThreadId"].string == nil { continue }
+            if ["plugin-install", "plugin-uninstall"].contains(job["kind"].text) {
+                guard let receipt = try? PluginReceipt(job),
+                      try existingRequestID(scope: scope, target: "plugin-management", path: receipt.path, body: receipt.body) == job["id"].text,
+                      !["accepted", "completed", "inProgress"].contains(job["state"].text) || receipt.completed else { continue }
+                if remove(scope: scope, target: "plugin-management", requestID: job["id"].text) { changed = true }
+                continue
+            }
+            if job["kind"].text == "skill-config" {
+                guard let receipt = try? SkillConfigurationReceipt(job),
+                      try existingRequestID(scope: scope, target: "skill-config", path: receipt.path, body: receipt.body) == job["id"].text,
+                      !["accepted", "completed", "inProgress"].contains(job["state"].text) || receipt.completed else { continue }
+                if remove(scope: scope, target: "skill-config", requestID: job["id"].text) { changed = true }
+                continue
+            }
+            if ["terminal-terminate", "terminal-clean"].contains(job["kind"].text) {
+                guard let receipt = try? TerminalReceipt(job),
+                      try existingRequestID(scope: scope, target: "terminal:" + receipt.threadID, path: receipt.path, body: receipt.body) == job["id"].text,
+                      !["accepted", "completed", "inProgress"].contains(job["state"].text) || receipt.completed else { continue }
+                if remove(scope: scope, target: "terminal:" + receipt.threadID, requestID: job["id"].text) { changed = true }
+                continue
+            }
+            if ["section-create", "section-update", "section-delete", "section-order"].contains(job["kind"].text) {
+                guard let receipt = try? SectionReceipt(job),
+                      try existingRequestID(scope: scope, target: "sections", path: receipt.path, body: receipt.body) == job["id"].text,
+                      !["accepted", "completed", "inProgress"].contains(job["state"].text) || receipt.completed else { continue }
+                if remove(scope: scope, target: "sections", requestID: job["id"].text) { changed = true }
+                continue
+            }
+            if job["kind"].text == "rename" {
+                guard let name = job["name"].string,
+                      try existingRequestID(scope: scope, target: job["threadId"].text,
+                        path: "/api/threads/" + ConsoleAddress.component(job["threadId"].text) + "/rename",
+                        body: .object(["name": .string(name)])) == job["id"].text else { continue }
+            }
+            if job["kind"].text == "section-move" {
+                guard job.object?.keys.contains("sectionId") == true,
+                      job["sectionId"] == .null || job["sectionId"].string != nil,
+                      try existingRequestID(scope: scope, target: job["threadId"].text,
+                        path: "/api/threads/" + ConsoleAddress.component(job["threadId"].text) + "/section",
+                        body: .object(["sectionId": job["sectionId"]])) == job["id"].text else { continue }
+                if ["accepted", "completed", "inProgress"].contains(job["state"].text),
+                   job["state"].text != "completed" || job["result"]["threadId"].text != job["threadId"].text ||
+                    job["result"].object?.keys.contains("sectionId") != true || job["result"]["sectionId"] != job["sectionId"] { continue }
+            }
+            if job["kind"].text == "create", ["accepted", "completed", "inProgress"].contains(job["state"].text), job["createdThreadId"].string?.isEmpty != false { continue }
+            if ["archive", "unarchive"].contains(job["kind"].text), ["accepted", "completed", "inProgress"].contains(job["state"].text),
+               job["state"].text != "completed" || job["result"]["threadId"].text != job["threadId"].text ||
+                job["result"]["archived"].bool != (job["kind"].text == "archive") { continue }
+            if job["kind"].text == "rename", ["accepted", "completed", "inProgress"].contains(job["state"].text),
+               job["state"].text != "completed" || job["result"]["threadId"].text != job["threadId"].text ||
+                job["result"]["name"].string == nil || job["result"]["name"] != job["name"] { continue }
             var targets = [job["threadId"].text, "new"]
             if let project = job["creationProject"]["groupId"].string { targets.append("new:" + project) }
             for target in targets {

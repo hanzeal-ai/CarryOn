@@ -4,7 +4,7 @@ import ExyteChat
 import PhotosUI
 
 func supportsOperation(_ action: String, in snapshot: JSONValue) -> Bool {
-    snapshot["controls"]["supportedOperations"] == .null || snapshot["controls"]["supportedOperations"].array.contains(.string(action))
+    snapshot["controls"]["supportedOperations"].array.contains(.string(action))
 }
 
 struct NewConversationView: View {
@@ -13,9 +13,23 @@ struct NewConversationView: View {
     @State private var projects: [Record] = []
     @State private var project = ""
     @State private var selecting = false
-    @State private var choosingModel = false
+    private enum CreationPanel: Identifiable {
+        case model(String), configuration(String)
+        var id: String { switch self { case .model(let scope): "model:" + scope; case .configuration(let scope): "configuration:" + scope } }
+    }
+    @State private var creationPanel: CreationPanel?
+    @State private var creationModels: [JSONValue]?
+    @State private var creationModelScope = ""
+    @State private var creationModelVersion = UUID()
+    @State private var modelCatalogFailure: String?
     @State private var choosingWorkspace = false
-    @State private var creationSettings: JSONValue = .null
+    @State private var choosingSkills = false
+    @State private var choosingMentions = false
+    private var creationSettings: JSONValue { model.draftStore.settings[draftKey] ?? .null }
+    private func settingsBinding(scope: String) -> Binding<JSONValue> {
+        let key = scope + "\nnew"
+        return Binding(get: { model.draftStore.settings[key] ?? .null }, set: { model.draftStore.settings[key] = $0; model.draftStore.save() })
+    }
     @State private var photos: [PhotosPickerItem] = []
     @State private var loadingPhotos = false
     private var draftKey: String { model.scope + "\nnew" }
@@ -26,27 +40,58 @@ struct NewConversationView: View {
     private var directCreation: Bool { model.status["supportsDirectCreation"].bool == true }
     private var text: String { model.draftStore.texts[model.scope + "\nnew"] ?? "" }
     private var draftBinding: Binding<String> {
-        Binding(get: { text }, set: { model.draftStore.texts[draftKey] = $0; model.draftStore.save() })
+        let key = draftKey
+        return Binding(get: { model.draftStore.texts[key] ?? "" }, set: { model.draftStore.texts[key] = $0; model.draftStore.save() })
+    }
+    private var references: [ComposerReference] { model.draftStore.skills[draftKey] ?? [] }
+    private var referenceBinding: Binding<[ComposerReference]> {
+        let key = draftKey
+        return Binding(get: { model.draftStore.skills[key] ?? [] }, set: { model.draftStore.skills[key] = $0; model.draftStore.save() })
+    }
+    private var selectionBinding: Binding<Int> {
+        let key = draftKey
+        return Binding(get: { model.composerSelections[key] ?? ((model.draftStore.texts[key] ?? "") as NSString).length }, set: { model.composerSelections[key] = $0 })
+    }
+    private var referenceTarget: ReferencePickerTarget { .creation(scope: model.scope, project: directCreation ? nil : project) }
+    private var referencesAvailable: Bool { model.status["supportsCreationReferences"].bool == true && model.canWrite(.create) && (directCreation || projects.contains(where: { $0.id == project })) }
+    private var creationSettingsAllowed: Bool {
+        let fields = Set(creationSettings.object?.keys.map { $0 } ?? [])
+        let supported = Set(model.status["supportedCreationSettings"].array.compactMap(\.string)).union(["model", "effort"])
+        if let selected = creationSettings["model"].string, !selected.isEmpty {
+            guard creationModelScope == model.scope, let choice = creationModels?.first(where: { $0["id"].text == selected }),
+                  choice["efforts"].array.contains(creationSettings["effort"]) else { return false }
+        }
+        guard fields.isSubset(of: supported), let capabilities = WorkspaceCapability.request(path: "/api/threads", body: .object(["settings": creationSettings])) else { return false }
+        return capabilities.allSatisfy(model.allows)
     }
     @State private var failure: String?
     @State private var loading = false
+    @State private var presentationActive = false
     @State private var offset = 0
     @State private var hasMore = true
     @State private var loadVersion = UUID()
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, disabled: !model.canWrite(.create) || (!directCreation && !projects.contains(where: { $0.id == project })) || loading || loadingPhotos,
+                CarryOnChatComposer(text: draftBinding, skills: referenceBinding, selection: selectionBinding, disabled: !model.canWrite(.create) || !creationSettingsAllowed || (!directCreation && !projects.contains(where: { $0.id == project })) || loading || loadingPhotos,
                                     draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty, submitting: loading, placeholder: "询问 CarryOn",
                                     send: { Task { await create() } }) {
-                    PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
-                        Image(systemName: "plus").frame(width: 44, height: 44)
-                    }.disabled(loading || loadingPhotos || images.count >= 3).accessibilityLabel("添加图片")
+                    Menu {
+                        PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) { Label("添加图片", systemImage: "photo") }.disabled(images.count >= 3)
+                        Button { choosingSkills = true } label: { Label("技能", systemImage: "bolt") }.disabled(!referencesAvailable)
+                        Button { choosingMentions = true } label: { Label("应用与插件", systemImage: "at") }.disabled(!referencesAvailable)
+                    } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
+                        .disabled(loading || loadingPhotos).accessibilityLabel("添加附件")
+                    if !model.status["supportedCreationSettings"].array.isEmpty {
+                        Button { creationPanel = .configuration(model.scope) } label: {
+                            Image(systemName: "gearshape").offset(x: -4).frame(width: 44, height: 44)
+                        }.disabled(loading || loadingPhotos || !model.canWrite(.create) || !model.canWrite(.edit)).accessibilityLabel("新会话配置")
+                    }
                     Spacer(minLength: 4)
-                    Button { choosingModel = true } label: {
+                    Button { creationPanel = .model(model.scope) } label: {
                         HStack(spacing: 5) { Text(ModelPresentation.name(creationSettings["model"].string ?? "默认模型", catalog: model.cachedValue("/api/models"))).lineLimit(1); Text(ModelPresentation.effort(creationSettings["effort"].text)).foregroundStyle(Design.secondary) }.font(.subheadline).frame(minHeight: 44)
                     }.accessibilityLabel("模型与思考强度")
-                }
+                }.id(draftKey)
             })
             .setAvailableInputs([.text])
             .betweenListAndInputViewBuilder {
@@ -67,6 +112,12 @@ struct NewConversationView: View {
                             }.font(.subheadline).foregroundStyle(Design.secondary).frame(minHeight: 44)
                         }
                     }
+                    if creationSettings["model"] != .null && !creationSettingsAllowed {
+                        Button { creationPanel = .model(model.scope) } label: {
+                            Text(modelCatalogFailure ?? (creationModels == nil ? "正在核对模型…" : "模型或配置已不可用，请重新选择"))
+                                .font(.caption).foregroundStyle(Design.secondary)
+                        }.disabled(creationModels == nil && modelCatalogFailure == nil)
+                    }
                     if loadingPhotos { ProgressView("正在处理图片…") }
                     if !images.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -86,8 +137,9 @@ struct NewConversationView: View {
             .carryOnChatAppearance()
             .disabled(loading)
             .navigationTitle("新建会话").navigationBarTitleDisplayMode(.inline)
+                .onAppear { presentationActive = true }.onDisappear { presentationActive = false }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-                .task(id: model.scope) { projects = []; photos = []; failure = nil; creationSettings = .null; choosingModel = false; project = model.selectedProject?.id ?? ""; await loadProjects(reset: true) }
+                .task(id: model.scope) { projects = []; photos = []; failure = nil; creationPanel = nil; project = model.selectedProject?.id ?? ""; creationModelVersion = UUID(); creationModels = nil; modelCatalogFailure = nil; async let projectLoad: Void = loadProjects(reset: true); async let modelLoad: Void = loadCreationModels(); _ = await (projectLoad, modelLoad) }
                 .task(id: photos) {
                     guard !photos.isEmpty else { return }
                     let scope = model.scope
@@ -100,7 +152,16 @@ struct NewConversationView: View {
                     } catch { if !Task.isCancelled { failure = error.localizedDescription } }
                 }
                 .sheet(isPresented: $choosingWorkspace) { WorkspaceSwitcher() }
-                .sheet(isPresented: $choosingModel) { CreationModelPicker(selection: $creationSettings, scope: model.scope) }
+                .sheet(isPresented: $choosingSkills) { SkillsPickerView(target: referenceTarget) }
+                .sheet(isPresented: $choosingMentions) { SkillsPickerView(target: referenceTarget, mentions: true) }
+                .onChange(of: project) { _, _ in choosingSkills = false; choosingMentions = false }
+                .onChange(of: model.scope) { _, _ in choosingSkills = false; choosingMentions = false }
+                .sheet(item: $creationPanel, onDismiss: { Task { await loadCreationModels() } }) { panel in
+                    switch panel {
+                    case .model(let scope): CreationModelPicker(selection: settingsBinding(scope: scope), scope: scope)
+                    case .configuration(let scope): CreationConfigurationView(selection: settingsBinding(scope: scope), scope: scope)
+                    }
+                }
                 .sheet(isPresented: $selecting) {
                     NavigationStack {
                         List {
@@ -112,6 +173,20 @@ struct NewConversationView: View {
                             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { selecting = false } } }
                     }
                 }
+        }
+    }
+    private func loadCreationModels() async {
+        guard !Task.isCancelled else { return }
+        let scope = model.scope, version = UUID()
+        creationModelVersion = version; creationModels = nil; modelCatalogFailure = nil
+        do {
+            let catalog = try await model.cachedDeviceRequest("/api/models", maxAge: 0)
+            guard !Task.isCancelled, scope == model.scope, creationModelVersion == version else { return }
+            guard case .array(let choices) = catalog["models"] else { throw APIError("模型目录格式不正确") }
+            creationModels = choices; creationModelScope = scope; modelCatalogFailure = nil
+        } catch {
+            guard !Task.isCancelled, scope == model.scope, creationModelVersion == version else { return }
+            creationModels = nil; modelCatalogFailure = "无法核对模型，请重新选择 · " + error.localizedDescription
         }
     }
     private func loadProjects(reset: Bool) async {
@@ -129,17 +204,24 @@ struct NewConversationView: View {
         } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard !loading, !loadingPhotos, model.canWrite(.create), directCreation || projects.contains(where: { $0.id == project }) else { return }
+        guard !loading, !loadingPhotos, model.canWrite(.create), creationSettingsAllowed, directCreation || projects.contains(where: { $0.id == project }) else { return }
+        guard references.isEmpty || referencesAvailable else { failure = "当前工作区暂不支持引用，请恢复连接或移除引用后重试"; return }
         loading = true; defer { loading = false }
-        let draftKey = self.draftKey, sent = text, sentImages = images
-        var fields: [String: JSONValue] = ["prompt": .string(sent)]
+        let capturedScope = model.scope
+        var createdID: String?
+        let draftKey = self.draftKey, sent = text, sentImages = images, sentReferences = references
+        var fields: [String: JSONValue] = ["prompt": .string(sent.replacingOccurrences(of: ComposerDocument.marker, with: "")),
+            "skills": .array(sentReferences.filter { !$0.isMention }.map(\.value)), "mentions": .array(sentReferences.filter(\.isMention).map(\.value))]
         if creationSettings != .null { fields["settings"] = creationSettings }
         if !sentImages.isEmpty { fields["images"] = .array(sentImages.map(JSONValue.string)) }
         if !directCreation { fields["projectId"] = .string(project) }
-        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields)) {
-            if model.draftStore.texts[draftKey] == sent { model.draftStore.texts[draftKey] = ""; model.draftStore.save() }
+        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields), onCompletion: { job in createdID = job["createdThreadId"].string }) {
+            guard capturedScope == model.scope, presentationActive else { return }
+            if model.draftStore.texts[draftKey] == sent && (model.draftStore.skills[draftKey] ?? []) == sentReferences { model.draftStore.texts[draftKey] = ""; model.draftStore.skills[draftKey] = []; model.composerSelections[draftKey] = 0; model.draftStore.save() }
             if model.draftStore.images[draftKey] == sentImages { model.draftStore.images[draftKey] = []; model.draftStore.save() }
             dismiss()
+            let title = ComposerDocument(text: sent, skills: sentReferences).displayText
+            if let createdID, let record = try? Record(.object(["id": .string(createdID), "title": .string(title.isEmpty ? "新建会话" : title)])) { model.open(record) }
         }
     }
 }
@@ -151,6 +233,13 @@ struct ConversationMenu: View {
     @State private var sideChats = false
     @State private var subagents = false
     @State private var forking = false
+    private struct ArchiveTarget: Identifiable { let thread: Record; let scope: String; var id: String { scope + thread.id } }
+    @State private var archiveTarget: ArchiveTarget?
+    @State private var renameTarget: ArchiveTarget?
+    @State private var sectionTarget: ArchiveTarget?
+    @State private var terminalTarget: ArchiveTarget?
+    @State private var skillTarget: ArchiveTarget?
+    @State private var pluginTarget: ArchiveTarget?
     @State private var reviewing = false
     @State private var goal = false
     var body: some View {
@@ -188,6 +277,18 @@ struct ConversationMenu: View {
                                 .disabled(!model.canWrite(.send) || model.writing)
                             Divider().padding(.leading, 60)
                         }
+                        if model.status["supportsPluginManagement"].bool == true {
+                            Button { if let thread = model.selectedThread { pluginTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "square.grid.2x2", title: "插件", chevron: true) }
+                            Divider().padding(.leading, 60)
+                        }
+                        if model.history["controls"]["supportsSkills"].bool == true, model.canInteract {
+                            Button { if let thread = model.selectedThread { skillTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "cube", title: "管理技能", chevron: true) }
+                            Divider().padding(.leading, 60)
+                        }
+                        if model.history["controls"]["supportsBackgroundTerminals"].bool == true, model.canInteract {
+                            Button { if let thread = model.selectedThread { terminalTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "terminal", title: "后台终端", chevron: true) }
+                            Divider().padding(.leading, 60)
+                        }
                         if model.history["controls"]["supportsGoal"].bool == true {
                             Button { goal = true } label: { SettingRow(icon: "target", title: "会话目标", chevron: true) }
                             Divider().padding(.leading, 60)
@@ -195,6 +296,21 @@ struct ConversationMenu: View {
                         if model.history["controls"]["supportedOperations"].array.contains(.string("review")) {
                             Button { reviewing = true } label: { SettingRow(icon: "doc.text.magnifyingglass", title: "审查代码", chevron: true) }
                                 .disabled(!model.canInteract(.send) || model.state != "idle")
+                            Divider().padding(.leading, 60)
+                        }
+                        if model.status["supportsThreadSections"].bool == true {
+                            Button { if let thread = model.selectedThread { sectionTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "pin", title: "移动到分组", chevron: true) }
+                                .disabled(!model.canWrite(.edit) || model.writing)
+                            Divider().padding(.leading, 60)
+                        }
+                        if supportsOperation("rename", in: model.history) {
+                            Button { if let thread = model.selectedThread { renameTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "pencil", title: "重命名", chevron: true) }
+                                .disabled(!model.canInteract(.edit) || model.writing)
+                            Divider().padding(.leading, 60)
+                        }
+                        if supportsOperation("archive", in: model.history) {
+                            Button { if let thread = model.selectedThread { archiveTarget = ArchiveTarget(thread: thread, scope: model.scope) } } label: { SettingRow(icon: "archivebox", title: "归档会话", chevron: true) }
+                                .disabled(!model.canInteract(.edit) || model.state != "idle" || model.writing)
                             Divider().padding(.leading, 60)
                         }
                         if model.history["controls"]["supportedOperations"].array.contains(.string("fork")) {
@@ -211,6 +327,16 @@ struct ConversationMenu: View {
                 if let thread = model.selectedThread {
                     ForkConversationView(thread: thread, scope: model.scope) { dismiss() }
                 }
+            }
+            .sheet(item: $pluginTarget) { target in PluginManagementView(thread: target.thread, scope: target.scope) }
+            .sheet(item: $skillTarget) { target in SkillManagementView(thread: target.thread, scope: target.scope) }
+            .sheet(item: $terminalTarget) { target in BackgroundTerminalsView(thread: target.thread, scope: target.scope) }
+            .sheet(item: $sectionTarget) { target in SectionConversationView(thread: target.thread, scope: target.scope) }
+            .sheet(item: $renameTarget) { target in
+                RenameConversationView(thread: target.thread, scope: target.scope)
+            }
+            .sheet(item: $archiveTarget) { target in
+                ArchiveActionView(thread: target.thread, scope: target.scope, restoring: false) { dismiss() }
             }
             .sheet(isPresented: $goal) {
                 if let thread = model.selectedThread {

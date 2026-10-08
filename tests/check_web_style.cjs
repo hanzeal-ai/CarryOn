@@ -11,13 +11,13 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const req=route.request(),u=new URL(req.url());let data={},status=200;
-  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true},{id:'other',name:'工作室 Mac',online:false}]};}
+  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true,permissions:['view','create','edit','send','files','approve','stop']},{id:'other',name:'工作室 Mac',online:false}]};}
   else if(u.pathname.endsWith('/login'))authenticated=true;
   else if(u.pathname.endsWith('/logout'))authenticated=false;
   else if(u.pathname.endsWith('/link/pending'))data={requests:[]};
   else if(u.pathname.endsWith('/request')){
    const body=req.postDataJSON(),path=body.path.split('?')[0];if(body.method==='POST')writes.push(body);
-   if(path==='/api/status')data={enabled:true,remoteControl:true};
+   if(path==='/api/status')data={enabled:true,remoteControl:true,supportedCreationSettings:["collaborationMode","approvalPolicy"]};
    else if(path==='/api/models')data={models:[{id:'fixture-model',name:'Fixture Model',efforts:['medium','high'],defaultEffort:'medium'},{id:'gpt-6-astra',name:'GPT-6 Astra',efforts:['medium','high'],defaultEffort:'medium'}]};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
    else if(path==='/api/threads'||path==='/api/projects/p1/threads')data={threads,total:2,nextOffset:2};
@@ -31,11 +31,11 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  });
  await page.routeWebSocket('**/console/devices/*/ws', socket=>{
   let revision=0;
-  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true}}}));});
+  socket.onMessage(raw=>{const selection=JSON.parse(raw);if(selection.type==='subscribe')socket.send(JSON.stringify({type:'update',revision:++revision,resubscribe:true,subscription:selection.subscription,body:{type:'update',subscription:selection.subscription,threadId:selection.threadId,status:{enabled:true,remoteControl:true,supportedCreationSettings:["collaborationMode","approvalPolicy"]}}}));});
  });
  await page.goto((process.env.CARRYON_UI_URL||'http://127.0.0.1:8892/example.html'));
  await page.locator(width<761?'#mobile-session-list .project-row':'#threads button').first().waitFor();
- await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected},()=>true));
+ await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true,supportedCreationSettings:["collaborationMode","approvalPolicy"]},subscription,threadId:selected},()=>true));
 
  const prefix='.runtime/web-style/'+width+'-'+colorScheme;
  await page.screenshot({path:prefix+'-projects.png'});
@@ -51,19 +51,37 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
   await page.locator('#threads .thread').first().click();
  }
  await page.evaluate(async()=>{
-  const history={thread:{id:selected},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'统一网页端的风格，保留现有功能。'},{id:'a1',type:'agentMessage',text:'已统一页面的视觉层级。\n\n- 移动网页保持与手机端一致\n- 桌面网页适配宽屏和鼠标操作\n\n```swift\nlet theme = Color.primary\nprint("CarryOn")\n```'}]};
-  await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history,readSequence:2},()=>true);
+  const history={thread:{id:selected},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',supportedOperations:['settings'],supportedSettings:['model','effort'],settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'统一网页端的风格，保留现有功能。'},{id:'a1',type:'agentMessage',text:'已统一页面的视觉层级。\n\n- 移动网页保持与手机端一致\n- 桌面网页适配宽屏和鼠标操作\n\n```swift\nlet theme = Color.primary\nprint("CarryOn")\n```'}]};
+  await receiveUpdate({status:{enabled:true,remoteControl:true,supportedCreationSettings:["collaborationMode","approvalPolicy"]},subscription,threadId:selected,history,readSequence:2},()=>true);
  });
+ if(width>=761){
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).fontSize),'16px','official rem baseline');
+  const account=await page.locator('#account-menu').boundingBox(),sidebar=await page.locator('main > aside').boundingBox();
+  assert(account.x>=sidebar.x&&account.x+account.width<=sidebar.x+sidebar.width,'account stays inside sidebar');
+  const handle=page.getByRole('separator',{name:'调整侧栏宽度'});await handle.focus();await page.keyboard.press('ArrowRight');
+  assert.equal(Math.round((await page.locator('main > aside').boundingBox()).width),285);await page.keyboard.press('ArrowLeft');await page.locator('#title').focus();
+ }
  await page.screenshot({path:prefix+'-chat.png'});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chat stays within viewport');
+ if(width>=761){
+  const more=page.locator('.conversation-more');
+  await more.locator(':scope>summary').click();
+  await page.locator('#expand-events').focus();await page.locator('#expand-events').press('Enter');
+  assert(await more.evaluate(node=>!node.open&&document.activeElement===node.querySelector('summary')),'keyboard action closes menu and returns focus');
+  await more.locator(':scope>summary').click();await more.locator('.session-info>summary').click();
+  assert(await page.locator('#conversation-info').isVisible(),'session information remains reachable');
+  if(width===1440)await page.screenshot({path:prefix+'-conversation-menu.png'});
+  await more.locator('.session-info>summary').click();await more.locator(':scope>summary').press('Escape');
+  assert(await more.evaluate(node=>!node.open&&document.activeElement===node.querySelector('summary')),'Escape returns menu focus');
+ }
  if(width<761){
-  await page.locator('#prompt').fill('短句');await page.waitForTimeout(100);
+  await page.locator('#prompt > [contenteditable]').fill('短句');await page.waitForTimeout(100);
   const layout=()=>page.evaluate(()=>{const input=document.querySelector('#prompt').getBoundingClientRect(),attach=document.querySelector('#attach-images').getBoundingClientRect(),model=document.querySelector('#composer .model-button').getBoundingClientRect(),send=document.querySelector('#send').getBoundingClientRect();return {inputHeight:input.height,inputBottom:input.bottom,controlsTop:attach.top,attachWidth:attach.width,modelWidth:model.width,sendWidth:send.width,aligned:Math.abs(attach.y-send.y)<2};});
-  const short=await layout();assert(short.inputBottom<=short.controlsTop+1,'text stays above controls');assert(short.aligned);assert(short.attachWidth>=44&&short.modelWidth>=44&&short.sendWidth>=44,'controls meet touch targets');
-  await page.locator('#prompt').fill('这是一段连续输入的长文字，用来确认输入区域增高时工具栏仍在下方，并且保留现有的发送和停止按钮。');await page.waitForTimeout(100);
+  const short=await layout();assert(short.inputBottom<=short.controlsTop+1,'text stays above controls');assert(short.aligned);assert(short.attachWidth>=44&&short.modelWidth>=44&&short.sendWidth>=44,'controls meet touch targets: '+JSON.stringify(short));
+  await page.locator('#prompt > [contenteditable]').fill('这是一段连续输入的长文字，用来确认输入区域增高时工具栏仍在下方，并且保留现有的发送和停止按钮。');await page.waitForTimeout(100);
   const long=await layout();assert(long.inputHeight>short.inputHeight);assert(long.inputBottom<=long.controlsTop+1);assert(long.aligned);
   await page.screenshot({path:prefix+'-expanded.png'});
-  await page.locator('#prompt').fill('');await page.waitForTimeout(100);
+  await page.locator('#prompt > [contenteditable]').fill('');await page.waitForTimeout(100);
   assert((await layout()).inputBottom<=(await layout()).controlsTop+1);
  }
  assert.deepEqual(errors,[]);assert(writes.every(w=>w.path==='/api/notifications/read'),'only read acknowledgements');
@@ -74,7 +92,21 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
   await page.getByRole('button',{name:'会话工具',exact:true}).click();
   await page.screenshot({path:prefix+'-tools.png'});await page.keyboard.press('Escape');
  }else{
-  await page.locator('#create').click();await page.screenshot({path:prefix+'-create.png'});await page.keyboard.press('Escape');
+  await page.locator('#create').click();
+  await page.waitForFunction(()=>createProjectsReady&&!document.querySelector('#new-model').disabled&&document.querySelector('#new-model option[value="fixture-model"]'));
+  await page.locator('#new-project').selectOption('p1');
+  await page.locator('#new-model-details summary').click();
+  await page.locator('#new-model').selectOption('fixture-model');
+  await page.locator('#new-effort').selectOption('high');
+  await page.locator('#new-model-details summary').click();
+  assert(await page.locator('#new-configuration-details summary').isVisible(),'creation configuration available');
+  assert(!/正在加载项目|正在读取模型/.test(await page.locator('#create-dialog').innerText()),'creation is fully loaded');
+  await page.screenshot({path:prefix+'-create.png'});await page.keyboard.press('Escape');
+ }
+ if(width===1440){await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('#mobile-storage .timeline-toolbar'));
+  assert.equal(await page.locator('.chat-header .timeline-toolbar').count(),0);
+  await page.setViewportSize({width:1440,height:900});await page.waitForFunction(()=>document.querySelector('.desktop-conversation-head>.timeline-toolbar'));
+  assert.equal(await page.locator('.conversation .timeline-toolbar').count(),1);
  }
  authenticated=false;await page.reload();await page.locator('#pairing').waitFor();await page.screenshot({path:prefix+'-login.png'});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'login stays within viewport');

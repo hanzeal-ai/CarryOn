@@ -12,7 +12,7 @@ from carryon.sessions.bridge import Bridge
 from carryon.sessions.forking import submit
 from carryon.routes.remote_scope import scoped_dispatch, request_key
 from carryon.store import Journal
-from carryon.workspaces.workspace_access import capability, permissions
+from carryon.workspaces.workspace_access import required_capabilities, permissions
 
 T = '11111111-1111-4111-8111-111111111111'
 C = '22222222-2222-4222-8222-222222222222'
@@ -84,7 +84,7 @@ class NativeForkTests(unittest.TestCase):
         self.assertEqual(self.settled('fork-stale')['state'], 'failed'); self.assertEqual(self.calls, [])
 
     def test_scope_permission_and_child_job_visibility(self):
-        self.assertEqual(capability('POST', '/api/threads/' + T + '/fork'), 'create')
+        self.assertEqual(required_capabilities('POST', '/api/threads/' + T + '/fork'), ('create',))
         with self.assertRaises(ValueError): permissions(['create'])
         path = '/api/threads/' + T + '/fork'; data = {'requestId': 'fork-scoped'}
         with self.assertRaises(BridgeError): scoped_dispatch(self.bridge, 'POST', path, data, False, 'binding')

@@ -1,4 +1,5 @@
 """History remains readable independently of the desktop's loaded conversations."""
+from contextlib import closing
 import json
 import sqlite3
 import tempfile
@@ -67,7 +68,7 @@ class UnloadedHistoryTests(unittest.TestCase):
         self.home = Path(self.temp.name)
         self.path = self.home / 'history.jsonl'
         self.path.write_text('')
-        with sqlite3.connect(self.home / 'state_5.sqlite') as db:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
             db.execute('CREATE TABLE threads(id,title,name,cwd,archived,source,thread_source,history_mode,rollout_path)')
             db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?)',
                        (P, 'Old conversation', '', str(self.home), 0, 'vscode', 'user', 'paginated', str(self.path)))
@@ -148,7 +149,7 @@ class UnloadedHistoryTests(unittest.TestCase):
         self.assertNotIn('history', packet)
 
     def test_unsupported_history_reports_error_without_rewriting_file(self):
-        with sqlite3.connect(self.home / 'state_5.sqlite') as db:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
             db.execute("UPDATE threads SET history_mode='legacy'")
         original = self.path.read_bytes()
         with self.assertRaisesRegex(ValueError, '仅支持 paginated'):

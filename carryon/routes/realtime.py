@@ -51,6 +51,9 @@ class Realtime:
                 desired.update(j['threadId'] for j in self.bridge.journal.list(limit=100)
                                if (j['kind'] == 'create' and not j.get('createdThreadId') and j['state'] == 'accepted' and j.get('turnId')
                                    or j['state'] == 'uncertain' and (j.get('turnId') or j.get('clientMessageId'))))
+            # These ephemeral runtimes stream directly to bridge.notify; they
+            # must never be discovered/resumed through the parent transport.
+            desired.difference_update(self.bridge.native_sides)
             for tid, source in list(self.watched.items()):
                 if tid not in desired or source is not ipc:
                     source.unwatch(tid)
@@ -295,7 +298,7 @@ class Subscription:
                     packet['history'] = history
                     with self.bridge.lock:
                         if version == self.version:
-                            self.persisted_history = history.get('source') == 'local-rollout'
+                            self.persisted_history = history.get('source') in ('local-rollout', 'native-persisted')
                 except (ValueError, OSError, IPCError) as exc:
                     packet['error'] = str(exc)
             if target and selection['includeSideChats'] and selection['sideThreadId']:

@@ -9,6 +9,10 @@
   <link rel="stylesheet" href="/style.css" media="(min-width:761px)">
   <link rel="stylesheet" href="/shadcn.css" media="(min-width:761px)">
   <link rel="stylesheet" href="/mobile.css" media="(max-width:760px)">
+  <script src="/code-highlight.js" defer></script>
+  <link rel="stylesheet" href="/code-highlight.css">
+  <link rel="stylesheet" href="/message-markdown.css">
+  <script src="/message-markdown.js" defer></script>
   <script src="/timeline.js" defer></script>
   <script src="/operations.js" defer></script>
   <script src="/client.js" defer></script>
@@ -18,20 +22,38 @@
   <script src="/console-login.js" defer></script>
   <script src="/subagents.js" defer></script>
   <link rel="stylesheet" href="/diff-review.css">
+  <script src="/unified-diff.js" defer></script>
   <script src="/diff-review.js" defer></script>
+  <script src="/review-comments.js" defer></script>
+  <script src="/inline-composer.js" defer></script>
   <script src="/skills-picker.js" defer></script>
+  <script src="/project-files-picker.js" defer></script>
+  <script src="/creation-settings.js" defer></script>
   <script src="/review-controls.js" defer></script>
   <script src="/goal-controls.js" defer></script>
   <link rel="stylesheet" href="/skills-picker.css">
-  <script src="/app.js" defer></script>
+  <script src="/voice-controls.js"></script>
+  <script src="/composer-commands.js"></script>
+<link rel="stylesheet" href="/archive-controls.css">
+  <script src="/archive-controls.js" defer></script>
+  <script src="/rename-controls.js" defer></script>
+  <script src="/section-management.js" defer></script>
+  <script src="/terminal-controls.js" defer></script>
+  <script src="/skill-management.js" defer></script>
+  <script src="/plugin-management.js" defer></script>
+  <script src="/section-controls.js" defer></script>
+  <script src="/sections-sidebar.js" defer></script>
+  <script src="/search-controls.js" defer></script>
+<script src="/app.js" defer></script>
   <script src="/workspace-binding.js" defer></script>
+  <script src="/desktop-ui.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
 </head>
 <body class="booting">
   <header>
     <div class="brand"><img class="mark" src="/logo.svg" alt="" width="42" height="42"><div><strong>CarryOn</strong><small>换个设备，接着做。</small></div></div>
     <span id="environment-label" class="environment-label">本地工作台</span>
-    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><span id="bridge" class="badge">请在 CLI 或桌面端管理桥接</span><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
+    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><button id="console-requests" hidden>连接申请</button><span id="status" class="badge">等待连接</span><span id="bridge" class="badge">请在 CLI 或桌面端管理桥接</span><details id="account-menu" class="account-menu" hidden><summary aria-label="连接与账户"><span class="account-avatar">C</span><span class="account-label">控制台</span><span aria-hidden="true">⌄</span></summary><div class="account-panel"><p>连接与账户</p><button id="open-archives">已归档</button><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <section id="pairing" class="pairing" hidden aria-labelledby="auth-title">
@@ -46,30 +68,36 @@
       <div><button id="show-projects" class="quiet">项目</button><button id="clear-read" class="quiet" hidden>清空已读</button><button id="show-all" class="quiet">全部会话</button><button id="show-activity" class="quiet">动态</button><button id="notification-settings" class="quiet">通知设置</button></div>
       <label id="inactive-preference"><span>显示不活跃会话</span><input id="show-inactive" type="checkbox"></label>
       <label id="project-filter-label" hidden>会话筛选<select id="project-filter"><option value="all">全部</option><option value="waiting">待处理</option><option value="running">进行中</option><option value="unread">未读</option></select></label>
+      <button id="search-content" class="quiet" hidden>搜索会话内容</button>
       <input id="search" type="search" placeholder="搜索会话或项目…" aria-label="搜索会话或项目" disabled>
       <div id="thread-status-summary" class="thread-status-summary" aria-live="polite"></div>
+      <div class="sidebar-lists">
+      <section id="native-sections" aria-label="原生分组" hidden></section>
       <div id="threads" class="threads"><div class="empty-small">开启桥接后，查看本机会话。</div></div>
+      </div>
       <button id="more" class="quiet" hidden>加载更多</button>
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">继续你的工作</h2><p id="cwd">从会话列表选择一个会话</p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="view-changes" class="quiet">查看改动</button><button id="jump-latest" class="quiet" hidden>回到最新</button><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="move-section" disabled hidden>移动到分组</button><button id="manage-plugins" hidden>插件</button><button id="manage-skills" hidden>管理技能</button><button id="open-terminals" hidden>后台终端</button><button id="rename-thread" disabled>重命名</button><button id="archive-thread" disabled>归档会话</button><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="view-changes" class="quiet">查看改动</button><button id="jump-latest" class="quiet" hidden>回到最新</button><button id="open-side" class="quiet" disabled>临时聊天</button><details class="display-menu"><summary>显示选项</summary><div><button id="expand-events" class="quiet">展开全部详情</button><button id="collapse-events" class="quiet">收起全部详情</button></div></details><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon"><img src="/logo.svg" alt="" width="48" height="48"></span><h2>把对话接起来</h2><p>连接本地 Codex，查看历史，继续任务。<br>取消桥接后，仍可在 Codex App 中工作。</p></div></div>
 
       <section id="requests" aria-label="待处理请求" hidden></section>
       <details class="jobs-panel"><summary>桥接请求记录</summary><div id="jobs" class="jobs" aria-live="polite"></div></details>
+      <button id="review-comment-drafts" type="button" class="quiet" hidden></button>
       <form id="composer" class="composer">
-        <div id="skill-previews" class="skill-chips"></div>
+        <div id="file-references" class="skill-chips" hidden></div>
         <div id="image-previews" class="image-previews" hidden></div>
-        <label class="sr-only" for="prompt">新的任务</label><textarea id="prompt" rows="3" maxlength="16000" placeholder="发送新的任务…" disabled></textarea>
+        <label class="sr-only" for="prompt">新的任务</label><carryon-composer id="prompt" placeholder="发送新的任务…" disabled></carryon-composer>
         <label id="followup-label" class="composer-followup" hidden>发送方式 <select id="followup-mode" aria-label="运行中发送方式"><option value="queue">当前任务结束后执行</option><option value="steer">立即补充当前任务</option></select></label>
-        <div class="composer-footer"><div class="composer-tools"><button id="attach-images" type="button" class="quiet" disabled aria-label="添加图片" title="添加图片（最多 3 张，自动压缩）">＋ 图片</button><button id="attach-skills" type="button" class="quiet" aria-label="添加技能" hidden>技能</button><input id="image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small></div><button id="send" class="primary" disabled>发送任务 ↑</button></div>
+        <div class="composer-footer"><div class="composer-tools"><details id="composer-attachment-details"><summary aria-label="添加附件">＋</summary><div id="composer-attachment-options"><button id="attach-images" type="button" class="quiet" disabled aria-label="添加图片" title="添加图片（最多 3 张，自动压缩）">＋ 图片</button><button id="attach-files" type="button" class="quiet" aria-label="添加项目文件" hidden>项目文件</button><button id="attach-skills" type="button" class="quiet" aria-label="添加技能" hidden>技能</button><button type="button" id="attach-mentions" aria-label="添加应用或插件" disabled>@</button></div></details><button id="composer-config" type="button" class="quiet" aria-label="对话配置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m9 3-1 3-3 1-2 3 2 2v3l3 2 1 3h6l1-3 3-2v-3l2-2-2-3-3-1-1-3z"/></svg></button><input id="image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden><small>Enter 换行 · ⌘ / Ctrl + Enter 发送</small></div><button id="context-usage" type="button" class="context-ring" aria-label="上下文用量" hidden></button><button id="composer-model" type="button" class="quiet" aria-label="模型与思考强度" hidden></button><button id="voice-open" type="button" class="quiet" aria-label="语音聊天" hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="send" class="primary" disabled>发送任务 ↑</button></div>
       </form>
       <p class="footnote">与你的 Codex 工作空间保持同步</p>
     </section>
   </main>
   <section id="side-drawer" class="side-drawer" aria-label="临时聊天抽屉" hidden>
     <div class="side-drawer-head"><h2>临时聊天</h2><button id="close-side" class="quiet" aria-label="关闭临时聊天">✕</button></div>
+    <div class="side-actions"><button id="create-side" class="quiet" hidden>新建临时聊天</button><button id="end-side" class="quiet" hidden>结束临时聊天</button></div>
     <label class="sr-only" for="side-select">选择临时聊天</label><select id="side-select"><option value="">正在查找…</option></select>
     <p id="side-discovery" class="side-discovery" role="status"></p>
     <div class="timeline-toolbar"><span id="side-runtime"></span><span id="side-source"></span></div>
@@ -85,17 +113,24 @@
   <dialog id="create-dialog">
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>
+      <div class="new-task-hero"><img src="/logo.svg" alt=""><h1>开始构建</h1></div>
       <label id="new-project-label" for="new-project">项目<select id="new-project" required><option value="">选择项目</option></select></label>
-      <div id="new-model-home"><div id="new-model-settings"><label>模型<select id="new-model"><option value="">项目默认</option></select></label><label id="new-effort-label" hidden>思考强度<select id="new-effort"></select></label><small id="new-model-status" role="status"></small></div></div>
-      <label for="new-prompt">任务</label><textarea id="new-prompt" rows="7" maxlength="16000" placeholder="描述你希望完成的任务…"></textarea>
+      <label for="new-prompt">任务</label><carryon-composer id="new-prompt" placeholder="描述你希望完成的任务…"></carryon-composer>
       <div id="new-image-previews" class="image-previews" hidden></div>
       <input id="new-image-files" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <details id="new-attachment-details"><summary aria-label="添加附件">＋</summary><div id="new-attachment-options">
+      <button id="new-attach-skills" type="button" aria-label="添加技能">技能</button>
+      <button id="new-attach-mentions" type="button" aria-label="添加应用或插件">@</button>
       <button id="new-attach-images" type="button" aria-label="添加图片">＋ 添加图片</button>
+      </div></details>
+      <div id="new-configuration-home"><details id="new-configuration-details"><summary aria-label="新会话配置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m9 3-1 3-3 1-2 3 2 2v3l3 2 1 3h6l1-3 3-2v-3l2-2-2-3-3-1-1-3z"/></svg><span>新会话配置</span></summary><div id="new-configuration-settings"></div></details></div>
+      <div id="new-model-home"><details id="new-model-details"><summary aria-label="模型与思考强度">默认模型 ⌄</summary><div id="new-model-settings"><label>模型<select id="new-model"><option value="">项目默认</option></select></label><label id="new-effort-label" hidden>思考强度<select id="new-effort"></select></label><small id="new-model-status" role="status"></small></div></details></div>
       <p id="create-error" class="error" role="alert"></p>
-      <div class="dialog-actions"><button type="button" id="cancel-create">取消</button><button id="submit-create" class="primary">提交并创建</button></div>
+      <div class="dialog-actions"><button id="submit-create" class="primary">提交并创建</button></div>
     </form>
   </dialog>
-  <dialog id="changes-dialog"><div class="dialog-head"><h2>文件改动</h2><button id="changes-close" class="quiet">关闭</button></div><p>仅显示当前已加载历史中的改动。</p><div id="changes-content"></div></dialog>
+  <dialog id="changes-dialog"><div class="dialog-head"><h2>文件改动</h2><button id="changes-wrap" class="quiet" aria-label="自动换行" aria-pressed="false" title="自动换行"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 4h10a4 4 0 0 1 0 8H4m3-3-3 3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button id="changes-close" class="quiet">关闭</button></div><p>仅显示当前已加载历史中的改动。</p><div id="changes-content"></div></dialog>
+  <dialog id="review-comments-dialog"><div class="dialog-head"><h2>待发送评论</h2><button id="review-comments-close" class="quiet">完成</button></div><p>评论随下一条消息发送，尚未提交给 Codex。</p><div id="review-comments-content"></div></dialog>
   <script src="/shadcn-ui.js"></script>
 </body>
 </html>

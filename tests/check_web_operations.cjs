@@ -22,6 +22,7 @@ const assert=require('node:assert/strict');
    else if(body.method==='POST'&&path.endsWith('/compose')){if(composeDelay)await new Promise(resolve=>setTimeout(resolve,composeDelay));data={id:body.body.requestId,state:'accepted'};}
    else if(body.method==='POST'&&path.endsWith('/operations'))data={id:body.body.requestId,state:typeof failOperation==='string'?failOperation:failOperation?'failed':'completed',error:failOperation?'fixture failure':undefined,...(body.body.action==='review'&&!failOperation?{reviewThreadId:path.split('/')[3],turnId:'review-turn'}:{}),...(['goal-set','goal-pause','goal-clear'].includes(body.body.action)&&!failOperation?{result:body.body.action==='goal-clear'?{cleared:true}:{goal:{threadId:path.split('/')[3],status:body.body.action==='goal-pause'?'paused':body.body.status||'active'}}}:{})};
    else if(path==='/api/status')data={enabled:true,remoteControl:true};
+   else if(path.endsWith('/mentions'))data={mentions:[{name:'Fixture App',path:'app://fixture',enabled:true,description:'Connected app'},{name:'Unavailable',path:'app://unavailable',enabled:false}],errors:[]};
    else if(path.endsWith('/skills'))data={cwd:'/workspace/CarryOn',skills:[{name:'review',path:'/skills/review/SKILL.md',enabled:true,description:'Review changes'},{name:'disabled',path:'/skills/disabled/SKILL.md',enabled:false}],errors:[{path:'/skills/broken',message:'broken skill fixture'}]};
    else if(path==='/api/models')data={models:[{id:'fixture-model',name:'Fixture Model',efforts:['medium','high'],defaultEffort:'medium'},{id:'gpt-6-astra',name:'GPT-6 Astra',efforts:['medium','high'],defaultEffort:'medium'}]};
    else if(path==='/api/projects')data={projects,total:2,nextOffset:2};
@@ -46,20 +47,21 @@ const assert=require('node:assert/strict');
 
 
  await page.evaluate(async()=>{
-  await selectThread('t1');window.operationHistory={thread:{id:'t1'},historyRevision:'ops1',runtime:{type:'active'},status:{state:'running'},access:{nativeReady:true,canInteract:true},controls:{activeTurnId:'turn',requests:[],supportedSettings:['model','effort','collaborationMode','sandboxPolicy'],settings:{activePermissionProfile:{id:'desktop-only'},sandboxPolicy:{type:'readOnly'}}},queue:{fingerprint:'queue-authority',messages:[{id:'q1',text:'queued',pausedReason:'paused'},{id:'q2',text:'next'}]},timeline:[{id:'user',type:'userMessage',text:'hello'}]};
+  await selectThread('t1');window.operationHistory={thread:{id:'t1'},historyRevision:'ops1',runtime:{type:'active'},status:{state:'running'},access:{nativeReady:true,canInteract:true},controls:{supportedOperations:['settings','interrupt','steer','queue-add','queue-edit','queue-delete','queue-reorder','queue-resume','clear-queue'],activeTurnId:'turn',requests:[],supportedSettings:['model','effort','collaborationMode','sandboxPolicy'],settings:{activePermissionProfile:{id:'desktop-only'},sandboxPolicy:{type:'readOnly'}}},queue:{fingerprint:'queue-authority',messages:[{id:'q1',text:'queued',pausedReason:'paused'},{id:'q2',text:'next'}]},timeline:[{id:'user',type:'userMessage',text:'hello'}]};
   await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);
  });
  await page.evaluate(()=>{operationHistory.controls.supportsSkills=true;updateCompose(operationHistory);});
+ if(width===390)await page.locator('#attach-images').click();else await page.locator('#composer-attachment-details > summary').click();
  await page.getByRole('button',{name:'添加技能',exact:true}).click();
  const skillDialog=page.getByRole('dialog',{name:'技能',exact:true});
  await skillDialog.getByRole('button',{name:'review Review changes',exact:true}).click();
  assert(await skillDialog.getByRole('button',{name:'disabled',exact:true}).isDisabled());
  assert((await skillDialog.innerText()).includes('broken skill fixture'));
  await skillDialog.getByRole('button',{name:'完成',exact:true}).click();
- assert.equal(await page.locator('#skill-previews button').count(),1);
- await page.evaluate(async()=>{await selectThread('t2');});assert.equal(await page.locator('#skill-previews button').count(),0);
+ assert.equal(await page.locator('#prompt .inline-reference').count(),1);
+ await page.evaluate(async()=>{await selectThread('t2');});assert.equal(await page.locator('#prompt .inline-reference').count(),0);
  await page.evaluate(async()=>{await selectThread('t1');await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
- assert.equal(await page.locator('#skill-previews button').count(),1);
+ assert.equal(await page.locator('#prompt .inline-reference').count(),1);
  await page.locator('#send').click();await page.waitForFunction(()=>!selectedSkills.length&&!imageBusy);
  assert.deepEqual(writes.at(-1).body.skills,[{name:'review',path:'/skills/review/SKILL.md'}]);assert.equal(writes.at(-1).body.action,'queue-add');assert.equal(writes.at(-1).body.prompt,'');
  // Native skill-only history remains visible as a named reference, not an empty bubble or raw JSON.
@@ -68,8 +70,9 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#messages details').count(),0);
  // A skill unavailable on the current owner remains in the draft and cannot become a plain-text send.
  await page.evaluate(()=>{selectedSkills=[{name:'review',path:'/skills/review/SKILL.md'}];operationHistory.controls.supportsSkills=false;updateCompose(operationHistory);renderSkills();});
- const beforeUnavailable=writes.length;await page.locator('#send').click();await page.waitForTimeout(30);assert.equal(writes.length,beforeUnavailable);assert.equal(await page.locator('#skill-previews button').count(),1);
- await page.getByRole('button',{name:'移除技能 review',exact:true}).click();
+ const beforeUnavailable=writes.length;await page.locator('#send').click();await page.waitForTimeout(30);assert.equal(writes.length,beforeUnavailable);assert.equal(await page.locator('#prompt .inline-reference').count(),1);
+ await page.locator('#prompt > [contenteditable]').focus();await page.evaluate(()=>{const range=document.createRange();range.selectNode(document.querySelector('#prompt .inline-reference'));getSelection().removeAllRanges();getSelection().addRange(range);});await page.keyboard.press('Backspace');
+ assert.equal(await page.locator('#prompt .inline-reference').count(),0);
  await page.evaluate(()=>{operationHistory.controls.supportsSkills=true;updateCompose(operationHistory);});
  // A confirmed send clears its original scoped snapshot even after navigation.
  composeDelay=250;
@@ -77,10 +80,22 @@ const assert=require('node:assert/strict');
  const beforeDelayed=writes.length;await page.locator('#send').click();
  await page.waitForFunction(()=>imageBusy);while(writes.length===beforeDelayed)await page.waitForTimeout(10);
  await page.evaluate(async()=>{await selectThread('t2');$('prompt').value='unsent B';selectedSkills=[{name:'other',path:'/skills/other/SKILL.md'}];renderSkills();});
- await page.waitForFunction(()=>!imageBusy);assert.equal(await page.locator('#prompt').inputValue(),'unsent B');
+ await page.waitForFunction(()=>!imageBusy);assert.equal(await page.locator('#prompt').evaluate(el=>el.wireText),'unsent B');
  await page.evaluate(async()=>{await selectThread('t1');await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
- assert.equal(await page.locator('#prompt').inputValue(),'');assert.equal(await page.locator('#skill-previews button').count(),0);
+ assert.equal(await page.locator('#prompt').evaluate(el=>el.value),'');assert.equal(await page.locator('#prompt .inline-reference').count(),0);
  composeDelay=0;await page.evaluate(()=>{$('followup-mode').value='queue';updateComposeButton();});
+ await page.evaluate(()=>{operationHistory.controls.supportsMentions=true;updateCompose(operationHistory);renderSkills();});
+ if(width===390)await page.locator('#attach-images').click();else await page.locator('#composer-attachment-details > summary').click();
+ await page.getByRole('button',{name:'添加应用或插件',exact:true}).click();
+ const mentionsDialog=page.getByRole('dialog',{name:'应用与插件',exact:true});
+ await mentionsDialog.getByRole('button',{name:'Fixture App Connected app',exact:true}).click();
+ assert(await mentionsDialog.getByRole('button',{name:'Unavailable',exact:true}).isDisabled());
+ await mentionsDialog.getByRole('button',{name:'完成',exact:true}).click();
+ assert.equal(await page.locator('#prompt .inline-reference').innerText(),'Fixture App');
+ await page.locator('#send').click();await page.waitForFunction(()=>!selectedSkills.length&&!imageBusy);
+ assert.deepEqual(writes.at(-1).body.mentions,[{name:'Fixture App',path:'app://fixture'}]);
+ assert.deepEqual(writes.at(-1).body.skills,[]);
+
  const settingsPanel=page.locator('.mobile-session-settings');
  const advancedSettings=JSON.parse(await settingsPanel.getByLabel('高级设置 JSON',{exact:true}).inputValue());
  assert(!('activePermissionProfile' in advancedSettings));assert.deepEqual(advancedSettings.sandboxPolicy,{type:'readOnly'});
@@ -95,11 +110,62 @@ const assert=require('node:assert/strict');
  assert.deepEqual(writes.at(-1).body.settings,{model:'fixture-model',effort:'high',collaborationMode:{mode:'plan',settings:{model:'fixture-model',reasoning_effort:'high',developer_instructions:null}}});
  if(width===390)await page.locator('#mobile-aux button[aria-label="返回"]').click();
  else await page.locator('.session-actions>summary').click();
+ // Composer projections use native usage and separate model/configuration controls.
+ if(width===390)await page.evaluate(()=>{const tools=document.querySelector('#mobile-tools');if(tools.open)tools.close();});
+ await page.evaluate(()=>{composeHistory=operationHistory;composeHistory.controls.supportedOperations=['settings','voice-start'];VoiceControls.update();composeHistory.metadata={latestTokenUsageInfo:{modelContextWindow:1000,last:{totalTokens:250}}};composeHistory.controls.settings={model:'fixture-model',effort:'high',approvalPolicy:'on-request',collaborationMode:{mode:'plan',settings:{model:'fixture-model',reasoning_effort:'high',developer_instructions:'keep'}}};composeHistory.controls.supportedSettings.push('approvalPolicy');updateComposerContext();});
+ assert.equal(await page.locator('#context-usage').getAttribute('aria-label'),'上下文已用 25%');
+ await page.evaluate(()=>{delete composeHistory.metadata.latestTokenUsageInfo;updateComposerContext();});assert(await page.locator('#context-usage').isHidden());
+ await page.evaluate(()=>{composeHistory.metadata.latestTokenUsageInfo={modelContextWindow:1000,last:{totalTokens:250}};updateComposerContext();});
+ if(width===390){
+  for(const viewportWidth of [320,1280,390]){
+   await page.setViewportSize({width:viewportWidth,height:844});await page.waitForTimeout(80);
+   assert(await page.locator('#context-usage').isVisible());
+   const bounds=await page.locator('#context-usage').boundingBox();assert(bounds.x>=0&&bounds.x+bounds.width<=viewportWidth);
+   assert.equal(await page.locator('#context-usage').count(),1);
+   if(viewportWidth<768){
+    const row=await page.evaluate(()=>['#attach-images','#composer button[aria-label="对话配置"]','#context-usage','#composer .model-button','#voice-open','#send'].map(s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+    assert(row.every(r=>r.w>0&&r.x>=0&&r.x+r.w<=viewportWidth));
+    assert(Math.max(...row.map(r=>r.y+r.h/2))-Math.min(...row.map(r=>r.y+r.h/2))<=2,'all composer controls share one footer row');
+    assert(row.every((r,i)=>i===0||r.x>=row[i-1].x+row[i-1].w-1),'composer controls do not overlap');
+   }
+
+   const fileChooser=page.waitForEvent('filechooser');
+   if(viewportWidth>=768)await page.locator('#composer-attachment-details > summary').click();
+   await page.locator('#attach-images').click();
+   if(viewportWidth<768)await page.locator('.mobile-attachment-menu:popover-open').getByRole('button',{name:'添加图片',exact:true}).click();
+   await fileChooser;
+   assert.equal(await page.locator('#attach-skills').count(),1);assert.equal(await page.locator('#attach-mentions').count(),1);
+
+  }
+ }
+ await page.getByRole('button',{name:'对话配置',exact:true}).filter({visible:true}).click();
+ const composerSettings=width===390?page.locator('#mobile-model'):page.locator('.composer-settings-dialog');
+ await composerSettings.getByLabel('执行审批',{exact:true}).waitFor();
+ assert(await composerSettings.getByLabel('模型',{exact:true}).isHidden());assert(await composerSettings.getByLabel('工作模式',{exact:true}).isVisible());
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:width===390?'查看当前模型与思考强度':'模型与思考强度',exact:true}).filter({visible:true}).click();
+ await composerSettings.getByLabel('模型',{exact:true}).waitFor();assert(await composerSettings.getByLabel('工作模式',{exact:true}).isHidden());
+ await composerSettings.getByLabel('模型',{exact:true}).selectOption('gpt-6-astra');await composerSettings.getByLabel('思考强度',{exact:true}).selectOption('high');
+ await composerSettings.getByRole('button',{name:'保存设置',exact:true}).click();await page.waitForTimeout(50);
+ assert.equal(writes.at(-1).body.settings.collaborationMode.settings.model,'gpt-6-astra');assert.equal(writes.at(-1).body.settings.collaborationMode.mode,'plan');assert.equal(writes.at(-1).body.settings.collaborationMode.settings.developer_instructions,'keep');
+ await page.keyboard.press('Escape');
+ // An already open configuration cannot write after native settings capability is revoked.
+ await page.evaluate(()=>{operationHistory.controls.supportedOperations=['settings'];Operations.render(operationHistory,selected,client,notice,true);composeHistory=operationHistory;updateComposerContext();});
+ await page.getByRole('button',{name:'对话配置',exact:true}).filter({visible:true}).click();
+ await composerSettings.getByLabel('执行审批',{exact:true}).waitFor();
+ await composerSettings.getByLabel('执行审批',{exact:true}).selectOption('never');
+ const beforeRevokedSettings=writes.length;
+ await page.evaluate(()=>{operationHistory.controls.supportedOperations=[];Operations.render(operationHistory,selected,client,notice,true);composeHistory=operationHistory;updateComposerContext();});
+ const staleSave=composerSettings.getByRole('button',{name:'保存设置',exact:true});
+ if(await staleSave.isVisible()&&await staleSave.isEnabled())await staleSave.click();
+ await page.waitForTimeout(80);assert.equal(writes.length,beforeRevokedSettings,'revoked settings must not write from an already open composer panel');
+ await page.keyboard.press('Escape');
+ await page.evaluate(()=>{operationHistory.controls.supportedOperations=['settings','interrupt','steer','queue-add','queue-edit','queue-delete','queue-reorder','queue-resume','clear-queue'];Operations.render(operationHistory,selected,client,notice,true);composeHistory=operationHistory;updateComposerContext();});
  await page.locator('#image-files').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=canvas.height=16;canvas.getContext('2d').fillRect(0,0,16,16);return canvas.toDataURL('image/png').split(',')[1];}),'base64')});
- await page.locator('#image-previews img').waitFor();await page.locator('#prompt').fill('image fixture');
+ await page.locator('#image-previews img').waitFor();await page.locator('#prompt > [contenteditable]').fill('image fixture');
  await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#prompt').value&&!document.querySelector('#image-previews img'));
  const imageWrite=writes.find(w=>w.body.action==='queue-add'&&w.body.images?.length);assert(imageWrite.body.images[0].startsWith('data:image/jpeg;base64,'));assert.equal(imageWrite.body.queueFingerprint,'queue-authority');
- await page.locator('#followup-mode').selectOption('steer');await page.locator('#prompt').fill('steering fixture');await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#prompt').value);assert(writes.some(w=>w.path==='/api/threads/t1/compose'&&w.body.prompt==='steering fixture'));
+ await page.locator('#followup-mode').selectOption('steer');await page.locator('#prompt > [contenteditable]').fill('steering fixture');await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#prompt').value);assert(writes.some(w=>w.path==='/api/threads/t1/compose'&&w.body.prompt==='steering fixture'));
  await page.locator('#send').click();
  await page.waitForTimeout(50);
  assert.equal(writes.at(-1).body.action,'interrupt');assert.equal(writes.at(-1).body.expectedTurnId,'turn');
@@ -112,7 +178,7 @@ const assert=require('node:assert/strict');
   assert.equal(writes.at(-1).body.action,action);assert.equal(writes.at(-1).body.queueFingerprint,'queue-authority');
  }
  if(width===390)await page.locator('#mobile-aux button[aria-label="返回"]').click();
- await page.evaluate(async()=>{operationHistory={...operationHistory,historyRevision:'approval',status:{state:'waiting'},controls:{...operationHistory.controls,requests:[{id:'native-approval',fingerprint:'approval-fingerprint',action:'command-approval',params:{command:'echo fixture'},decisions:['accept','decline']}]}};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
+ await page.evaluate(async()=>{operationHistory={...operationHistory,historyRevision:'approval',status:{state:'waiting'},controls:{...operationHistory.controls,supportedOperations:[...operationHistory.controls.supportedOperations,'command-approval','user-input'],requests:[{id:'native-approval',fingerprint:'approval-fingerprint',action:'command-approval',params:{command:'echo fixture'},decisions:['accept','decline']}]}};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
  page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'仅本次允许',exact:true}).click();await page.waitForTimeout(30);
  assert.equal(writes.at(-1).body.requestFingerprint,'approval-fingerprint');assert.equal(writes.at(-1).body.nativeRequestId,'native-approval');assert.equal(writes.at(-1).body.decision,'accept');
  await page.evaluate(async()=>{operationHistory={...operationHistory,historyRevision:'question',controls:{...operationHistory.controls,requests:[{id:'native-question',fingerprint:'question-fingerprint',action:'user-input',params:{questions:[{id:'answer',question:'fixture question'}]}}]}};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
@@ -124,6 +190,18 @@ const assert=require('node:assert/strict');
  const uncertain=writes.at(-1).body;assert.notEqual(uncertain.requestId,first.requestId);
  failOperation=false;await page.getByRole('button',{name:'提交回答',exact:true}).click();await page.waitForTimeout(40);
  assert.equal(writes.at(-1).body.requestId,uncertain.requestId);
+ await page.evaluate(async()=>{operationHistory={...operationHistory,historyRevision:'queue-only',runtime:{type:'idle'},status:{state:'idle'},controls:{...operationHistory.controls,supportedOperations:['queue-edit'],requests:[]}};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
+ assert.equal(await page.locator('.mobile-session-settings').count(),0);
+ assert.equal(await page.locator('.mobile-queue').count(),1,'queue capabilities are independent of settings');
+ assert.equal(await page.locator('.mobile-queue button').count(),2,'edit-only queue exposes only existing message save controls');
+ await page.evaluate(()=>{window.revokedQueueSave=document.querySelector('.mobile-queue button');});
+ const beforeQueueRevocation=writes.length;
+ await page.evaluate(async()=>{operationHistory={...operationHistory,historyRevision:'settings-only',controls:{...operationHistory.controls,supportedOperations:['settings']}};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);revokedQueueSave.click();});
+ await page.waitForTimeout(50);assert.equal(writes.length,beforeQueueRevocation,'revoked detached queue controls cannot submit');
+ assert.equal(await page.locator('.mobile-queue').count(),0,'settings support alone cannot advertise queue operations');
+ await page.evaluate(async()=>{const controls={...operationHistory.controls};delete controls.supportedOperations;operationHistory={...operationHistory,historyRevision:'missing-capabilities',runtime:{type:'active'},status:{state:'running'},controls};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:operationHistory},()=>true);});
+ assert(!(await page.locator('.mobile-session-settings').count()),'missing capability list must not enable settings');
+ assert(await page.locator('#followup-label').isHidden(),'missing capability list must not enable queued composer');
  await page.evaluate(async()=>{await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:{...operationHistory,historyRevision:'readonly',source:'local-rollout',access:{canInteract:false,nativeReady:false},controls:{},status:{state:'notLoaded'}}},()=>true);});
  assert(await page.locator('#send').isDisabled());assert.equal(await page.locator('#requests button').count(),0);
  const count=writes.length;await page.evaluate(()=>$('composer').requestSubmit());await page.waitForTimeout(30);assert.equal(writes.length,count);

@@ -18,6 +18,7 @@ from carryon.routes.websocket import upgrade, serve
 
 from carryon.paths import default_codex_home, assets, state_dir, save_json
 from carryon import __version__
+from carryon.web_assets import ASSETS
 
 ROOT = assets()
 
@@ -81,9 +82,9 @@ class Handler(BaseHTTPRequestHandler):
             self.gate()
             parsed = urlsplit(self.path)
             path = parsed.path
-            if method == "GET" and path in ("/", "/example.html", "/logo.svg", "/favicon.png", "/apple-touch-icon.png", "/app.js", "/subagents.js", "/notification-client.js", "/workspace-binding.js", "/client.js", "/cloud-console-client.js", "/console-login.js", "/qrcode.js", "/timeline.js", "/operations.js", "/style.css", "/shadcn.css", "/shadcn-ui.js", "/mobile.css", "/mobile-ui.js", "/diff-review.js", "/skills-picker.js", "/review-controls.js", "/goal-controls.js", "/skills-picker.css", "/diff-review.css"):
+            if method == "GET" and (path == "/" or path[1:] in ASSETS):
                 filename = "example.html" if path == "/" else path[1:]
-                mime = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "png": "image/png"}[filename.rsplit(".", 1)[1]]
+                mime = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "png": "image/png", "LICENSE": "text/plain"}[filename.rsplit(".", 1)[1]]
                 self.reply(200, (ROOT / filename).read_bytes(), mime + "; charset=utf-8")
                 return
             if method == "GET" and path == "/api/stream":

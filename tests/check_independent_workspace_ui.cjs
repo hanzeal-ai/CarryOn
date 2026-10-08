@@ -31,7 +31,7 @@ const assert=require('node:assert/strict');
   await page.goto(process.env.CARRYON_UI_URL||'http://127.0.0.1:8917/example.html');
   await page.locator('#mobile-session-list .project-row').waitFor();
   await page.locator('#create').click();
-  await page.locator('#new-prompt').fill('独立工作区首个会话');
+  await page.locator('#new-prompt > [contenteditable]').fill('独立工作区首个会话');
   assert(await page.locator('#submit-create').isEnabled());
   assert.equal(await page.getByRole('button',{name:'控制会话',exact:true}).isVisible(),false);
   await page.locator('#submit-create').click();

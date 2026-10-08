@@ -187,6 +187,26 @@ class Catalog:
                 raise ValueError("会话不存在或已归档")
             return dict(row)
 
+    def archive_record(self, thread_id):
+        valid_id(thread_id)
+        with self.connection() as conn:
+            row = conn.execute("SELECT * FROM threads WHERE id=?", (thread_id,)).fetchone()
+            if row is None: raise ValueError("会话不存在")
+            return dict(row)
+
+    def archived_list(self, limit=100, offset=0, search=""):
+        if self.independent and not any(self.home.glob('state_*.sqlite')): return []
+        with self.connection() as conn:
+            rows = conn.execute("""SELECT id,
+                substr(COALESCE(NULLIF(name,''), NULLIF(title,''), '未命名会话'),1,120) title,
+                cwd, updated_at, created_at, history_mode FROM threads
+                WHERE archived=1 AND source IN ('vscode','cli','exec')
+                AND COALESCE(thread_source,'user') NOT IN ('subagent','sub-agent')
+                AND (COALESCE(NULLIF(name,''),title) LIKE ? OR cwd LIKE ?)
+                ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                ("%" + search + "%", "%" + search + "%", limit, offset)).fetchall()
+            return [dict(row) for row in rows]
+
     def side_candidates(self):
         if self.independent: return []
         data = json.loads((self.home / '.codex-global-state.json').read_text())

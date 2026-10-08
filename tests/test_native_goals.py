@@ -4,7 +4,7 @@ import test_native_skills as fixtures
 from carryon.app_server.goals import read, request
 from carryon.desktop_ipc.ipc import IPCError
 from carryon.sessions.operations import submit, controls
-from carryon.workspaces.workspace_access import capability
+from carryon.workspaces.workspace_access import required_capabilities
 from carryon.sessions.history_cache import HistoryCache
 
 T = fixtures.T
@@ -79,7 +79,7 @@ class NativeGoalTests(unittest.TestCase):
         for fields in [{'tokenBudget': None}, {'tokenBudget': True}, {'tokenBudget': 0}, {'status': 'budgetLimited'}, {'status': 'paused'}, {'objective': ''}]:
             with self.assertRaises(ValueError): request(T, {'action': 'goal-set', 'requestId': 'invalid', **fields})
         for action, permission in [('goal-set', 'send'), ('goal-pause', 'stop'), ('goal-clear', 'stop')]:
-            self.assertEqual(capability('POST', '/api/threads/' + T + '/operations', {'action': action}), permission)
+            self.assertEqual(required_capabilities('POST', '/api/threads/' + T + '/operations', {'action': action}), (permission,))
 
     def test_cached_projection_changes_after_read_reply_and_unknown(self):
         cache = HistoryCache()

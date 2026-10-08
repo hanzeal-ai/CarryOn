@@ -1,6 +1,7 @@
 """Native skill inventory and validated structured selections."""
 from pathlib import Path
 from carryon.desktop_ipc.ipc import IPCError
+from carryon.sessions.reference_icons import skill_icons
 
 
 def selections(value):
@@ -29,11 +30,16 @@ def inventory(runtime, tid):
     cwd = state.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute(): raise IPCError('会话工作目录无效')
     identity = (runtime.process, runtime.session_id, cwd)
+    result = catalog(runtime, cwd)
+    verify(runtime, tid, identity)
+    return result, identity
+
+
+def catalog(runtime, cwd):
     result = runtime.rpc('skills/list', {'cwds': [cwd], 'forceReload': True})
     rows = [row for row in result['data'] if row['cwd'] == cwd]
     if len(rows) != 1: raise IPCError('原生技能列表工作目录不匹配')
-    verify(runtime, tid, identity)
-    return {'cwd': cwd, 'skills': rows[0]['skills'], 'errors': rows[0]['errors']}, identity
+    return {'cwd': cwd, 'skills': rows[0]['skills'], 'errors': rows[0]['errors']}
 
 
 def verify(runtime, tid, identity):
@@ -44,6 +50,8 @@ def verify(runtime, tid, identity):
 
 
 def guard_inputs(runtime, tid, native_input, before_send=None):
+    from carryon.sessions.mentions import guard_inputs as guard_mentions
+    before_send = guard_mentions(runtime, tid, native_input, before_send)
     requested = selections([{k: v for k, v in item.items() if k != 'type'}
                             for item in native_input if item.get('type') == 'skill'])
     if not requested: return before_send
@@ -61,7 +69,7 @@ def guard_inputs(runtime, tid, native_input, before_send=None):
     return guarded
 
 
-def discover(bridge, tid):
+def discover_runtime(bridge, tid):
     bridge.assert_target(tid)
     ipc, generation = bridge.require()
     runtime = ipc if getattr(ipc, 'protocol', None) == 'codex-app-server' else None
@@ -72,7 +80,14 @@ def discover(bridge, tid):
             if entry and not any(entry.get(k) for k in ('suspended', 'conflict', 'disconnect')):
                 runtime = entry['runtime']
     if runtime is None: raise IPCError('当前桌面会话不支持原生技能发现')
-    result, _ = inventory(runtime, tid)
+    return runtime, ipc, generation
+
+
+def discover(bridge, tid):
+    runtime, ipc, generation = discover_runtime(bridge, tid)
+    result, identity = inventory(runtime, tid)
+    result = {**result, 'skills': skill_icons(result['skills'])}
+    verify(runtime, tid, identity)
     with bridge.lock:
         bridge.check_generation(ipc, generation)
         bridge.assert_target(tid)

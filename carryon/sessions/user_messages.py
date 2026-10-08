@@ -12,7 +12,7 @@ def _unwrap_attachments(text):
     source = text.lstrip()
     if not source.startswith(HEADER + '\n'):
         return text, []
-    prefix, found, request = source.partition(SEPARATOR)
+    prefix, found, request = source.partition('\n' + SEPARATOR + '\n')
     if not found:
         return text, []
     request = request.lstrip()

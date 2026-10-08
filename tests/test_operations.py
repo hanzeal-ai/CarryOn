@@ -20,6 +20,17 @@ def state(runtime='idle'):
 
 
 class ContractTests(unittest.TestCase):
+    def test_desktop_capabilities_do_not_claim_native_only_operations(self):
+        advertised = controls(state())['supportedOperations']
+        self.assertIn('settings', advertised)
+        self.assertIn('queue-add', advertised)
+        for action in ('voice-start', 'side-create', 'fork', 'review', 'goal-set'):
+            self.assertNotIn(action, advertised)
+        native = state(); native['supportedOperations'] = ['voice-start', 'settings']
+        self.assertEqual(controls(native)['supportedOperations'], native['supportedOperations'])
+        native['supportedOperations'] = []
+        self.assertEqual(controls(native)['supportedOperations'], [])
+
     def test_stale_turn_cannot_interrupt_or_steer(self):
         for action in ('interrupt', 'steer'):
             with self.assertRaises(ValueError):

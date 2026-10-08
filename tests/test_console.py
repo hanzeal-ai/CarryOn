@@ -104,7 +104,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn(b'src="/carryon/app.js"',page)
         self.assertIn(b'src="/carryon/mobile-ui.js"',page)
         self.assertIn(b'href="/carryon/mobile.css"',page)
-        for asset in ('mobile-ui.js', 'mobile.css'):
+        for asset in ('mobile-ui.js', 'mobile.css', 'code-highlight-worker.js', 'highlight-engine.js', 'highlight-engine.LICENSE'):
             status, content, _ = self.call('GET', '/' + asset, origin=False)
             self.assertEqual(status, 200)
             self.assertTrue(content)

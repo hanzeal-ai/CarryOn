@@ -114,7 +114,7 @@ class CarryOnClient {
     sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
     const scope=this.epoch;
     const composing=path.endsWith('/compose');
-    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,skills:body.skills,state:'sending',begin:true});
+    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,skills:body.skills,mentions:body.mentions,files:body.files,state:'sending',begin:true});
     let job, admitted=false;
     try {
       job = await this.request(path, {...body, requestId});
@@ -134,9 +134,42 @@ class CarryOnClient {
       throw error;
     }
     if(composing&&scope===this.epoch)this.onSubmission({...job,id:requestId,threadId:path.split('/')[2]});
+    if(path==='/threads'&&!['failed','interrupted','uncertain'].includes(job.state)&&
+      (!['accepted','completed','inProgress'].includes(job.state)||typeof job.createdThreadId!=='string'||!job.createdThreadId)){
+      job={...job,state:'uncertain',error:'新会话身份尚未确认，请核对原请求；不会自动再次创建'};
+    }
+    if((path.endsWith('/archive')||path.endsWith('/unarchive'))&&(job.id!==requestId||job.threadId!==path.split('/')[2])){
+      job={...job,state:'uncertain',error:'归档凭证身份不匹配，原请求已保留'};
+    }
+    if((path.endsWith('/archive')||path.endsWith('/unarchive'))&&['accepted','completed','inProgress'].includes(job.state)&&
+      (job.state!=='completed'||job.id!==requestId||job.threadId!==path.split('/')[2]||job.result?.threadId!==path.split('/')[2]||job.result?.archived!==path.endsWith('/archive'))){
+      job={...job,state:'uncertain',error:'归档状态尚未确认，请核对原请求'};
+    }
+    if(path.endsWith('/rename')&&(job.id!==requestId||job.threadId!==path.split('/')[2]||job.kind!=='rename'||job.name!==body.name||
+      (['accepted','completed','inProgress'].includes(job.state)&&(job.state!=='completed'||job.result?.threadId!==path.split('/')[2]||job.result?.name!==body.name)))){
+      job={...job,state:'uncertain',error:'重命名凭证或名称尚未确认，原请求已保留'};
+    }
+    if(path.endsWith('/section')&&(job.id!==requestId||job.threadId!==path.split('/')[2]||job.kind!=='section-move'||job.sectionId!==body.sectionId||
+      (['accepted','completed','inProgress'].includes(job.state)&&(job.state!=='completed'||job.result?.threadId!==path.split('/')[2]||job.result?.sectionId!==body.sectionId)))){
+      job={...job,state:'uncertain',error:'分组移动凭证尚未确认，原请求已保留'};
+    }
+    if((path==='/sections'||/^\/sections\/[^/]+$/.test(path))&&!await this.sectionReceiptMatches(job,requestId,path,body)){
+      job={...job,state:'uncertain',error:'分组管理凭证尚未确认，原请求已保留'};
+    }
+    if(path.endsWith('/plugins')&&!await this.pluginReceiptMatches(job,requestId,path,body))job={...job,state:'uncertain',error:'插件管理凭证尚未确认，原请求已保留'};
+    if(path.endsWith('/skills/config')&&!await this.skillConfigReceiptMatches(job,requestId,path,body))job={...job,state:'uncertain',error:'技能配置凭证尚未确认，原请求已保留'};
+    if(path.endsWith('/terminals')&&!await this.terminalReceiptMatches(job,requestId,path,body))job={...job,state:'uncertain',error:'终端停止凭证尚未确认，原请求已保留'};
     if(path.endsWith('/fork')&&['accepted','completed','inProgress'].includes(job.state)&&
       (job.state!=='completed'||typeof job.createdThreadId!=='string'||!job.createdThreadId)){
       job={...job,state:'uncertain',error:'分叉身份尚未确认，请核对原请求；不会自动再次创建'};
+    }
+    if(path.endsWith('/side-chats')&&['accepted','completed','inProgress'].includes(job.state)&&
+      (job.state!=='completed'||job.parentId!==path.split('/')[2]||typeof job.createdThreadId!=='string'||!job.createdThreadId)){
+      job={...job,state:'uncertain',error:'临时聊天身份尚未确认，请核对原请求'};
+    }
+    if(path.startsWith('/side-chats/')&&path.endsWith('/close')&&
+      (job.state!=='completed'||job.result?.closed!==true||job.result?.threadId!==path.split('/')[2])){
+      job={...job,state:'uncertain',error:'临时聊天尚未确认结束，请核对原请求'};
     }
     if(body.action==='review'&&['accepted','inProgress','completed'].includes(job.state)&&
       (job.state!=='completed'||job.reviewThreadId!==path.split('/')[2]||typeof job.turnId!=='string'||!job.turnId)){
@@ -155,33 +188,36 @@ class CarryOnClient {
     return job;
   }
 
-  async submit(kind, target, prompt, images=[], isCurrent=()=>true, skills=[]) {
+  async submit(kind, target, prompt, images=[], isCurrent=()=>true, skills=[], mentions=[], files=[]) {
     images=[...images];
-    skills=JSON.parse(JSON.stringify(skills));
+    skills=JSON.parse(JSON.stringify(skills));mentions=JSON.parse(JSON.stringify(mentions));files=JSON.parse(JSON.stringify(files));
     const epoch=this.epoch;
     let key=kind+':'+target+':'+prompt;
-    if(images.length||skills.length){
-      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images,skills])));
+    if(images.length||skills.length||mentions.length||files.length){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images,skills,mentions,files])));
       key=kind+':'+target+':images:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob('/threads/' + target + (kind==='compose'?'/compose':'/messages'),
-      {prompt,...(images.length?{images}:{}),...(skills.length?{skills}:{})}, key, this.pending, 'carryon-pending');
+      {prompt,...(images.length?{images}:{}),...(skills.length?{skills}:{}),...(mentions.length?{mentions}:{}),...(files.length?{files}:{})}, key, this.pending, 'carryon-pending');
   }
 
   skills(target){return this.request('/threads/'+encodeURIComponent(target)+'/skills');}
+  mentions(target){return this.request('/threads/'+encodeURIComponent(target)+'/mentions');}
+  projectFiles(target,query){return this.request('/threads/'+encodeURIComponent(target)+'/files/search?query='+encodeURIComponent(query));}
   goal(target){return this.request('/threads/'+encodeURIComponent(target)+'/goal');}
 
   review(target,reviewTarget,isCurrent=()=>true){return this.operation(target,'review',{target:reviewTarget},isCurrent);}
 
-  async createInProject(projectId,prompt,isCurrent=()=>true,images=[],settings=null){
+  async createInProject(projectId,prompt,isCurrent=()=>true,images=[],settings=null,skills=[],mentions=[]){
     images=[...images];settings=settings===null?null:JSON.parse(JSON.stringify(settings));
+    skills=skills.map(({name,path})=>({name,path}));mentions=mentions.map(({name,path})=>({name,path}));
     const epoch=this.epoch;
-    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([projectId,prompt,images,settings])));
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([projectId,prompt,images,settings,skills,mentions])));
     if(epoch!==this.epoch)throw Error('配对已改变，请重新读取状态');
     if(!isCurrent())throw Error('工作区或项目已改变');
     const key='project:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
-    return this.requestJob('/threads',{projectId,prompt,images,settings},key,this.pending,'carryon-pending');
+    return this.requestJob('/threads',{projectId,prompt,images,settings,skills,mentions},key,this.pending,'carryon-pending');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
@@ -201,6 +237,187 @@ class CarryOnClient {
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新操作');
     const key='fork:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
     return this.requestJob('/threads/'+target+'/fork',lastTurnId===null?{}:{lastTurnId},key,this.operations,'carryon-operations');
+  }
+
+  async pluginReceiptMatches(job,id,path,body){
+    const target=decodeURIComponent(path.split('/')[2]);
+    if(!['action,pluginId','action,discovery,pluginId'].includes(Object.keys(body).sort().join(','))||!['install','uninstall'].includes(body.action)||typeof body.pluginId!=='string'||!body.pluginId)return false;
+    if('discovery'in body){const d=body.discovery;if(!d||Object.keys(d).sort().join(',')!=='cursor,scope,searchTerm'||typeof d.searchTerm!=='string'||!d.searchTerm.trim()||!['global','workspace','personal'].includes(d.scope)||d.cursor!==null&&(typeof d.cursor!=='string'||!d.cursor))return false;}
+    if(job.id!==id||job.threadId!==target||job.kind!=='plugin-'+body.action||!job.body||await this.requestContent(path,job.body)!==await this.requestContent(path,body))return false;
+    return !['accepted','completed','inProgress'].includes(job.state)||job.state==='completed'&&job.result?.threadId===target&&job.result?.pluginId===body.pluginId&&job.result?.installed===(body.action==='install');
+  }
+  async managePlugin(target,body,isCurrent=()=>true){
+    body={...body,...(body.discovery?{discovery:{...body.discovery}}:{})};const epoch=this.epoch,key='plugin-management',content=key+':content',path='/threads/'+encodeURIComponent(target)+'/plugins';
+    if(this.operations.has(key)||this.operations.has('skill-config'))throw Error('工作区配置待核对，请先核对原请求');
+    const hash=await this.requestContent(path,body);if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.has(key)||this.operations.has('skill-config'))throw Error('工作区配置待核对，请先核对原请求');
+    this.operations.set(content,hash);
+    try{return await this.requestJob(path,body,key,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
+  }
+  async queryPluginManagement(id,isCurrent=()=>true){
+    const epoch=this.epoch,key='plugin-management',content=key+':content',job=await this.request('/jobs/'+encodeURIComponent(id)),path='/threads/'+encodeURIComponent(job.threadId)+'/plugins';
+    const matches=job.body&&await this.requestContent(path,job.body)===this.operations.get(content)&&await this.pluginReceiptMatches(job,id,path,job.body);
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.get(key)!==id||!matches)throw Error('插件凭证或内容身份不匹配，原请求已保留');
+    if(['completed','failed','interrupted','acknowledged'].includes(job.state)){this.operations.delete(key);this.operations.delete(content);this.saveOperations();}
+    return job;
+  }
+
+  async skillConfigReceiptMatches(job,id,path,body){
+    const target=decodeURIComponent(path.split('/')[2]);
+    if(Object.keys(body).sort().join(',')!=='enabled,path'||typeof body.enabled!=='boolean'||typeof body.path!=='string'||!body.path)return false;
+    if(job.id!==id||job.threadId!==target||job.kind!=='skill-config'||!job.body||await this.requestContent(path,job.body)!==await this.requestContent(path,body))return false;
+    return !['accepted','completed','inProgress'].includes(job.state)||job.state==='completed'&&job.result?.threadId===target&&job.result?.path===body.path&&job.result?.enabled===body.enabled;
+  }
+  async configureSkill(target,body,isCurrent=()=>true){
+    body={...body};const epoch=this.epoch,key='skill-config',content=key+':content',path='/threads/'+encodeURIComponent(target)+'/skills/config';
+    if(this.operations.has(key)||this.operations.has('plugin-management'))throw Error('技能配置待核对，请先核对原请求');
+    const hash=await this.requestContent(path,body);if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.has(key)||this.operations.has('plugin-management'))throw Error('技能配置待核对，请先核对原请求');
+    this.operations.set(content,hash);
+    try{return await this.requestJob(path,body,key,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
+  }
+  async querySkillConfiguration(id,isCurrent=()=>true){
+    const epoch=this.epoch,key='skill-config',content=key+':content',job=await this.request('/jobs/'+encodeURIComponent(id)),path='/threads/'+encodeURIComponent(job.threadId)+'/skills/config';
+    const matches=job.body&&await this.requestContent(path,job.body)===this.operations.get(content)&&await this.skillConfigReceiptMatches(job,id,path,job.body);
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.get(key)!==id||!matches)throw Error('技能配置凭证或内容身份不匹配，原请求已保留');
+    if(['completed','failed','interrupted','acknowledged'].includes(job.state)){this.operations.delete(key);this.operations.delete(content);this.saveOperations();}
+    return job;
+  }
+
+  async terminalReceiptMatches(job,id,path,body){
+    const target=decodeURIComponent(path.split('/')[2]),action=body.action;
+    if(!['terminate','clean'].includes(action)||Object.keys(body).sort().join(',')!==(action==='clean'?'action':'action,processId')||action==='terminate'&&(typeof body.processId!=='string'||!body.processId))return false;
+    if(job.id!==id||job.threadId!==target||job.kind!=='terminal-'+action||!job.body||await this.requestContent(path,job.body)!==await this.requestContent(path,body))return false;
+    return !['accepted','completed','inProgress'].includes(job.state)||job.state==='completed'&&job.result?.threadId===target&&(action==='clean'?job.result.cleaned===true:job.result.processId===body.processId&&job.result.terminated===true);
+  }
+  async stopTerminal(target,body,isCurrent=()=>true){
+    body={...body};const epoch=this.epoch,key='terminal:'+target,content=key+':content',path='/threads/'+encodeURIComponent(target)+'/terminals';
+    if(this.operations.has(key))throw Error('终端操作待核对，请先核对原请求');
+    const hash=await this.requestContent(path,body);
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.has(key))throw Error('终端操作待核对，请先核对原请求');
+    this.operations.set(content,hash);
+    try{return await this.requestJob(path,body,key,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
+  }
+  async queryTerminal(target,id,isCurrent=()=>true){
+    const epoch=this.epoch,key='terminal:'+target,content=key+':content',path='/threads/'+encodeURIComponent(target)+'/terminals',job=await this.request('/jobs/'+encodeURIComponent(id));
+    const matches=job.body&&await this.requestContent(path,job.body)===this.operations.get(content)&&await this.terminalReceiptMatches(job,id,path,job.body);
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+    if(this.operations.get(key)!==id||!matches)throw Error('终端凭证或内容身份不匹配，原请求已保留');
+    if(['completed','failed','interrupted','acknowledged'].includes(job.state)){this.operations.delete(key);this.operations.delete(content);this.saveOperations();}
+    return job;
+  }
+
+  async requestContent(path,body){
+    const canonical=JSON.stringify([path,Object.keys(body).sort().map(key=>[key,body[key]])]);
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
+  }
+  async sectionReceiptMatches(job,id,path,body){
+    const action=path==='/sections'?'create':body.action,sectionId=path==='/sections'?null:path.split('/')[2];
+    if(!['create','update','delete','order'].includes(action)||job.id!==id||job.kind!=='section-'+action||job.sectionId!==sectionId||job.threadId!==(action==='order'?body.threadId:sectionId||'sections')||!job.body||await this.requestContent(path,job.body)!==await this.requestContent(path,body))return false;
+    if(!['accepted','completed','inProgress'].includes(job.state))return true;
+    return job.state==='completed'&&(action==='order'?job.result?.threadId===body.threadId&&job.result?.sectionId===sectionId&&Object.hasOwn(job.result,'beforeThreadId')&&job.result.beforeThreadId===body.beforeThreadId:action==='delete'?job.result?.sectionId===sectionId&&job.result?.deleted===true:
+      typeof job.result?.section?.id==='string'&&!!job.result.section.id&&job.result.section.name===body.name&&(action==='create'||job.result.section.id===sectionId));
+  }
+  async manageSection(sectionId,body,isCurrent=()=>true){
+    body={...body};
+    const epoch=this.epoch,key='section-management',content='section-management-content',path=sectionId===null?'/sections':'/sections/'+encodeURIComponent(sectionId);
+    if(this.operations.has(key))throw Error('分组操作待核对，请先核对原请求');
+    const hash=await this.requestContent(path,body);if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(this.operations.has(key))throw Error('分组操作待核对，请先核对原请求');
+    this.operations.set(content,hash);
+    try{return await this.requestJob(path,body,key,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
+  }
+  saveOperations(){sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));}
+  async querySectionManagement(id,isCurrent=()=>true){
+    const epoch=this.epoch,job=await this.request('/jobs/'+encodeURIComponent(id)),key='section-management',content='section-management-content';
+    const path=job.sectionId===null?'/sections':'/sections/'+encodeURIComponent(job.sectionId);
+    const matches=job.body&&await this.requestContent(path,job.body)===this.operations.get(content)&&await this.sectionReceiptMatches(job,id,path,job.body);
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(this.operations.get(key)!==id||!matches)throw Error('分组管理凭证或内容身份不匹配，原请求已保留');
+    if(['completed','failed','interrupted','acknowledged'].includes(job.state)){this.operations.delete(key);this.operations.delete(content);this.saveOperations();}
+    return job;
+  }
+
+  async moveThreadSection(target,sectionId,isCurrent=()=>true){
+    if(!isCurrent())throw Error('当前会话已改变');
+    const key='section-move:'+target,content='section-content:'+target,epoch=this.epoch;
+    if(this.operations.has(key))throw Error('分组移动待核对，请先核对原请求');
+    this.operations.set(content,JSON.stringify(sectionId));
+    try{return await this.requestJob('/threads/'+target+'/section',{sectionId},key,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));}}
+  }
+  async queryThreadSection(target,requestId,isCurrent=()=>true){
+    const epoch=this.epoch,job=await this.request('/jobs/'+encodeURIComponent(requestId)),key='section-move:'+target,content='section-content:'+target;
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(job.id!==requestId||job.threadId!==target||job.kind!=='section-move'||
+      (job.sectionId!==null&&typeof job.sectionId!=='string')||this.operations.get(key)!==requestId||this.operations.get(content)!==JSON.stringify(job.sectionId))throw Error('分组移动凭证或内容身份不匹配');
+    const confirmed=job.state==='completed'&&job.result?.threadId===target&&job.result?.sectionId===job.sectionId;
+    if(confirmed||['failed','interrupted','acknowledged'].includes(job.state)){
+      this.operations.delete(key);this.operations.delete(content);sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));
+    }
+    return confirmed?job:{...job,state:job.state==='completed'?'uncertain':job.state};
+  }
+  async renameThread(target,name,isCurrent=()=>true){
+    const epoch=this.epoch;
+    if(!isCurrent())throw Error('当前会话已改变');
+    if(this.operations.has('rename:'+target))throw Error('重命名待核对，请先核对原请求');
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(name));
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(this.operations.has('rename:'+target))throw Error('重命名待核对，请先核对原请求');
+    this.operations.set('rename-content:'+target,Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''));
+    try{return await this.requestJob('/threads/'+target+'/rename',{name},'rename:'+target,this.operations,'carryon-operations');}
+    finally{if(epoch===this.epoch&&!this.operations.has('rename:'+target)){this.operations.delete('rename-content:'+target);sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));}}
+  }
+  async queryRename(target,requestId,isCurrent=()=>true){
+    const epoch=this.epoch,job=await this.request('/jobs/'+encodeURIComponent(requestId));
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(job.id!==requestId||job.threadId!==target||job.kind!=='rename')throw Error('重命名凭证身份不匹配');
+    if(typeof job.name!=='string')throw Error('重命名内容身份不匹配');
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(job.name));
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(this.operations.get('rename:'+target)!==requestId||this.operations.get('rename-content:'+target)!==Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''))throw Error('重命名内容身份不匹配');
+    const confirmed=job.state==='completed'&&job.result?.threadId===target&&typeof job.name==='string'&&job.name.length>0&&job.result?.name===job.name;
+    if(confirmed||['failed','interrupted','acknowledged'].includes(job.state)){
+      const key='rename:'+target;
+      if(this.operations.get(key)===requestId){this.operations.delete(key);this.operations.delete('rename-content:'+target);sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));}
+    }
+    return confirmed?job:{...job,state:job.state==='completed'?'uncertain':job.state};
+  }
+  archiveThread(target, restoring, isCurrent=()=>true){
+    if(!isCurrent())throw Error('当前会话已改变');
+    const action=restoring?'unarchive':'archive';
+    return this.requestJob('/threads/'+target+'/'+action,{},action+':'+target,this.operations,'carryon-operations');
+  }
+  async queryArchive(target, restoring, requestId, isCurrent=()=>true){
+    const epoch=this.epoch,job=await this.request('/jobs/'+encodeURIComponent(requestId));
+    if(epoch!==this.epoch||!isCurrent())throw Error('工作区已改变');
+    if(job.id!==requestId||job.threadId!==target)throw Error('归档凭证身份不匹配');
+    const confirmed=job.state==='completed'&&job.result?.threadId===target&&job.result?.archived===!restoring;
+    if(confirmed||['failed','interrupted','acknowledged'].includes(job.state)){
+      const key=(restoring?'unarchive':'archive')+':'+target;
+      if(this.operations.get(key)===requestId){
+        this.operations.delete(key);
+        sessionStorage.setItem(this.storageScope?this.storageScope+'operations':this.localStorageScope?this.localStorageScope+'operations':'carryon-operations',JSON.stringify([...this.operations]));
+      }
+    }
+    return confirmed?job:{...job,state:job.state==='completed'?'uncertain':job.state};
+  }
+
+  async createSide(parent,isCurrent=()=>true){
+    if(!isCurrent())throw Error('当前会话已改变');
+    return this.requestJob('/threads/'+parent+'/side-chats',{},'side-create:'+parent,this.operations,'carryon-operations');
+  }
+  async closeSide(parent,target,isCurrent=()=>true){
+    if(!isCurrent())throw Error('当前会话已改变');
+    return this.requestJob('/side-chats/'+target+'/close',{parentId:parent},'side-close:'+parent+':'+target,this.operations,'carryon-operations');
   }
 
   async sideAction(parent, target, action, fields, isCurrent = () => true) {

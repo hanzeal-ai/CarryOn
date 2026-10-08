@@ -6,13 +6,13 @@ import uuid
 from carryon.contracts import digest, text
 
 
-def message(prompt, state, images=None, skills=None):
+def message(prompt, state, images=None, skills=None, mentions=None):
     return {'id': str(uuid.uuid4()), 'text': prompt, 'cwd': state.get('cwd'),
             'createdAt': int(time.time() * 1000), 'context': {
                 'prompt': prompt, 'commentAttachments': [], 'imageAttachments': [{'id': str(uuid.uuid4()), 'src': url} for url in (images or [])],
                 'fileAttachments': [], 'pastedTextAttachments': [], 'addedFiles': [],
                 'workspaceRoots': [state['cwd']] if state.get('cwd') else [],
-                **({'skills': skills} if skills else {})}}
+                **({'skills': skills} if skills else {}), **({'mentions': mentions} if mentions else {})}}
 
 
 def projection(messages, source):
@@ -32,9 +32,11 @@ def transform(action, data, state, original):
         images = validate_images(data.get('images'))
         from carryon.sessions.skills import selections
         skills = selections(data.get('skills'))
+        from carryon.sessions.mentions import selections as mention_selections
+        mentions = mention_selections(data.get('mentions'))
         prompt = data.get('prompt')
-        prompt = text(prompt, allow_empty=bool(images or skills))
-        messages.append(message(prompt, state, images, skills))
+        prompt = text(prompt, allow_empty=bool(images or skills or mentions))
+        messages.append(message(prompt, state, images, skills, mentions))
     elif action == 'clear-queue':
         if data.get('confirmed') is not True:
             raise ValueError('请确认清空排队消息')

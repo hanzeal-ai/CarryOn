@@ -1,0 +1,19 @@
+/* Shared message typography and code controls for desktop and mobile. */
+.markdown-message{white-space:normal!important;overflow-wrap:anywhere}
+.markdown-message p{margin:0 0 1em;white-space:pre-line}
+.markdown-message>:last-child{margin-bottom:0}
+.markdown-message h1,.markdown-message h2,.markdown-message h3,.markdown-message h4,.markdown-message h5,.markdown-message h6{font-weight:600;line-height:1.35;margin:1.25em 0 .6em}
+.markdown-message h1{font-size:1.6em}.markdown-message h2{font-size:1.35em}.markdown-message h3{font-size:1.15em}
+.markdown-message ul,.markdown-message ol{padding-left:1.6em;margin:.5em 0 1em;list-style:disc}
+.markdown-message ol{list-style:decimal}.markdown-message li{margin:.3em 0}.markdown-message li>p{margin:0}.markdown-message li>ul,.markdown-message li>ol{margin:.3em 0}
+.markdown-message blockquote{border-left:3px solid var(--hairline,#ddd);margin:1em 0;padding:0 1em;color:var(--subtle,#777)}
+.markdown-message a{color:#1671cf;text-decoration:underline;text-underline-offset:2px}
+.markdown-message :not(pre)>code{font: .88em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--field,#f2f2f2);padding:2px 5px;border-radius:5px}
+.markdown-code{margin:1em 0;overflow:hidden;border:1px solid var(--hairline,#ddd);border-radius:12px;background:var(--field,#f2f2f2)}
+.markdown-code-header{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;color:var(--subtle,#777)}
+.markdown-code-header button{font:inherit;background:none;border:0;min-height:32px;padding:0 6px}
+.markdown-message .markdown-code pre{border:0;border-radius:0;margin:0;padding:12px 16px;max-height:none;overflow:auto;white-space:pre;line-height:1.6;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+.markdown-code pre code{font:inherit}.markdown-table{overflow-x:auto;margin:1em 0}.markdown-table table{border-collapse:collapse;width:100%}.markdown-table th,.markdown-table td{border-bottom:1px solid var(--hairline,#ddd);padding:8px 12px;white-space:normal}.markdown-table th{font-weight:600}.markdown-message hr{border:0;border-top:1px solid var(--hairline,#ddd);margin:1.5em 0}
+.markdown-task{list-style:none;position:relative}.markdown-task>input{position:absolute;left:-1.4em;top:.4em;width:1em;height:1em;padding:0;margin:0}.markdown-message .markdown-task>p{display:inline}
+
+@media(max-width:760px){.markdown-code-header button{min-height:44px}}

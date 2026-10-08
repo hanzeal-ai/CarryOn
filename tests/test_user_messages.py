@@ -11,6 +11,11 @@ def envelope(path, request='看一下图片\n保留我的正文。'):
 
 
 class UserMessageTests(unittest.TestCase):
+    def test_separator_inside_filename_is_not_an_envelope_boundary(self):
+        from carryon.sessions.user_messages import SEPARATOR
+        path = '/tmp/' + SEPARATOR + '.txt'
+        self.assertEqual(unwrap_user_message(envelope(path)), ('看一下图片\n保留我的正文。', [path]))
+
     def test_attachment_image_metadata_is_display_only(self):
         raw = envelope('/tmp/example.png').replace('\n\nDistinguish', '\n\nImage attachment: true\n\nDistinguish')
         for kind, key in [('userMessage', 'content'), ('steeringUserMessage', 'input')]:

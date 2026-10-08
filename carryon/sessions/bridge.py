@@ -70,6 +70,7 @@ class Bridge:
         self.lock = threading.RLock()
         self.events = threading.Condition()
         self.event_revision = 0
+        self.native_sides = {}
         self.side_registry = {}
         self.side_scanning = False
         self.side_scanned_at = 0
@@ -137,20 +138,25 @@ class Bridge:
             self.ipc = ipc
             self.enabled = True
             self.generation += 1
+            stale_sides, self.native_sides = self.native_sides, {}
             self.side_registry = {}
             self.side_scanned_at = 0
             self.notify()
-            return self.status()
+        for endpoint in stale_sides.values(): endpoint.ipc.close()
+        return self.status()
 
     def disable(self):
         with self.lock:
             self.enabled = False
             self.history_cache.clear()
+            if hasattr(self, 'native_history'): self.native_history.clear()
             self.generation += 1
             ipc, self.ipc = self.ipc, None
+            sides, self.native_sides = self.native_sides, {}
             if self.realtime is not None:
                 self.realtime.sync_watches()
         self.notify()
+        for endpoint in sides.values(): endpoint.ipc.close()
         if ipc:
             ipc.close()
         return self.status()
@@ -170,6 +176,9 @@ class Bridge:
                 threading.Thread(target=self._discover_sides, args=(ipc, generation), daemon=True).start()
             chats = [{**meta, **project_status(ipc.current(tid))}
                      for tid, meta in self.side_registry.items() if meta['parentId'] == parent_id]
+            for endpoint in self.native_sides.values():
+                if endpoint.parent_id == parent_id:
+                    chats.append({**endpoint.side_registry[endpoint.child_id], **project_status(endpoint.ipc.current(endpoint.child_id) if endpoint.ipc.connected else None)})
             return {'chats':chats, 'scanning':self.side_scanning, 'error':self.side_error,
                     'scope':'registered-live-side-chats'}
 
@@ -205,6 +214,13 @@ class Bridge:
                 self.side_scanned_at = time.monotonic() if self.generation == generation else 0
             self.notify()
 
+    def side_endpoint(self, parent_id, side_id):
+        endpoint = self.native_sides.get(side_id)
+        if endpoint is not None:
+            endpoint.assert_target(side_id, parent_id)
+            return endpoint
+        return self
+
     def side_state(self, parent_id, side_id, state=None):
         valid_id(side_id)
         self.catalog.get(parent_id)
@@ -229,6 +245,8 @@ class Bridge:
             self.subagents.assert_interactive(thread_id)
 
     def side_history(self, parent_id, side_id, limit=None):
+        endpoint = self.side_endpoint(parent_id, side_id)
+        if endpoint is not self: return endpoint.side_history(parent_id, side_id, limit)
         state = self.side_state(parent_id, side_id)
         result = self.history_cache.project(state, snapshot_history, segmented=True, limit=limit)
         result['parentId'] = parent_id
@@ -262,6 +280,16 @@ class Bridge:
         from carryon.sessions.subagents import is_subagent
         if is_subagent(row):
             return self.subagent_history(thread_id, limit)
+        from carryon.sessions.native_metadata import supported
+        if supported(self):
+            from carryon.sessions.native_history import NativeHistory
+            with self.lock:
+                if not hasattr(self, 'native_history'): self.native_history = NativeHistory()
+                cache = self.native_history
+            result = cache.read(self, row, limit)
+            result = self.subagents.resolve_titles(self.subagents.decorate(result, row))
+            with self.lock: self.check_generation(ipc, generation)
+            return result
         state = self.catalog.rollout_state(thread_id, limit=limit)
         result = self.history_cache.project(state, snapshot_history, limit=limit, segmented=True)
         if state.get('rolloutWindow'):
@@ -329,7 +357,7 @@ class Bridge:
     def send_snapshot(self, ipc, generation, thread_id, authorize=None, parent_id=None):
         return ipc.snapshot(thread_id)
 
-    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None,skills=None):
+    def compose(self,thread_id,request_id,prompt,images=None,source=None,authorize=None,parent_id=None,skills=None,mentions=None,files=None):
         from carryon.contracts import digest, text, validate_request_id
         from carryon.sessions.images import validate_images
         # Idempotency binds the original wire payload, before native text normalization.
@@ -337,12 +365,17 @@ class Bridge:
         images=validate_images(images)
         from carryon.sessions.skills import selections
         skills=selections(skills)
-        if skills and parent_id: raise ValueError('临时聊天不支持技能选择')
-        prompt=text(prompt, allow_empty=bool(images or skills))
+        from carryon.sessions.mentions import selections as mention_selections
+        mentions=mention_selections(mentions)
+        from carryon.sessions.file_references import selections as file_selections, project
+        files=file_selections(files)
+        if len(project(prompt if isinstance(prompt, str) else '', files)) > 16000: raise ValueError('文件引用与正文总长度不能超过 16000 字符')
+        if (skills or mentions or files) and parent_id: raise ValueError('临时聊天不支持技能、插件、应用或项目文件引用')
+        prompt=text(prompt, allow_empty=bool(images or skills or mentions or files))
         validate_request_id(request_id)
         valid_id(thread_id)
         self.assert_target(thread_id, parent_id)
-        fingerprint=digest([thread_id,raw_prompt,images] + ([parent_id] if parent_id else []) + ([skills] if skills else []))
+        fingerprint=digest([thread_id,raw_prompt,images] + ([parent_id] if parent_id else []) + ([skills] if skills else []) + ([mentions] if mentions else []) + ([files] if files else []))
         ipc,generation=self.require()
         previous=self.journal.get(request_id)
         if previous:
@@ -350,13 +383,13 @@ class Bridge:
             return previous
         return self.prepare_compose(thread_id, request_id, fingerprint, source, authorize,
             lambda reserved: self._compose(thread_id, request_id, prompt, images, source, authorize,
-                                           parent_id, ipc, generation, fingerprint, reserved, skills))
+                                           parent_id, ipc, generation, fingerprint, reserved, skills, mentions, files))
 
     def prepare_compose(self, thread_id, request_id, fingerprint, source, authorize, run):
         return run(None)
 
     def _compose(self, thread_id, request_id, prompt, images, source, authorize,
-                 parent_id, ipc, generation, fingerprint, reserved, skills):
+                 parent_id, ipc, generation, fingerprint, reserved, skills, mentions, files):
         from carryon.sessions.operations import controls, submit as operate
         owner,state=self.send_snapshot(ipc,generation,thread_id,authorize,parent_id)
         with self.lock:
@@ -365,35 +398,44 @@ class Bridge:
             self.assert_target(thread_id, parent_id, state)
             status=project_status(state)['state'];metadata={**(source or {}),'composeFingerprint':fingerprint}
             if skills and not state.get('supportsSkills'): raise ValueError('当前会话不支持技能选择')
+            if mentions and not state.get('supportsMentions'): raise ValueError('当前会话不支持插件或应用引用')
+            if files and not state.get('supportsFileReferences'): raise ValueError('当前会话不支持项目文件引用')
         # Never hold the bridge gate while waiting for a native response: stream
         # updates, cancellation and approval replies must remain able to proceed.
-        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id, _reserved=reserved, skills=skills)
+        if status=='idle':return self.submit('message',request_id,prompt,thread_id,images,metadata,authorize,parent_id=parent_id, _reserved=reserved, skills=skills, mentions=mentions, files=files)
         if status not in ('running','waiting'):raise BridgeError('会话状态尚未确认，不能投递或排队')
         data={'requestId':request_id,'prompt':prompt}
         if images:data['images']=images
         if skills:data['skills']=skills
+        if mentions:data['mentions']=mentions
+        if files:data['files']=files
         if status=='waiting':
             data.update(action='queue-add',queueFingerprint=self.queue(thread_id, parent_id, authoritative=True)['fingerprint'])
         else:
             data.update(action='steer',expectedTurnId=controls(state)['activeTurnId'])
         return operate(self,thread_id,data,metadata,authorize,prepared=(owner,state),parent_id=parent_id, _reserved=reserved)
 
-    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, *, _reserved=None, skills=None):
+    def submit(self, kind, request_id, prompt, thread_id=None, images=None, source=None, authorize=None, parent_id=None, *, _reserved=None, skills=None,mentions=None,files=None):
         if kind != "message": raise ValueError("新建会话请通过项目创建接口提交")
         from carryon.sessions.images import validate_images
         images=validate_images(images)
         from carryon.sessions.skills import selections
         skills=selections(skills)
-        if skills and parent_id: raise ValueError('临时聊天不支持技能选择')
+        from carryon.sessions.mentions import selections as mention_selections
+        mentions=mention_selections(mentions)
+        from carryon.sessions.file_references import selections as file_selections, project
+        files=file_selections(files)
+        if len(project(prompt if isinstance(prompt, str) else '', files)) > 16000: raise ValueError('文件引用与正文总长度不能超过 16000 字符')
+        if (skills or mentions or files) and parent_id: raise ValueError('临时聊天不支持技能、插件、应用或项目文件引用')
         from carryon.contracts import text, validate_request_id
         validate_request_id(request_id)
-        prompt = text(prompt, allow_empty=bool(images or skills))
+        prompt = text(prompt, allow_empty=bool(images or skills or mentions or files))
         ipc, generation = self.require()
         with self.lock:
             if not thread_id:
                 raise BridgeError("请指定目标会话")
             valid_id(thread_id)
-            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else [])+([skills] if skills else []), ensure_ascii=False).encode()).hexdigest()
+            fingerprint = hashlib.sha256(json.dumps([kind, thread_id, prompt]+([images] if images else [])+([parent_id] if parent_id else [])+([skills] if skills else [])+([mentions] if mentions else [])+([files] if files else []), ensure_ascii=False).encode()).hexdigest()
             previous = self.journal.get(request_id)
             if previous and previous != _reserved:
                 if previous["fingerprint"] != fingerprint:
@@ -410,6 +452,8 @@ class Bridge:
                    "clientMessageId": str(uuid.uuid4())}
             if source:job.update(source)
             if skills:job['skills']=skills
+            if mentions:job['mentions']=mentions
+            if files:job['files']=files
             if parent_id is not None: job['sideParentId'] = parent_id
             if _reserved is None: self.journal.insert(job)
             else:
@@ -426,6 +470,7 @@ class Bridge:
             self.assert_target(job['threadId'], job.get('sideParentId'), state)
             idle_snapshot(state)
             if job.get('skills') and not state.get('supportsSkills'): raise ValueError('当前会话不支持技能选择')
+            if job.get('mentions') and not state.get('supportsMentions'): raise ValueError('当前会话不支持插件或应用引用')
 
             def guarded_send(write):
                 nonlocal dispatched
@@ -439,7 +484,22 @@ class Bridge:
                     dispatched = True
                     write()
 
-            turn = ipc.start(job["threadId"], prompt, owner, job["clientMessageId"], guarded_send, **({"images":images} if images else {}), **({'skills':job['skills']} if job.get('skills') else {}))
+            def start(target, delivery):
+                return target.start(job["threadId"], projected_prompt, owner, job["clientMessageId"], delivery, **({"images":images} if images else {}), **({'skills':job['skills']} if job.get('skills') else {}), **({'mentions':job['mentions']} if job.get('mentions') else {}))
+            projected_prompt = prompt
+            if job.get('files'):
+                from carryon.sessions.file_references import guard, project, delivery_session
+                if not state.get('supportsFileReferences'): raise ValueError('当前会话不支持项目文件引用')
+                projected_prompt = project(prompt, job['files'])
+                def authorized():
+                    with self.lock:
+                        self.check_generation(ipc, generation)
+                        self.assert_target(job['threadId'])
+                        if authorize: authorize()
+                with delivery_session(self, job['threadId'], ipc, authorized, starts_turn=True) as (runtime, owner_guard):
+                    turn = start(runtime, guard(runtime, job['threadId'], job['files'], lambda write: guarded_send(lambda: owner_guard(write))))
+            else:
+                turn = start(ipc, guarded_send)
             self.journal.update(job["id"], state="accepted", turnId=turn["id"], evidence="native-handler-response")
         except Exception as exc:
             uncertain = dispatched and not (isinstance(exc, IPCError) and not exc.uncertain)
@@ -447,6 +507,9 @@ class Bridge:
 
     def refresh_job(self, job_id):
         self.require()
+        job = self.journal.get(job_id)
+        if job and job.get("sideParentId") and job["threadId"] in self.native_sides:
+            return self.native_sides[job["threadId"]].refresh_job(job_id)
         with self.lock:
             if job_id in self.refreshing_jobs:
                 return self.journal.get(job_id)
@@ -485,7 +548,8 @@ class Bridge:
         try:
             self.assert_target(job['threadId'], job.get('sideParentId'))
             if getattr(ipc, 'protocol', None) == 'codex-app-server':
-                state = {'turns': ipc.read_turns(job['threadId'])}
+                current = ipc.current(job['threadId'])
+                state = current if current and current.get('ephemeral') else {'turns': ipc.read_turns(job['threadId'])}
             else: _, state = ipc.snapshot(job['threadId'])
             identifier = job['clientMessageId']
             for turn in turns(state):
@@ -516,6 +580,30 @@ class Bridge:
         job = self.journal.get(job_id)
         if job is None:
             raise BridgeError("请求不存在", 404)
+        if job['state'] == 'uncertain' and job['kind'] in ('plugin-install', 'plugin-uninstall'):
+            from carryon.sessions.plugins import recover
+            return recover(self, job)
+        if job['state'] == 'uncertain' and job['kind'] == 'skill-config':
+            from carryon.sessions.skill_configuration import recover
+            return recover(self, job)
+        if job['state'] == 'uncertain' and job['kind'] in ('terminal-terminate', 'terminal-clean'):
+            from carryon.sessions.terminals import recover
+            return recover(self, job)
+        if job['state'] == 'uncertain' and job['kind'] in ('section-create', 'section-update', 'section-delete', 'section-order'):
+            from carryon.sessions.section_management import recover
+            return recover(self, job)
+        if job['state'] == 'uncertain' and job['kind'] == 'section-move':
+            from carryon.sessions.sections import recover
+            return recover(self, job)
+        if job['state'] == 'uncertain' and job['kind'] == 'rename':
+            from carryon.sessions.renaming import recover
+            return recover(self, job)
+        if job["state"] == "uncertain" and job['kind'] in ('archive', 'unarchive'):
+            from carryon.sessions.archives import recover
+            return recover(self, job)
+        if job["state"] == "uncertain" and job['kind'] in ('operation:voice-start', 'operation:voice-stop'):
+            from carryon.app_server.realtime_voice import recover
+            job = recover(self, job)
         if job["state"] == "uncertain" and job.get("clientMessageId"):
             job = self._recover_receipt(job)
         return job

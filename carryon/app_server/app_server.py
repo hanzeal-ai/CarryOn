@@ -37,8 +37,8 @@ def thread_settings(result):
 class AppServer:
     protocol = 'codex-app-server'
     supported_settings = sorted(set(SCHEMAS['settings']['properties']) - {'threadId', 'multiAgentMode', 'activePermissionProfile'})
-    supported_operations = {'interrupt', 'steer', 'compact', 'settings', 'edit', 'fork', 'review', 'resume', 'queue-add', 'queue-edit', 'queue-delete', 'queue-reorder', 'queue-resume', 'command-approval', 'file-approval',
-                            'permissions-approval', 'user-input', 'mcp-response', 'goal-set', 'goal-pause', 'goal-clear'}
+    supported_operations = {'archive', 'rename', 'interrupt', 'steer', 'compact', 'settings', 'edit', 'fork', 'side-create', 'review', 'resume', 'queue-add', 'queue-edit', 'queue-delete', 'queue-reorder', 'queue-resume', 'command-approval', 'file-approval',
+                            'permissions-approval', 'user-input', 'mcp-response', 'goal-set', 'goal-pause', 'goal-clear', 'voice-start', 'voice-stop'}
     MAX_FRAME = 32 * 1024 * 1024
 
     def __init__(self, home, *, runtime_directory=None):
@@ -62,6 +62,7 @@ class AppServer:
         self.account_ready = False
         self.queue_locks = weakref.WeakValueDictionary()
         self.review_refreshing = {}
+        self.voice_channels = {}
 
     @property
     def connected(self):
@@ -150,7 +151,7 @@ class AppServer:
             if expected is not None and self.process is not expected: return
             process, self.process = self.process, None
             home_lock, self.home_lock = self.home_lock, None
-            self.snapshots.clear(); self.following.clear(); self.loading.clear(); self.events.clear()
+            self.voice_channels.clear(); self.snapshots.clear(); self.following.clear(); self.loading.clear(); self.events.clear()
             for waiter in self.response_waiters.values():
                 waiter['error'] = '工作区 app-server 已断开；回复是否处理尚未确认'
                 waiter['event'].set()
@@ -224,9 +225,9 @@ class AppServer:
                 goal = value(self.rpc('thread/goal/get', {'threadId': tid}), tid)
                 state = NativeSnapshot({'id': tid, 'title': thread.get('name') or thread.get('preview', ''),
                     'threadMetadata': thread, 'cwd': thread['cwd'], 'turns': turns, 'threadRuntimeStatus': thread['status'], 'requests': [], 'supportedOperations': sorted(self.supported_operations),
-                    'queueBackend': 'app-server', 'supportsSkills': True, 'supportedSettings': self.supported_settings, 'latestThreadSettings': thread_settings(result),
+                    'queueBackend': 'app-server', 'supportsSkills': True, 'supportsMentions': True, 'supportsFileReferences': True, 'supportedSettings': self.supported_settings, 'latestThreadSettings': thread_settings(result),
                     'latestModel': result.get('model'), 'latestReasoningEffort': result.get('reasoningEffort'),
-                    'supportsGoal': True, 'threadGoal': goal, '_goalUnknown': False})
+                    'supportsBackgroundTerminals': True, 'supportsGoal': True, 'threadGoal': goal, '_goalUnknown': False})
                 with self.lock:
                     if not self.connected: raise IPCError('工作区 app-server 已断开')
                     self.snapshots[tid] = state
@@ -283,6 +284,11 @@ class AppServer:
                 'item/permissions/requestApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request'}:
             self._write({'id': event['id'], 'error': {'code': -32601, 'message': 'CarryOn does not support this server request'}})
             return
+        if event['method'].startswith('thread/realtime/'):
+            from carryon.app_server.realtime_voice import event as voice_event
+            with self.lock: changed = voice_event(self, tid, event['method'], params)
+            if changed: self.on_change()
+            return
         with self.lock:
             if tid in self.loading:
                 self.loading[tid].append(event)
@@ -307,7 +313,7 @@ class AppServer:
             thread = params['thread']
             self.snapshots[tid] = NativeSnapshot({'id': tid, 'title': thread.get('name') or thread.get('preview', ''),
                 'cwd': thread['cwd'], 'turns': [native_turn(t) for t in thread.get('turns', [])],
-                'threadRuntimeStatus': thread['status'], 'requests': [], 'queueBackend': 'app-server', 'supportsSkills': True, 'supportsGoal': True, '_goalUnknown': True, 'threadGoal': None, 'supportedSettings': self.supported_settings, 'supportedOperations': sorted(self.supported_operations)})
+                'threadRuntimeStatus': thread['status'], 'requests': [], 'queueBackend': 'app-server', 'supportsSkills': True, 'supportsMentions': True, 'supportsFileReferences': True, 'supportsBackgroundTerminals': True, 'supportsGoal': True, '_goalUnknown': True, 'threadGoal': None, 'supportedSettings': self.supported_settings, 'supportedOperations': sorted(self.supported_operations)})
             self.following[tid] = 'app-server'
             return
         if old is None: return
@@ -333,6 +339,8 @@ class AppServer:
             if params['threadSettings'].get('cwd'):
                 state['cwd'] = params['threadSettings']['cwd']
                 if 'threadMetadata' in state: state['threadMetadata'] = {**state['threadMetadata'], 'cwd': state['cwd']}
+        elif method == 'thread/tokenUsage/updated':
+            state['latestTokenUsageInfo'] = params['tokenUsage']
         elif method == 'thread/queue/changed':
             state.pop('nativeQueue', None)
         elif method == 'turn/diff/updated':
@@ -396,11 +404,12 @@ class AppServer:
             self.record_started(tid, result['turn'])
             return result
 
-    def start(self, tid, text, owner, client_message_id, before_send, images=None, skills=None):
+    def start(self, tid, text, owner, client_message_id, before_send, images=None, skills=None, mentions=None):
         from carryon.sessions.skills import inputs
+        from carryon.sessions.mentions import inputs as mention_inputs
         return self.start_turn(tid, {'threadId': tid, 'clientUserMessageId': client_message_id,
             'input': ([{'type': 'text', 'text': text, 'text_elements': []}] if text else []) +
-                     [{'type': 'image', 'url': url} for url in (images or [])] + inputs(skills)}, before_send)['turn']
+                     [{'type': 'image', 'url': url} for url in (images or [])] + inputs(skills) + mention_inputs(mentions)}, before_send)['turn']
 
     def request(self, method, params, version=0, target=None, before_send=None, timeout_ms=15000):
         tid = params.get('conversationId')

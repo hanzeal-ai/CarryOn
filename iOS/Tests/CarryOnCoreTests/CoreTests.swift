@@ -213,7 +213,7 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     let id = try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body)
     let other = try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body)
     try writes.reconcile(scope: "scope", job: .object(["id": .string(id), "threadId": .string("new-thread"),
-        "state": .string("completed"), "creationProject": .object(["groupId": .string("project-a")])]))
+        "state": .string("completed"), "kind": .string("create"), "createdThreadId": .string("new-thread"), "creationProject": .object(["groupId": .string("project-a")])]))
     #expect(try writes.requestID(scope: "scope", target: "new:project-a", path: "/api/threads", body: body) != id)
     #expect(try writes.requestID(scope: "scope", target: "new:project-b", path: "/api/threads", body: body) == other)
 }
@@ -312,4 +312,48 @@ private final class MemorySessionCredentials: SessionCredentials, @unchecked Sen
     await store.load(scope: "a")
     #expect(store.texts.isEmpty)
     #expect(store.images.isEmpty)
+}
+
+@Test @MainActor func unknownCreationIdentityCannotReleaseThroughJobsSnapshot() throws {
+    let defaults = UserDefaults(suiteName: UUID().uuidString)!
+    let writes = PendingWrites(defaults: defaults)
+    let body: JSONValue = .object(["projectId": .string("project"), "prompt": .string("hello")])
+    let id = try writes.requestID(scope: "scope", target: "new:project", path: "/api/threads", body: body)
+    for state in ["accepted", "completed", "inProgress"] {
+        try writes.reconcile(scope: "scope", job: .object(["id": .string(id), "threadId": .string("new-thread"), "kind": .string("create"), "state": .string(state), "creationProject": .object(["groupId": .string("project")])]))
+        #expect(try writes.requestID(scope: "scope", target: "new:project", path: "/api/threads", body: body) == id)
+    }
+}
+
+@Test @MainActor func archivePendingIdentityRequiresExactTerminalReceipt() throws {
+    let suite = "archive-receipt-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let pending = PendingWrites(defaults: defaults)
+    let id = try pending.requestID(scope: "scope", target: "thread", path: "/api/threads/thread/archive", body: .object([:]))
+    func receipt(_ state: String, _ target: String, _ archived: Bool) -> JSONValue {
+        .object(["id": .string(id), "kind": .string("archive"), "threadId": .string("thread"), "state": .string(state),
+                 "result": .object(["threadId": .string(target), "archived": .bool(archived)])])
+    }
+    for job in [receipt("accepted", "thread", true), receipt("completed", "other", true), receipt("completed", "thread", false)] {
+        try pending.reconcile(scope: "scope", job: job)
+        #expect(try pending.requestID(scope: "scope", target: "thread", path: "/api/threads/thread/archive", body: .object([:])) == id)
+    }
+    try pending.reconcile(scope: "scope", job: receipt("completed", "thread", true))
+    #expect(!pending.hasPending(scope: "scope", target: "thread"))
+}
+
+@Test @MainActor func pendingLookupRestoresExactActionWithoutCreatingOrChangingIdentity() throws {
+    let suite = "CarryOn.Tests." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let pending = PendingWrites(defaults: defaults)
+    let path = "/api/threads/t/archive"
+    #expect(try pending.existingRequestID(scope: "one", target: "t", path: path, body: .object([:])) == nil)
+    #expect(!pending.hasPending(scope: "one", target: "t"))
+    let id = try pending.requestID(scope: "one", target: "t", path: path, body: .object([:]))
+    let reopened = PendingWrites(defaults: defaults)
+    #expect(try reopened.existingRequestID(scope: "one", target: "t", path: path, body: .object([:])) == id)
+    #expect(try reopened.existingRequestID(scope: "two", target: "t", path: path, body: .object([:])) == nil)
+    #expect(try reopened.existingRequestID(scope: "one", target: "t", path: "/api/threads/t/unarchive", body: .object([:])) == nil)
 }

@@ -24,19 +24,28 @@ import Testing
     for (capability, actions) in operations {
         for action in actions {
             for prefix in ["/api/threads/t", "/api/side-chats/s"] {
-                #expect(WorkspaceCapability.request(path: prefix + "/operations", body: .object(["action": .string(action)])) == capability)
+                #expect(WorkspaceCapability.request(path: prefix + "/operations", body: .object(["action": .string(action)])) == [capability])
             }
         }
     }
-    #expect(WorkspaceCapability.request(path: "/api/threads", body: .object([:])) == .create)
-    #expect(WorkspaceCapability.request(path: "/api/threads/t/fork", body: .object(["lastTurnId": .string("turn")])) == .create)
-    #expect(WorkspaceCapability.request(path: "/api/threads/t/compose", body: .object([:])) == .send)
-    #expect(WorkspaceCapability.request(path: "/api/jobs/j/acknowledge", body: .object([:])) == .send)
-    #expect(WorkspaceCapability.request(path: "/api/streams/s/read", body: .object([:])) == .view)
-    #expect(WorkspaceCapability.request(path: "/api/notifications/token", body: .object([:])) == .view)
-    #expect(WorkspaceCapability.request(path: "/api/threads/t/history") == .view)
-    #expect(WorkspaceCapability.request(path: "/api/threads/t/images/i?parentId=p") == .files)
-    #expect(WorkspaceCapability.request(path: "/api/side-chats/t/artifacts/a") == .files)
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/archive", body: .object([:])) == [.edit])
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/unarchive", body: .object([:])) == [.edit])
+    #expect(WorkspaceCapability.request(path: "/api/threads", body: .object([:])) == [.create])
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/fork", body: .object(["lastTurnId": .string("turn")])) == [.create])
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/compose", body: .object([:])) == [.send])
+    #expect(WorkspaceCapability.request(path: "/api/jobs/j/acknowledge", body: .object([:])) == [.send])
+    #expect(WorkspaceCapability.request(path: "/api/streams/s/read", body: .object([:])) == [.view])
+    #expect(WorkspaceCapability.request(path: "/api/notifications/token", body: .object([:])) == [.view])
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/history") == [.view])
+    #expect(WorkspaceCapability.request(path: "/api/threads/t/images/i?parentId=p") == [.files])
+    #expect(WorkspaceCapability.request(path: "/api/side-chats/t/artifacts/a") == [.files])
     #expect(WorkspaceCapability.request(path: "/api/threads/t/operations", body: .object(["action": .string("unknown")])) == nil)
     #expect(WorkspaceCapability.request(path: "/api/unknown", body: .object([:])) == nil)
+}
+
+
+@Test func advancedCreationRequiresCreateAndEditEvenForNullSettings() {
+    #expect(WorkspaceCapability.request(path: "/api/threads", body: .object(["settings": .object(["model": .string("fixture"), "effort": .string("high")])])) == [.create])
+    #expect(WorkspaceCapability.request(path: "/api/threads", body: .object(["settings": .object(["approvalPolicy": .null])])) == [.create, .edit])
+    #expect(WorkspaceCapability.request(path: "/api/threads", body: .object(["settings": .object(["collaborationMode": .null])])) == [.create, .edit])
 }

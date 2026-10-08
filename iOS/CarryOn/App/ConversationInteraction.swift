@@ -39,9 +39,9 @@ extension AppModel {
         if !canPerform(target) { return "会话尚未就绪，请等待同步后重试" }
         return nil
     }
-    @discardableResult func perform(_ action: String, target: ConversationActionTarget, fields: [String: JSONValue] = [:]) async -> Bool {
+    @discardableResult func perform(_ action: String, target: ConversationActionTarget, fields: [String: JSONValue] = [:], authoredDraft: ConversationDraft? = nil) async -> Bool {
         guard canPerform(target, action: action) else { error = interactionUnavailableReason(target, capability: WorkspaceCapability.operation(action) ?? .view) ?? "当前操作不可用，请刷新会话后重试"; return false }
-        let accepted = await write(path: target.path("operations"), target: target.threadID, body: target.body(fields.merging(["action": .string(action)]) { _, new in new }))
+        let accepted = await write(path: target.path("operations"), target: target.threadID, body: target.body(fields.merging(["action": .string(action)]) { _, new in new }), authoredDraft: authoredDraft)
         if accepted && target.isActivity {
             do { try await loadActivity(target) } catch { report(error, operation: "刷新动态详情", blocking: false) }
         }

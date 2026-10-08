@@ -6,6 +6,8 @@ import CarryOnCore
 struct MessageMarkdown: View {
     @Environment(AppModel.self) private var model
     @Environment(\.preparedMessageMarkdown) private var prepared
+    @Environment(\.askInSideChat) private var askInSide
+    @Environment(\.editConversationMessage) private var editMessage
     let text: String
     @ScaledMetric(relativeTo: .body) private var bodySize = 17
     var artifacts: [JSONValue] = []
@@ -34,6 +36,12 @@ struct MessageMarkdown: View {
             .markdownInlineImageProvider(AttachmentInlineImageProvider())
             .markdownTextStyle { FontSize(bodySize); ForegroundColor(Design.ink) }
             .markdownTextStyle(\.link) { ForegroundColor(Design.link) }
+            .markdownBlockStyle(\.paragraph) { configuration in
+                if (askInSide != nil || editMessage != nil), !configuration.content.renderMarkdown().contains("![") {
+                    SelectableMarkdownParagraph(markdown: configuration.content.renderMarkdown(), fontSize: bodySize, askInSide: askInSide, editMessage: editMessage)
+                        .markdownMargin(top: 0, bottom: 8)
+                } else { configuration.label.markdownMargin(top: 0, bottom: 8) }
+            }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 CodeBlockView(code: configuration.content, language: configuration.language)
                     .markdownMargin(top: 8, bottom: 8)
@@ -79,6 +87,109 @@ struct MessageMarkdown: View {
             let result = await MessageMarkdownParser.shared.render(request)
             if generation == version { parsed = result }
         }
+    }
+}
+
+private struct EditConversationMessageKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable () -> Void)? = nil
+}
+extension EnvironmentValues {
+    var editConversationMessage: (@MainActor @Sendable () -> Void)? {
+        get { self[EditConversationMessageKey.self] }
+        set { self[EditConversationMessageKey.self] = newValue }
+    }
+}
+
+private struct AskInSideChatKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable (String) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var askInSideChat: (@MainActor @Sendable (String) -> Void)? {
+        get { self[AskInSideChatKey.self] }
+        set { self[AskInSideChatKey.self] = newValue }
+    }
+}
+
+/// Public TextKit selection menus, embedded in MarkdownUI's paragraph layout.
+private struct SelectableMarkdownParagraph: UIViewRepresentable {
+    let markdown: String
+    let fontSize: CGFloat
+    let askInSide: (@MainActor @Sendable (String) -> Void)?
+    let editMessage: (@MainActor @Sendable () -> Void)?
+    @Environment(\.conversationSelectionChanged) private var selectionChanged
+    @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: SelectableMarkdownParagraph
+        var renderedKey = ""
+        var measurements: [(width: CGFloat, height: CGFloat)] = []
+        func measuredHeight(for width: CGFloat, in view: UITextView) -> CGFloat {
+            if let measurement = measurements.first(where: { $0.width == width }) { return measurement.height }
+            let height = ceil(view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+            if measurements.count == 2 { measurements.removeFirst() }
+            measurements.append((width, height))
+            return height
+        }
+        var updatingSelection = false
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            if !updatingSelection { parent.selectionChanged?(textView) }
+        }
+        func textViewDidEndEditing(_ textView: UITextView) {
+            if !updatingSelection { parent.selectionChanged?(textView) }
+        }
+        init(_ parent: SelectableMarkdownParagraph) { self.parent = parent }
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard range.length > 0, range.location >= 0, NSMaxRange(range) <= (textView.text as NSString).length else { return UIMenu(children: suggestedActions) }
+            let selected = (textView.text as NSString).substring(with: range)
+            var actions: [UIMenuElement] = []
+            if parent.askInSide != nil { actions.append(UIAction(title: "在临时聊天中提问", image: UIImage(systemName: "bubble.left.and.bubble.right")) { [weak self] _ in self?.parent.askInSide?(selected) }) }
+            if parent.editMessage != nil { actions.append(UIAction(title: "编辑消息", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.parent.editMessage?() }) }
+            return UIMenu(children: actions + suggestedActions)
+        }
+        func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
+            guard case let .link(url) = textItem.content else { return defaultAction }
+            return UIAction { [weak self] _ in self?.parent.openURL(url) }
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.delegate = context.coordinator
+        view.isEditable = false; view.isSelectable = true; view.isScrollEnabled = false
+        view.backgroundColor = .clear; view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.parent = self
+        let key = markdown + String(describing: fontSize) + String(colorScheme == .dark)
+        guard context.coordinator.renderedKey != key else { return }
+        context.coordinator.renderedKey = key
+        context.coordinator.measurements.removeAll(keepingCapacity: true)
+        var value = (try? AttributedString(markdown: markdown.trimmingCharacters(in: .newlines), options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(markdown)
+        for run in value.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            var font = intent.contains(.code) ? UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular) : UIFont.systemFont(ofSize: fontSize)
+            var traits = font.fontDescriptor.symbolicTraits
+            if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
+            if intent.contains(.emphasized) { traits.insert(.traitItalic) }
+            if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: fontSize) }
+            if intent.contains(.strikethrough) { value[run.range].strikethroughStyle = .single }
+            value[run.range].font = font
+            value[run.range].foregroundColor = UIColor(Design.ink)
+        }
+        let oldText = view.text ?? "", selection = view.selectedRange
+        let preserveSelection = view.isFirstResponder && selection.length > 0 && !oldText.isEmpty && String(value.characters).hasPrefix(oldText)
+        context.coordinator.updatingSelection = true
+        defer { context.coordinator.updatingSelection = false }
+        view.linkTextAttributes = [.foregroundColor: UIColor(Design.link)]
+        view.attributedText = NSAttributedString(value)
+        if preserveSelection, NSMaxRange(selection) <= (view.text as NSString).length { view.selectedRange = selection }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        return CGSize(width: width, height: context.coordinator.measuredHeight(for: width, in: uiView))
     }
 }
 
@@ -164,18 +275,60 @@ struct CodeBlockView: View {
     }
 }
 
-private actor CodeHighlight {
+actor CodeHighlight {
     static let shared = CodeHighlight()
     private let engine: Highlightr? = {
         let engine = Highlightr()
-        engine?.setTheme(to: "github")
+        // This theme avoids descendant selectors the library flattens out of order.
+        engine?.setTheme(to: "github-gist")
         return engine
     }()
+    private var themeName = "github-gist"
     func render(_ code: String, language: String, dark: Bool) -> AttributedString? {
-        engine?.setTheme(to: dark ? "atom-one-dark" : "github")
+        let desired = dark ? "atom-one-dark" : "github-gist"
+        if desired != themeName, engine?.setTheme(to: desired) == true { themeName = desired }
         guard code.utf8.count <= CodeDocument.highlightLimit, language != "plaintext",
               let result = engine?.highlight(code, as: language, fastRender: true) else { return nil }
         return try? AttributedString(result, including: \.uiKit)
+    }
+    func diff(_ patch: String, language: String, dark: Bool) -> [Int: AttributedString] {
+        guard patch.utf8.count <= CodeDocument.highlightLimit else { return [:] }
+        let previous = engine?.ignoreIllegals ?? false
+        engine?.ignoreIllegals = true
+        defer { engine?.ignoreIllegals = previous }
+        var rows: [Int: AttributedString] = [:], group: [UnifiedDiff.Line] = []
+        var groups = 0
+        func flush() {
+            guard !group.isEmpty else { return }
+            defer { group.removeAll(keepingCapacity: true) }
+            groups += 1
+            guard groups <= 128 else { return }
+            for removed in [true, false] {
+                let side = group.filter { removed ? $0.kind != .added : $0.kind != .removed }
+                guard !side.isEmpty else { continue }
+                let source = side.map { String($0.text.dropFirst()) }.joined(separator: "\n")
+                guard var colored = render(source, language: language, dark: dark), String(colored.characters) == source else { continue }
+                // Typography and diff signs remain owned by the view; only source receives token colors.
+                colored.uiKit.font = nil; colored.uiKit.paragraphStyle = nil; colored.uiKit.backgroundColor = nil
+                var tokens: [AttributedString] = [], start = colored.startIndex
+                for position in colored.characters.indices where colored.characters[position] == "\n" {
+                    tokens.append(AttributedString(colored[start..<position])); start = colored.characters.index(after: position)
+                }
+                tokens.append(AttributedString(colored[start..<colored.endIndex]))
+                guard tokens.count == side.count else { continue }
+                for (index, line) in side.enumerated() where (line.kind == .removed) == removed {
+                    let value = AttributedString(String(line.text.prefix(1))) + tokens[index]
+                    if String(value.characters) == line.text { rows[line.id] = value }
+                }
+            }
+        }
+        for line in UnifiedDiff.lines(patch) {
+            if line.kind == .header {
+                if !line.text.hasPrefix("\\ No newline") { flush() }
+            } else { group.append(line) }
+        }
+        flush()
+        return rows
     }
 }
 
@@ -217,6 +370,8 @@ struct CodeFilePreview: View {
 
 struct MessageTextSelectionView: View {
     let text: String
+    var askInSide: ((String) -> Void)? = nil
+    @State private var selectedText = ""
     @Environment(\.dismiss) private var dismiss
 
     static func plainText(_ text: String, resolveCreatedThreads: Bool) -> String {
@@ -226,10 +381,15 @@ struct MessageTextSelectionView: View {
 
     var body: some View {
         NavigationStack {
-            SourceTextView(text: AttributedString(text), font: .preferredFont(forTextStyle: .body))
+            SourceTextView(text: AttributedString(text), font: .preferredFont(forTextStyle: .body), selection: $selectedText, askInSide: askInSide)
                 .navigationTitle("选择文字").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                    if let askInSide {
+                        ToolbarItem(placement: .bottomBar) {
+                            Button("在临时聊天中提问") { askInSide(selectedText); dismiss() }.disabled(selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
                 }
         }
     }
@@ -240,8 +400,26 @@ private struct SourceTextView: UIViewRepresentable {
     let text: AttributedString
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var font: UIFont? = nil
+    var selection: Binding<String>? = nil
+    var askInSide: ((String) -> Void)? = nil
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var selection: Binding<String>?
+        var askInSide: ((String) -> Void)?
+        init(selection: Binding<String>?, askInSide: ((String) -> Void)?) { self.selection = selection; self.askInSide = askInSide }
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard let askInSide, range.length > 0, NSMaxRange(range) <= (textView.text as NSString).length else { return UIMenu(children: suggestedActions) }
+            let selected = (textView.text as NSString).substring(with: range)
+            return UIMenu(children: [UIAction(title: "在临时聊天中提问", image: UIImage(systemName: "bubble.left.and.bubble.right")) { _ in askInSide(selected) }] + suggestedActions)
+        }
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard let range = textView.selectedTextRange else { selection?.wrappedValue = ""; return }
+            selection?.wrappedValue = textView.text(in: range) ?? ""
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(selection: selection, askInSide: askInSide) }
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
+        view.delegate = context.coordinator
         view.textColor = .label
         view.isEditable = false
         view.isSelectable = true
@@ -251,6 +429,8 @@ private struct SourceTextView: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.selection = selection
+        context.coordinator.askInSide = askInSide
         let result = NSMutableAttributedString(text)
         let fullRange = NSRange(location: 0, length: result.length)
         let scaledFont = font ?? UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .monospacedSystemFont(ofSize: 13, weight: .regular))

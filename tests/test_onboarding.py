@@ -8,7 +8,7 @@ from unittest.mock import patch
 from test_console_auth import AccountTests
 from carryon.cloud.console_auth import ConsoleAuth
 from carryon.accounts.onboarding import exchange
-from carryon.workspaces.workspace_access import capability, require
+from carryon.workspaces.workspace_access import required_capabilities, require
 
 
 class BindingTests(AccountTests):
@@ -250,8 +250,8 @@ class InitializationTests(unittest.TestCase):
             self.assertEqual(json.loads((root/'onboarding.json').read_text())['state'], 'configured')
 
     def test_unknown_operations_fail_closed(self):
-        with self.assertRaises(PermissionError): capability('POST','/api/threads/id/operations',{'action':'unknown'})
-        self.assertEqual(capability('GET','/api/threads/id/artifacts/hash'),'files')
+        with self.assertRaises(PermissionError): required_capabilities('POST','/api/threads/id/operations',{'action':'unknown'})
+        self.assertEqual(required_capabilities('GET','/api/threads/id/artifacts/hash'),('files',))
 
 
 class OnboardingRequestErrorTests(unittest.TestCase):

@@ -10,7 +10,7 @@ from carryon.desktop_ipc.ipc import IPCError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.operations import submit, controls, build
 from carryon.store import Journal
-from carryon.workspaces.workspace_access import capability
+from carryon.workspaces.workspace_access import required_capabilities
 
 T = '11111111-1111-4111-8111-111111111111'
 
@@ -42,7 +42,7 @@ class NativeReviewTests(unittest.TestCase):
         self.assertEqual((job['state'], job['turnId'], job['reviewThreadId']), ('completed', 'review-turn', T))
         self.assertEqual(self.writes, [('review/start', {'threadId': T, 'delivery': 'inline', 'target': self.data['target']})])
         self.assertEqual(submit(self.bridge, T, self.data), job); self.assertEqual(len(self.writes), 1)
-        self.assertEqual(capability('POST', '/api/threads/' + T + '/operations', self.data), 'send')
+        self.assertEqual(required_capabilities('POST', '/api/threads/' + T + '/operations', self.data), ('send',))
 
     def test_unknown_or_wrong_identity_blocks_replay_and_release(self):
         self.error = IPCError('lost', uncertain=True)

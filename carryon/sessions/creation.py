@@ -29,14 +29,17 @@ def resolve_project(catalog, project_id):
     return project
 
 
-def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, images=None, settings=None):
+def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, images=None, settings=None, skills=None, mentions=None):
     from carryon.sessions.images import validate_images
     images = validate_images(images)
     from carryon.sessions.creation_settings import validate
     settings = validate(settings)
-    prompt = text(prompt, allow_empty=bool(images))
+    from carryon.sessions.skills import selections as skill_selections
+    from carryon.sessions.mentions import selections as mention_selections
+    skills, mentions = skill_selections(skills), mention_selections(mentions)
+    prompt = text(prompt, allow_empty=bool(images or skills or mentions))
     validate_request_id(request_id)
-    fingerprint = digest(['owner-create', project_id, prompt, images, settings])
+    fingerprint = digest(['owner-create', project_id, prompt, images, settings, skills, mentions])
     ipc, generation = bridge.require()
     with bridge.lock:
         bridge.check_generation(ipc, generation)
@@ -50,7 +53,7 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, 
         service = bridge.owners()
         job = {'id': request_id, 'kind': 'create', 'threadId': '', 'state': 'preparing',
                'created': time.time(), 'fingerprint': fingerprint, 'creationProject': project,
-               'clientMessageId': str(uuid.uuid4()), 'creationSettings': settings, **(source or {})}
+               'clientMessageId': str(uuid.uuid4()), 'creationSettings': settings, 'skills': skills, 'mentions': mentions, **(source or {})}
         bridge.journal.insert(job)
     threading.Thread(target=dispatch, args=(bridge, ipc, generation, service, job, prompt, authorize, images),
                      daemon=True, name='owner-create').start()
@@ -104,7 +107,7 @@ def dispatch(bridge, ipc, generation, service, job, prompt, authorize, images=No
         check()
         discovered, _ = ipc.snapshot(tid)
         if discovered != owner: raise IPCError('创建后的会话 owner 已改变，未投递任务')
-        turn = ipc.start(tid, prompt, owner, job['clientMessageId'], turn_write, images=images)
+        turn = ipc.start(tid, prompt, owner, job['clientMessageId'], turn_write, images=images, **({'skills': job['skills']} if job.get('skills') else {}), **({'mentions': job['mentions']} if job.get('mentions') else {}))
         bridge.journal.update(job['id'], state='completed', turnId=turn['id'],
                               evidence='app-server-create-owner-start')
         bridge.notify()

@@ -9,3 +9,17 @@
 .skill-chips:empty{display:none}
 .skill-chips button,.skill-chips .skill-chip{flex-shrink:0;border:0;border-radius:999px;background:#edf3ff;color:#326cce;padding:8px 12px;font:inherit;font-size:13px}
 @media(prefers-color-scheme:dark){.skill-option[aria-pressed=true],.skill-chips button,.skill-chips .skill-chip{background:#172c46;color:#8ebaff}}
+carryon-composer{display:block;white-space:pre-wrap;overflow-wrap:anywhere;min-height:1.5em;max-height:10em;overflow-y:auto;outline:none;font:inherit;line-height:1.5;color:inherit;cursor:text}
+carryon-composer > [contenteditable]:empty::before{content:attr(data-placeholder);color:var(--subtle,#777);pointer-events:none}
+carryon-composer[disabled]{cursor:default;opacity:.65}
+.inline-reference{color:#2f89e7;white-space:nowrap;border-radius:4px}
+
+carryon-composer > [contenteditable]{min-height:1.5em;outline:none;}
+
+.inline-reference svg,.inline-reference img{display:inline-block;width:1em;height:1em;margin-right:.3em;vertical-align:-.12em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+.reference-title{display:flex;align-items:center;gap:10px}.reference-title img,.reference-title svg{width:24px;height:24px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+.project-files-picker button{min-height:44px;min-width:44px}
+.project-files-picker .skill-option{overflow-wrap:anywhere}
+#file-references button{min-height:44px}

@@ -9,6 +9,7 @@ import CarryOnCore
 
 @MainActor final class ConversationReadingState {
     let disclosure = ConversationDisclosureState()
+    var visiblePosition: (id: String, offset: CGFloat)?
     var offset: CGFloat = 0
     var anchorID: String?
     var visibleCount = 120
@@ -42,10 +43,11 @@ struct OutgoingMessageStatusView: View {
     let dismiss: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !item["prompt"].text.isEmpty || item["skills"].array.isEmpty {
+            if !item["prompt"].text.isEmpty || (item["skills"].array + item["mentions"].array + item["files"].array).isEmpty {
                 Text(item["prompt"].text.isEmpty ? "图片消息" : OutgoingMessageProjection.displayText(item["prompt"].text)).textSelection(.enabled)
             }
-            MessageSkillReferences(skills: item["skills"].array)
+            MessageComposerReferences(skills: item["skills"].array + item["mentions"].array)
+            ForEach(item["files"].array, id: \.stableID) { file in Label(file["name"].text, systemImage: "doc").font(.subheadline) }
             if !["sending", "preparing", "dispatching"].contains(item["state"].text) {
                 let labels = ["failed": "发送失败，请核对请求记录", "uncertain": "结果待核对，请勿重复发送"]
                 Text(labels[item["state"].text] ?? (item["kind"].text == "operation:queue-add" ? "已排队，等待同步" : "已接收，等待同步")).font(.caption).foregroundStyle(Design.secondary)
@@ -66,9 +68,12 @@ struct CarryOnChatComposer<Accessories: View>: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
+    var skills: Binding<[ComposerReference]>? = nil
+    var selection: Binding<Int>? = nil
     var disabled = false
     var draftEditable = true
     var sendAllowed = true
+    var commandInputAllowed = false
     var stopAllowed = true
     var hasImages = false
     var stopping = false
@@ -85,10 +90,21 @@ struct CarryOnChatComposer<Accessories: View>: View {
     private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : sendLabel ?? (stopping ? "补充到当前任务" : "发送") }
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            TextField(stopping ? "补充要求…" : placeholder, text: $text, axis: .vertical)
-                .font(.body).lineLimit(1...6).fixedSize(horizontal: false, vertical: true).disabled(!draftEditable || !sendAllowed)
-                .foregroundStyle(theme.colors.inputText).tint(Design.composerAccent)
-                .padding(.horizontal, 12).padding(.top, 10)
+            Group {
+                if let skills {
+                    ZStack(alignment: .topLeading) {
+                        if text.isEmpty && skills.wrappedValue.isEmpty {
+                            Text(stopping ? "补充要求…" : placeholder).foregroundStyle(.tertiary).allowsHitTesting(false)
+                        }
+                        InlineSkillEditor(text: $text, skills: skills, selection: selection ?? .constant(0), editable: draftEditable && (sendAllowed || commandInputAllowed),
+                                          placeholder: stopping ? "补充要求…" : placeholder)
+                    }
+                } else {
+                    TextField(stopping ? "补充要求…" : placeholder, text: $text, axis: .vertical)
+                        .lineLimit(1...6).fixedSize(horizontal: false, vertical: true).disabled(!draftEditable || !(sendAllowed || commandInputAllowed))
+                }
+            }.font(Font(ComposerTypography.font)).lineSpacing(ComposerTypography.lineSpacing).foregroundStyle(theme.colors.inputText).tint(Design.composerAccent)
+                .padding(.horizontal, 12).padding(.top, 13).padding(.bottom, 7)
             HStack(alignment: .center, spacing: 0) {
                 accessories.foregroundStyle(theme.colors.mainTint)
                 if action == .send, stopping, let stop {
@@ -144,5 +160,13 @@ extension EnvironmentValues {
     var conversationContentContext: ConversationContentContext {
         get { self[ConversationContentContextKey.self] }
         set { self[ConversationContentContextKey.self] = newValue }
+    }
+}
+
+// The Side-chat ChatView still consumes its library menu protocol.
+extension CarryOnMessageAction: MessageMenuAction {
+    static func menuItems(for message: ExyteChat.Message) -> [Self] {
+        guard let item = message.customData["entry"] as? JSONValue else { return [] }
+        return menuItems(forType: item["type"].text, canEdit: message.customData["canEdit"] as? Bool == true)
     }
 }

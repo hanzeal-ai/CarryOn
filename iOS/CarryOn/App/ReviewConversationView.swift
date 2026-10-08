@@ -5,7 +5,9 @@ struct ReviewConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let target: ConversationActionTarget
+    var initialInstructions = ""
     var completed: () -> Void
+    @State private var initialized = false
     @State private var kind = "uncommittedChanges"
     @State private var branch = ""
     @State private var commit = ""
@@ -52,6 +54,7 @@ struct ReviewConversationView: View {
                     }
                 }
         }.interactiveDismissDisabled(sending)
+            .onAppear { if !initialized { initialized = true; if !initialInstructions.isEmpty { kind = "custom"; instructions = initialInstructions } } }
     }
     private func start() async {
         guard ready, valid, !sending else { return }

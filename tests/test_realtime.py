@@ -74,6 +74,7 @@ class FakeBridge:
         self.lock = threading.RLock()
         self.enabled = True
         self.realtime = None
+        self.native_sides = {}
         self.text = 'a'
         self.ipc = FakeIPC()
         self.journal = SimpleNamespace(list=lambda limit=None: [])
@@ -99,6 +100,15 @@ class StatusSchedulingTests(unittest.TestCase):
         self.session=Subscription(self.realtime);self.realtime.sessions.add(self.session)
         self.ids=[f'00000000-0000-4000-8000-{n:012d}' for n in range(47)]
         self.realtime.watched={tid:self.bridge.ipc for tid in self.ids}
+
+    def test_both_persisted_sources_keep_fast_history_refresh(self):
+        from unittest.mock import Mock
+        self.session.selection['threadId'] = self.ids[0]
+        for source in ('local-rollout', 'native-persisted', 'desktop-snapshot'):
+            with self.subTest(source=source):
+                self.bridge.history = Mock(return_value={'thread': {'id': self.ids[0]}, 'source': source, 'timeline': []})
+                self.session.update()
+                self.assertEqual(self.session.persisted_history, source != 'desktop-snapshot')
 
     def test_slow_router_misses_cannot_starve_tail_running_conversation(self):
         from unittest.mock import patch

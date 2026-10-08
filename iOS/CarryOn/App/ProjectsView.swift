@@ -13,12 +13,16 @@ struct ProjectsView: View {
     @State private var threadSearch = RecordListState()
     @State private var browsingProjects = false
     @State private var browsingThreads = false
+    @State private var browsingArchives = false
+    @State private var searchingContent = false
+    @State private var browsingSections = false
     var body: some View {
         @Bindable var model = model
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4)
+                Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4).padding(.bottom, 5)
+                if model.status["supportsThreadSections"].bool == true { PinnedThreadsSummary { browsingSections = true } }
                 VStack(alignment: .leading, spacing: 8) {
                     homeHeading("项目", more: listState.records.count > 5) { browsingProjects = true }
                     VStack(spacing: 0) {
@@ -67,10 +71,16 @@ struct ProjectsView: View {
                         Button { creating = true } label: { Label("新建会话", systemImage: "square.and.pencil") }.disabled(!model.canWrite(.create))
                         Button { choosingWorkspace = true } label: { Label("切换工作区", systemImage: "desktopcomputer") }
                         Button { browsingProjects = true } label: { Label("全部项目", systemImage: "folder") }
+                        if model.status["supportsThreadSections"].bool == true { Button { browsingSections = true } label: { Label("分组", systemImage: "folder") } }
+                        Button { browsingArchives = true } label: { Label("已归档", systemImage: "archivebox") }
                         Button { browsingThreads = true } label: { Label("搜索会话", systemImage: "magnifyingglass") }
+                        if model.status["supportsFullTextSearch"].bool == true { Button { searchingContent = true } label: { Label("搜索会话内容", systemImage: "text.magnifyingglass") } }
                     } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }.accessibilityLabel("更多操作")
                 }
             }
+            .sheet(isPresented: $browsingSections) { NativeSectionsView() }
+            .sheet(isPresented: $browsingArchives) { ArchivedThreadsView() }
+            .sheet(isPresented: $searchingContent) { ConversationSearchView() }
             .sheet(isPresented: $browsingProjects) {
                 NavigationStack {
                     RecordListView(path: "/api/projects", key: "projects", isProjectList: true, state: projectSearch) { record in browsingProjects = false; model.selectedProject = record }

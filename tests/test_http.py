@@ -49,6 +49,18 @@ class HTTPTests(unittest.TestCase):
         self.assertNotIn(self.server.token.encode(),body)
         self.assertEqual(self.request('/.runtime/token')[0],401)
 
+    def test_highlighter_worker_engine_and_license_are_public_assets(self):
+        for name, mime in [('code-highlight-worker.js', 'text/javascript'),
+                           ('highlight-engine.js', 'text/javascript'),
+                           ('highlight-engine.LICENSE', 'text/plain')]:
+            with self.subTest(name=name):
+                status, body, headers = self.request('/' + name)
+                self.assertEqual(status, 200)
+                self.assertTrue(headers['Content-Type'].startswith(mime))
+                self.assertTrue(body)
+                if name.endswith('LICENSE'):
+                    self.assertIn(b'Redistribution and use', body)
+
     def test_every_page_asset_is_served_without_authentication(self):
         scripts = []
         styles = []

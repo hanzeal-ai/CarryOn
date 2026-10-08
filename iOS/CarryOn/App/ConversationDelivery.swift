@@ -1,29 +1,36 @@
 import Foundation
 import CarryOnCore
 
+private let draftDeliveryKinds: Set<String> = ["compose", "message", "operation:queue-add", "operation:steer"]
+
 // AppModel owns state; this boundary owns request identity and delivery reconciliation.
 extension AppModel {
-    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false, onCompletion: ((JSONValue) -> Void)? = nil) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false, authoredDraft: ConversationDraft? = nil, onCompletion: ((JSONValue) -> Void)? = nil) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
-        if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !path.hasSuffix("/session") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
+        // Persisted section membership does not load or execute the conversation.
+        if target == selectedThread?.id && (conversationReadOnly || (!path.hasSuffix("/compose") && !path.hasSuffix("/session") && !path.hasSuffix("/section") && !canInteract)) { error = conversationReadOnly ? "此子会话为只读" : "会话尚未就绪"; return false }
         let version = epoch, capturedScope = scope
         var requestID: String?
         writing = true; defer { writing = false }
         do {
             let id = try pending.requestID(scope: capturedScope, target: target, path: path, body: body)
             requestID = id
+            if let authoredDraft {
+                if draftStore.submissions[id] == nil { draftStore.submissions[id] = DraftSubmission(scope: capturedScope, threadID: target, draft: authoredDraft) }
+                draftStore.save()
+            }
             let composing = path.hasSuffix("/compose")
             if composing {
                 outgoing[id] = .object(["id": .string(id), "threadId": .string(target), "scope": .string(capturedScope),
-                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "skills": body["skills"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
+                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "skills": body["skills"], "mentions": body["mentions"], "files": body["files"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
                 historyRevision += 1
             }
             var result: JSONValue
             do { result = try await deviceRequest(path, body: body.setting("requestId", .string(id))) }
             catch {
                 let rejected = (error as? APIError)?.isWriteRejection == true
-                if rejected { try pending.resolve(scope: capturedScope, target: target, requestID: id) }
+                if rejected { draftStore.submissions.removeValue(forKey: id); draftStore.save(); try pending.resolve(scope: capturedScope, target: target, requestID: id) }
                 if composing, version == epoch, let item = outgoing[id] {
                     outgoing[id] = OutgoingMessageProjection.merge(item, .object(["state": .string(rejected ? "failed" : "uncertain")]))
                 }
@@ -43,12 +50,51 @@ extension AppModel {
                 if composing, version == epoch { mergeOutgoing(.object(["id": .string(id), "state": .string("uncertain")])) }
                 throw error
             }
+            if authoredDraft != nil, result["id"].text != id || result["threadId"].text != target {
+                throw APIError("发送凭证身份不匹配，草稿与原请求已保留，请核对请求记录")
+            }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }
             guard version == epoch else { return false }
+            if path.hasSuffix("/archive") || path.hasSuffix("/unarchive") || path.hasSuffix("/rename") || path.hasSuffix("/section"),
+               result["id"].text != id || result["threadId"].text != target {
+                throw APIError("会话管理凭证身份不匹配，原请求已保留")
+            }
             let state = result["state"].text
+            if path.hasSuffix("/rename"), result["kind"].text != "rename" || result["name"] != body["name"] {
+                throw APIError("重命名内容身份不匹配，原请求已保留")
+            }
+            if path.hasSuffix("/section"), result["kind"].text != "section-move" || result.object?.keys.contains("sectionId") != true || result["sectionId"] != body["sectionId"] {
+                throw APIError("分组凭证或内容身份不匹配，原请求已保留")
+            }
+            if path.hasSuffix("/section"), ["completed", "accepted", "inProgress"].contains(state),
+               state != "completed" || result["result"]["threadId"].text != target || result["result"].object?.keys.contains("sectionId") != true || result["result"]["sectionId"] != body["sectionId"] {
+                throw APIError("分组移动尚未确认，原请求已保留")
+            }
+            if path.hasSuffix("/rename"), ["completed", "accepted", "inProgress"].contains(state),
+               state != "completed" || result["result"]["threadId"].text != target || result["result"]["name"] != body["name"] {
+                throw APIError("名称尚未确认，请核对原请求")
+            }
+            if path == "/api/threads", ["completed", "accepted", "inProgress"].contains(state), result["createdThreadId"].string?.isEmpty != false {
+                throw APIError("新会话身份尚未确认，请在请求记录中核对")
+            }
+            if path.hasSuffix("/archive") || path.hasSuffix("/unarchive"), ["completed", "accepted", "inProgress"].contains(state) {
+                guard state == "completed", result["id"].text == id, result["threadId"].text == target,
+                      result["result"]["threadId"].text == target,
+                      result["result"]["archived"].bool == path.hasSuffix("/archive") else {
+                    throw APIError("归档状态尚未确认，请核对原请求")
+                }
+            }
             if path.hasSuffix("/fork"), ["completed", "accepted", "inProgress"].contains(state),
                state != "completed" || result["createdThreadId"].string?.isEmpty != false {
                 throw APIError("尚未确认分叉会话，请在请求记录中核对")
+            }
+            if path.hasSuffix("/side-chats"), ["completed", "accepted", "inProgress"].contains(state),
+               state != "completed" || result["parentId"].text != target || result["createdThreadId"].string?.isEmpty != false {
+                throw APIError("临时聊天身份尚未确认，请核对原请求")
+            }
+            if path.hasPrefix("/api/side-chats/"), path.hasSuffix("/close"),
+               state != "completed" || result["result"]["closed"].bool != true || result["result"]["threadId"].text != target {
+                throw APIError("临时聊天尚未确认结束，请核对原请求")
             }
             if body["action"].text == "review", ["accepted", "inProgress", "completed"].contains(state),
                state != "completed" || result["reviewThreadId"].text != target || result["turnId"].string?.isEmpty != false {
@@ -61,14 +107,17 @@ extension AppModel {
                         (body["action"].text != "goal-pause" || result["result"]["goal"]["status"].text == "paused"))
                 guard confirmed else { throw APIError("尚未确认目标变更，请在请求记录中核对") }
             }
-            try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
+            draftStore.reconcileSubmission(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target)))
+            let draftDurable = authoredDraft == nil ? true : await draftStore.flush()
+            guard version == epoch, capturedScope == scope else { return false }
+            if draftDurable { try pending.reconcile(scope: capturedScope, job: result.setting("id", .string(id)).setting("threadId", .string(target))) }
             if ["failed", "interrupted"].contains(state) {
                 throw APIError(result["error"].string ?? (state == "interrupted" ? "操作已暂停" : "操作失败"))
             }
             guard ["completed", "accepted", "inProgress"].contains(state) else {
                 throw APIError((result["error"].string ?? "操作结果尚未确认") + "；请在请求记录与 Codex App 核对，原请求编号已保留。")
             }
-            try pending.resolve(scope: capturedScope, target: target, requestID: id)
+            if draftDurable { try pending.resolve(scope: capturedScope, target: target, requestID: id) }
             if composing, draftSubmission, let item = outgoing[id] {
                 outgoing[id] = item.setting("draftSubmission", .bool(false))
                 reconcileOutgoing()
@@ -79,7 +128,10 @@ extension AppModel {
             // A live native acceptance remains authoritative if the HTTP reply is lost.
             if version == epoch, capturedScope == scope, let id = requestID, let item = outgoing[id],
                ["accepted", "completed", "inProgress"].contains(item["state"].text) {
-                try? pending.resolve(scope: capturedScope, target: target, requestID: id)
+                draftStore.reconcileSubmission(scope: capturedScope, job: item)
+                let draftDurable = authoredDraft == nil ? true : await draftStore.flush()
+                guard version == epoch, capturedScope == scope else { return false }
+                if draftDurable { try? pending.resolve(scope: capturedScope, target: target, requestID: id) }
                 outgoing[id] = item.setting("draftSubmission", .bool(false))
                 reconcileOutgoing()
                 return true
@@ -102,7 +154,26 @@ extension AppModel {
     }
     func reconcile(_ jobs: [JSONValue]) {
         for job in jobs { mergeOutgoing(job, live: true) }
-        try? pending.reconcile(scope: scope, jobs: jobs)
+        var authoredIDs: Set<String> = []
+        let confirmed = jobs.filter { job in
+            let hadSnapshot = draftStore.submissions[job["id"].text] != nil
+            let captured = draftStore.reconcileSubmission(scope: scope, job: job)
+            let authored = hadSnapshot || draftDeliveryKinds.contains(job["kind"].text)
+            if authored { authoredIDs.insert(job["id"].text) }
+            // Without a recoverable draft snapshot, preserve the ID for an explicit idempotent retry.
+            // Partial notifications without a known snapshot cannot resolve persisted request identity.
+            return authored ? captured || ["failed", "interrupted", "acknowledged"].contains(job["state"].text) : !job["kind"].text.isEmpty
+        }
+        let capturedScope = scope
+        let immediate = confirmed.filter { !authoredIDs.contains($0["id"].text) }
+        try? pending.reconcile(scope: capturedScope, jobs: immediate)
+        let authored = confirmed.filter { authoredIDs.contains($0["id"].text) }
+        if !authored.isEmpty {
+            Task {
+                guard await draftStore.flush() else { return }
+                try? pending.reconcile(scope: capturedScope, jobs: authored)
+            }
+        }
     }
     var visibleOutgoing: [JSONValue] {
         outgoingFor(selectedThread?.id)

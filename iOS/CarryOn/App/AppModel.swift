@@ -159,8 +159,8 @@ import CarryOnCore
     func canInteract(_ capability: WorkspaceCapability) -> Bool { canInteract && allows(capability) }
     var canCompose: Bool { editingMessage == .null ? (selectedThread != nil && canWrite(.send) && !conversationReadOnly) : canInteract(.edit) }
     func allowsRequest(_ path: String, body: JSONValue? = nil) -> Bool {
-        guard let capability = WorkspaceCapability.request(path: path, body: body) else { return false }
-        return allows(capability)
+        guard let capabilities = WorkspaceCapability.request(path: path, body: body) else { return false }
+        return capabilities.allSatisfy(allows)
     }
     var canWrite: Bool { !removingDevice && authenticated && foreground && (connected || commandReady) && status["enabled"].bool == true && status["remoteControl"].bool == true && !writing }
     var conversationReadOnly: Bool { (history["access"]["canInteract"].bool ?? selectedThread?.value["access"]["canInteract"].bool) == false }
@@ -184,9 +184,23 @@ import CarryOnCore
         set { draftStore.images[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
 
-    var draftSkills: [SkillReference] {
+    var composerSelections: [String: Int] = [:]
+    var draftSelection: Int {
+        get { composerSelections[scope + "\n" + (selectedThread?.id ?? "new")] ?? (draft as NSString).length }
+        set { composerSelections[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
+
+    var draftSkills: [ComposerReference] {
         get { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
         set { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
+    var draftFiles: [ProjectFileReference] {
+        get { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
+    var draftComments: [ReviewComment] {
+        get { draftStore.comments[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.comments[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
 
     func login(register: Bool = false, inviteCode: String = "") async {
@@ -339,6 +353,30 @@ import CarryOnCore
         conversationPrefetcher.exclude(thread.id)
         selectedThread = thread; history = displayCache.value(historyCacheKey(thread.id)); readSequence = 0
         updateSelection()
+    }
+    func openSearchOccurrence(_ record: Record, occurrence: JSONValue) async throws {
+        let capturedScope = scope, capturedEpoch = epoch, token = UUID()
+        notificationOpenToken = token
+        defer { if notificationOpenToken == token { notificationOpenToken = nil } }
+        let itemID = occurrence["itemId"].text, turnID = occurrence["turnId"].text
+        let result = try await deviceRequest("/api/threads/" + ConsoleAddress.component(record.id) + "/search-anchor?itemId=" + ConsoleAddress.component(itemID) + "&turnId=" + ConsoleAddress.component(turnID) + "&turnCursor=" + ConsoleAddress.component(occurrence["turnCursor"].text))
+        guard !Task.isCancelled, epoch == capturedEpoch, scope == capturedScope, notificationOpenToken == token, authenticated, connected, allows(.view) else { return }
+        guard result["threadId"].text == record.id, result["itemId"].text == itemID, result["turnId"].text == turnID,
+              let limit = result["historyLimit"].int, (1...4000).contains(limit) else { throw APIError("搜索定位回执与目标不匹配") }
+        let state = readingState(for: record.id)
+        state.historyLimit = max(state.historyLimit, limit)
+        selectedProject = nil
+        open(record); notificationOpenToken = token
+        let snapshot = try await deviceRequest("/api/threads/" + ConsoleAddress.component(record.id) + "/history?limit=\(limit)")
+        // Selecting the thread reconnects its stream. The independently authenticated
+        // HTTP history remains readable while that connection is being established.
+        guard !Task.isCancelled, epoch == capturedEpoch, scope == capturedScope, notificationOpenToken == token, selectedThread?.id == record.id, authenticated, allows(.view) else { return }
+        guard snapshot["thread"]["id"].text == record.id,
+              let anchor = snapshot["timeline"].array.first(where: { $0["id"].text == itemID || $0["nativeId"].text == itemID })?["id"].string else { throw APIError("命中消息已变化，请重新搜索") }
+        state.anchorID = anchor; state.offset = 21
+        activityScrollTarget = anchor
+        let liveHasAnchor = history["timeline"].array.contains { $0["id"].text == itemID || $0["nativeId"].text == itemID }
+        if !liveHasAnchor { history = snapshot; historyRevision += 1 }
     }
     func openSubagent(_ id: String, parentID: String) async {
         let capturedScope = scope
@@ -516,7 +554,7 @@ import CarryOnCore
         let version = epoch, id = deviceID ?? selectedDevice
         guard !id.isEmpty, let client = api else { throw APIError("请先选择工作区") }
         guard let device = devices.first(where: { $0.id == id }),
-              let capability = WorkspaceCapability.request(path: path), capability.isGranted(in: device.value["permissions"]) else {
+              let capability = WorkspaceCapability.request(path: path), capability.allSatisfy({ $0.isGranted(in: device.value["permissions"]) }) else {
             throw APIError("工作区未授权此操作")
         }
         let key = addressText + "\n" + id + "\n" + path

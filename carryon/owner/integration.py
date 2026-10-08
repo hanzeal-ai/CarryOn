@@ -23,7 +23,8 @@ class OwnerBridge(Bridge):
         return result
 
     def status(self):
-        return {**super().status(), 'supportsSessionLoading': True}
+        from carryon.sessions.creation_settings import supported
+        return {**super().status(), 'supportsPluginManagement': True, 'supportsThreadSections': True, 'supportsFullTextSearch': True, 'supportsArchiving': True, 'supportsSessionLoading': True, 'supportsCreationReferences': True, 'supportedCreationSettings': supported()}
 
     def owners(self):
         with self.lock:
@@ -72,18 +73,26 @@ class OwnerBridge(Bridge):
                 runtime = entry['runtime']
                 entry['in_flight'] = entry.get('in_flight', 0) + 1
                 prior_turn_ids = {turn['turnId'] for turn in runtime.current(tid)['turns']}
+            attempted, track_outcome = False, False
             def guarded(write):
+                nonlocal attempted
                 with service.lock:
                     if (service.closed.is_set() or service.entries.get(tid) is not entry
                             or entry['runtime'] is not runtime or entry['conflict'] or entry['disconnect']
                             or not service.bus.connected or not runtime.connected):
                         raise IPCError('原生操作期间会话归属已改变')
+                    attempted = True
                     write()
-                    if track_future_turns: entry['awaiting_new_turn'] = True
             try:
                 yield runtime, guarded
+                track_outcome = True
+            except Exception as exc:
+                track_outcome = (exc.uncertain if isinstance(exc, IPCError) else not isinstance(exc, BridgeError))
+                raise
             finally:
                 with service.lock:
+                    if track_future_turns and attempted and track_outcome:
+                        entry['awaiting_new_turn'] = True
                     current = runtime.current(tid)
                     if current is not None:
                         entry['submitted_turn_ids'].update(submitted_turns if submitted_turns is not None else

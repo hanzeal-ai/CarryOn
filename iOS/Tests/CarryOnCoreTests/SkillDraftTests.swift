@@ -3,8 +3,8 @@ import Testing
 @testable import CarryOnCore
 
 @Test func skillDraftSubmissionPreservesLaterSelection() {
-    let first = SkillReference(name: "first", path: "/project/first/SKILL.md")
-    let second = SkillReference(name: "second", path: "/project/second/SKILL.md")
+    let first = ComposerReference(name: "first", path: "/project/first/SKILL.md")
+    let second = ComposerReference(name: "second", path: "/project/second/SKILL.md")
     let sent = ConversationDraft(text: "run", skills: [first])
     var edited = ConversationDraft(text: "run", skills: [first, second])
     edited.didSubmit(sent)
@@ -19,7 +19,7 @@ import Testing
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = DraftStore(file: directory.appendingPathComponent("drafts.json")) { _, _ in Issue.record("Unexpected persistence error") }
-    let selected = SkillReference(name: "review", path: "/project/review/SKILL.md")
+    let selected = ComposerReference(name: "review", path: "/project/review/SKILL.md")
     await store.load(scope: "account-a")
     store.skills["workspace/thread"] = [selected]
     #expect(await store.flush())
@@ -33,4 +33,19 @@ import Testing
     #expect(await store.flush())
     await store.load(scope: "account-a")
     #expect(store.skills["workspace/thread", default: []].isEmpty)
+}
+
+@Test @MainActor func creationSettingsPersistWithoutAccountLeakage() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = DraftStore(file: directory.appendingPathComponent("drafts.json")) { _, _ in Issue.record("Unexpected persistence error") }
+    let settings: JSONValue = .object(["model": .string("fixture"), "approvalPolicy": .string("never")])
+    await store.load(scope: "account-a")
+    store.settings["workspace-a\nnew"] = settings
+    #expect(await store.flush())
+    await store.load(scope: "account-b")
+    #expect(store.settings.isEmpty)
+    await store.load(scope: "account-a")
+    #expect(store.settings["workspace-a\nnew"] == settings)
+    #expect(store.settings["workspace-b\nnew"] == nil)
 }

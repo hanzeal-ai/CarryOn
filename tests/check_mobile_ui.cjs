@@ -12,7 +12,7 @@ const assert=require('node:assert/strict');
  await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const req=route.request(),u=new URL(req.url());let data={},status=200;
-  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true},{id:'other',name:'工作室 Mac',online:false}]};}
+  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true,permissions:['view','create','edit','send','files','approve','stop']},{id:'other',name:'工作室 Mac',online:false}]};}
   else if(u.pathname.endsWith('/login'))authenticated=true;
   else if(u.pathname.endsWith('/logout'))authenticated=false;
   else if(u.pathname.endsWith('/link/pending'))data={requests:[]};
@@ -37,22 +37,22 @@ const assert=require('node:assert/strict');
  await page.locator('#mobile-session-list .project-row').first().waitFor();
  await page.evaluate(async()=>receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected},()=>true));
  await page.screenshot({path:'.runtime/mobile-projects.png'});await checkLayout(['.mobile-list-page .toolbar', '.search', '#mobile-session-list .project-row', '.bottom-nav']);
- await page.locator('#create').click();await page.locator('#new-prompt').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await checkLayout(['#create-dialog .toolbar', '#create-dialog .new-project-context', '#create-dialog .production-composer', '#create-dialog .input-shell']);
+ await page.locator('#create').click();await page.locator('#new-prompt > [contenteditable]').fill('新建草稿');await page.screenshot({path:'.runtime/mobile-create.png'});await checkLayout(['#create-dialog .toolbar', '#create-dialog .new-project-context', '#create-dialog .production-composer', '#create-dialog .input-shell']);
  assert.equal(await page.locator('#create-dialog').evaluate(el=>Math.round(el.getBoundingClientRect().height)),844);
  assert(await page.locator('#new-project').isVisible());await page.locator('#new-project').selectOption('p1');assert.equal(await page.locator('#new-project').inputValue(),'p1');await page.locator('#close-dialog').click();
  await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().waitFor();await page.screenshot({path:'.runtime/mobile-sessions.png'});
  await page.locator('.session').first().click();
  await page.evaluate(async()=>{
-  window.fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'重新设计手机端的会话体验，让它更简洁，也更容易使用。'},{id:'a1',type:'agentMessage',text:'我会围绕阅读和回复，重新整理这段体验。\n\n界面会更专注于内容：\n• 消息自然展开，执行细节按需查看\n• 主要操作留在拇指容易触达的位置\n• 需要确认时，再呈现完整上下文'}]};
+  window.fixture={thread:{id:'t1'},runtime:{type:'active'},status:{state:'running',label:'进行中'},metadata:{latestModel:'gpt-6-astra'},controls:{supportedOperations:['settings','edit','interrupt','steer','queue-add','queue-edit','queue-delete','queue-reorder','queue-resume','clear-queue'],activeTurnId:'turn1',settings:{model:'gpt-6-astra',effort:'medium'},requests:[]},queue:{messages:[],fingerprint:'q'},timeline:[{id:'u1',type:'userMessage',text:'重新设计手机端的会话体验，让它更简洁，也更容易使用。'},{id:'a1',type:'agentMessage',text:'我会围绕阅读和回复，重新整理这段体验。\n\n界面会更专注于内容：\n• 消息自然展开，执行细节按需查看\n• 主要操作留在拇指容易触达的位置\n• 需要确认时，再呈现完整上下文'}]};
   await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:fixture,readSequence:2},()=>true);
  });
  await page.screenshot({path:'.runtime/mobile-chat.png'});await checkLayout(['.conversation-head', '#composer', '#composer .input-shell']);assert.equal(await page.locator('#send').getAttribute('data-mode'),'stop');
  for(const value of ['', '第一行\n第二行\n第三行', '短句']){
-  await page.locator('#prompt').fill(value);await page.waitForTimeout(60);
-  const layout=await page.evaluate(()=>{const input=document.querySelector('#prompt').getBoundingClientRect(),a=document.querySelector('#attach-images').getBoundingClientRect(),b=document.querySelector('#composer .model-button').getBoundingClientRect();return {twoRows:input.bottom<=a.top+1,touchTargets:a.width>=44&&b.width>=44,focused:document.activeElement===document.querySelector('#prompt')};});
+  await page.locator('#prompt > [contenteditable]').fill(value);await page.waitForTimeout(60);
+  const layout=await page.evaluate(()=>{const input=document.querySelector('#prompt').getBoundingClientRect(),a=document.querySelector('#attach-images').getBoundingClientRect(),b=document.querySelector('#composer .model-button').getBoundingClientRect();return {twoRows:input.bottom<=a.top+1,touchTargets:a.width>=44&&b.width>=44,focused:document.activeElement===document.querySelector('#prompt > [contenteditable]')};});
   assert(layout.twoRows);assert(layout.touchTargets);assert(layout.focused,'resizing retains editor focus');
  }
- await page.locator('#prompt').fill('保留独立草稿');assert.equal(await page.locator('#send').getAttribute('data-mode'),'send');
+ await page.locator('#prompt > [contenteditable]').fill('保留独立草稿');assert.equal(await page.locator('#send').getAttribute('data-mode'),'send');
  await page.getByRole('button',{name:'查看当前模型与思考强度',exact:true}).click();assert(await page.locator('#mobile-model').isVisible());assert.equal(await page.locator('#mobile-model select').first().inputValue(),'gpt-6-astra');await page.screenshot({path:'.runtime/mobile-model.png'});await checkLayout(['#mobile-model']);await page.keyboard.press('Escape');
  await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.screenshot({path:'.runtime/mobile-tools.png'});
  assert((await page.getByRole('button',{name:'队列管理',exact:true}).boundingBox()).height>=44);await checkLayout(['#mobile-tools .sheet-top', '#mobile-tools .setting']);await page.locator('#mobile-tools button[aria-label="关闭"]').click();
@@ -96,14 +96,14 @@ const assert=require('node:assert/strict');
  await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();await page.screenshot({path:'.runtime/mobile-settings.png'});await checkLayout(['.device-card', '.workspace-card-title', '.workspace-settings .setting', '.bottom-nav']);
  await page.getByRole('button',{name:'消息通知',exact:true}).click();await page.locator('#notification-preferences input').first().uncheck();await page.screenshot({path:'.runtime/mobile-notifications.png'});await page.locator('#notification-dialog button[aria-label="返回"]').click();
  await page.getByRole('button',{name:'切换工作区',exact:true}).click();await page.screenshot({path:'.runtime/mobile-workspaces.png'});await page.locator('#mobile-devices button[aria-label="关闭"]').click();
- await page.locator('.bottom-nav').getByRole('button',{name:'会话',exact:true}).click();await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().click();assert.equal(await page.locator('#prompt').inputValue(),'保留独立草稿');
+ await page.locator('.bottom-nav').getByRole('button',{name:'会话',exact:true}).click();await page.locator('#mobile-session-list .project-row').first().click();await page.locator('.session').first().click();assert.equal(await page.locator('#prompt').evaluate(el=>el.value),'保留独立草稿');
  await page.evaluate(()=>{fixture.controls.requests=[{id:'req1',fingerprint:'f1',action:'user-input',params:{questions:[{id:'q1',question:'请选择验证范围'}]}}];fixture.pendingRequests=[{id:'req1'}];Operations.render(fixture,selected,client,notice,true);});
  assert(await page.locator('#requests textarea').isVisible());assert(!(await page.locator('#question-dialog').isVisible()));await page.screenshot({path:'.runtime/mobile-question.png'});
  await page.setViewportSize({width:390,height:390});await page.waitForTimeout(100);assert(await page.locator('#send').evaluate(el=>el.getBoundingClientRect().bottom<=innerHeight));await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>{fixture.runtime={type:'idle'};fixture.status={state:'idle',label:'空闲'};fixture.controls.lastUserText='原有任务内容';fixture.controls.lastTurnId='last';fixture.controls.requests=[];fixture.timeline.push({id:'last:input',turnId:'last',type:'userMessage',text:'原有任务内容',data:{}});Timeline.render(fixture,document.getElementById('messages'));Operations.render(fixture,selected,client,notice,true);});
  await page.getByRole('button',{name:'会话工具',exact:true}).click();assert.equal(await page.getByText('编辑最后一轮',{exact:true}).count(),0);assert.equal(await page.getByText('压缩上下文',{exact:true}).count(),0);await page.locator('#mobile-tools').evaluate(el=>el.close());
  await page.locator('.message-editor summary').click();assert.equal(await page.locator('.message-editor textarea').inputValue(),'原有任务内容');await page.screenshot({path:'.runtime/mobile-edit.png'});await page.locator('.message-editor').getByRole('button',{name:'取消',exact:true}).click();
- await page.evaluate(()=>applyStatus({enabled:true,remoteControl:false}));assert(await page.locator('#prompt').isDisabled());assert(await page.locator('#send').isDisabled());assert(await page.locator('#create').isDisabled());
+ await page.evaluate(()=>applyStatus({enabled:true,remoteControl:false}));assert(await page.locator('#prompt').evaluate(el=>el.disabled));assert(await page.locator('#send').isDisabled());assert(await page.locator('#create').isDisabled());
  await page.setViewportSize({width:1440,height:1000});await page.waitForTimeout(100);assert(await page.locator('main>aside').isVisible());assert(await page.locator('.conversation').isVisible());assert(!(await page.locator('.bottom-nav').isVisible()));await page.screenshot({path:'.runtime/mobile-desktop-regression.png'});
  await page.setViewportSize({width:320,height:640});await page.waitForTimeout(100);await page.evaluate(()=>MobileUI.show('projects'));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('.bottom-nav').getByRole('button',{name:'我的',exact:true}).click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.locator('#pairing').waitFor();await page.setViewportSize({width:390,height:844});await page.screenshot({path:'.runtime/mobile-login.png'});assert(!(await page.locator('.bottom-nav').isVisible()));await checkLayout(['.login-symbol', '#token', '#pair']);

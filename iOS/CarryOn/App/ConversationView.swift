@@ -7,13 +7,42 @@ import ExyteChat
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     let thread: Record
+    private struct CommandPanel: Identifiable {
+        let id = UUID()
+        let name: String
+        let argument: String
+        let scope: String
+        let sourceDraft: String
+    }
+    @State private var commandPanel: CommandPanel?
     @State private var menu = false
     @State private var activity = false
     @State private var modelInfo = false
+    @State private var showingVoice = false
+    @State private var composerConfiguration = false
+    @State private var contextInformation = false
     @State private var skillsPicker = false
+    @State private var mentionsPicker = false
+    private struct FilePanel: Identifiable { let id = UUID(); let scope: String; let threadID: String }
+    @State private var filesPicker: FilePanel?
+    private struct CommentPanel: Identifiable {
+        let id = UUID()
+        let target: ConversationActionTarget
+    }
+    @State private var commentPanel: CommentPanel?
     @State private var newMessages = false
     @State private var lastTimelineItem: JSONValue?
     @State private var selectionText: String?
+    private struct SideLaunch: Identifiable {
+        let id = UUID()
+        let text: String
+        let autoSend: Bool
+        let sourceDraft: String
+        let scope: String
+        let parentID: String
+    }
+    @State private var sideLaunch: SideLaunch?
+    @State private var pendingSelectionSide: SideLaunch?
     @State private var visibleCount = 120
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
@@ -38,8 +67,8 @@ struct ConversationView: View {
     @State private var timeline: [JSONValue] = []
     @State private var navigationIndex = ConversationPresentation.NavigationIndex([])
     @State private var projectedHistoryRevision = -1
-    @State private var chatMessages: [ExyteChat.Message] = []
-    @State private var tableUpdates: TableUpdateTransaction?
+    @State private var chatMessages: [ConversationListEntry] = []
+    @State private var tableUpdates: ConversationListTransaction?
     @State private var disclosureState = ConversationDisclosureState()
     @State private var readingState: ConversationReadingState?
     @State private var navigationPreview: JSONValue?
@@ -48,9 +77,12 @@ struct ConversationView: View {
     @State private var navigationPinned = false
     @State private var navigationAnchor: String?
     @State private var pendingNavigation: String?
+    @State private var navigationRepairs = 0
+    @State private var navigationRepairScheduled = false
+    @State private var navigationRepairLayout: CGRect?
     @State private var navigationBounds: CGRect = .zero
     @State private var navigationTracker = ConversationNavigationTracker()
-    @State private var restoreScroll: ScrollToParams?
+    @State private var restoreScroll: ConversationListScroll?
     @State private var messageRefresh = ConversationRefreshQueue()
     @State private var displayGeneration = UUID()
     private func refreshMessages() {
@@ -63,11 +95,11 @@ struct ConversationView: View {
             guard isCurrent() else { return }
             let revision = model.historyRevision
             // Capture history and its pending bubbles together before asynchronous rendering.
+            let showEmpty = model.historyFailure == nil && model.history != .null && model.history["timeline"].array.isEmpty
             let supplemental: JSONValue = .object([
-                "showEmpty": .bool(model.historyFailure == nil && model.history != .null && model.history["timeline"].array.isEmpty),
-                "syncing": model.history["syncing"], "readOnly": .bool(model.conversationReadOnly),
-                "requests": model.history["controls"]["requests"], "pendingRequests": model.history["pendingRequests"],
-                "queue": model.history["queue"], "outgoing": .array(model.visibleOutgoing)
+                "showEmpty": .bool(showEmpty),
+                "syncing": .bool(showEmpty && model.history["syncing"].bool == true),
+                "outgoing": .array(model.visibleOutgoing)
             ])
             if projectedHistoryRevision != revision {
                 let source = model.history["timeline"].array
@@ -80,108 +112,165 @@ struct ConversationView: View {
                    grouped.contains(where: { $0.stableID == lastTimelineItem.stableID }) { newMessages = true }
                 lastTimelineItem = grouped.last
                 timeline = grouped; projectedHistoryRevision = revision
-                navigationIndex = navigation
-            }
-            let next = await projectedMessages(supplemental: supplemental)
-            guard isCurrent() else { return }
-            guard next != chatMessages else { applyNavigation(); return }
-            if let tableUpdates {
-                // Serialize snapshots: overlapping transactions can consume each other's animation mode.
-                await tableUpdates(animationMode: bottomVisible ? .none : .keepStable) {
-                    if isCurrent() { chatMessages = next }
+                if model.historyRevision == revision, model.historySynchronized, model.historyFailure == nil,
+                   model.history["syncing"].bool != true, model.history["historyWindow"]["hasMore"].bool == false,
+                   let position = readingState?.visiblePosition, !grouped.contains(where: { $0.stableID == position.id }) {
+                    readingState?.visiblePosition = nil
+                    if model.activityScrollTarget == nil, pendingNavigation == nil, !navigationPinned, restoreScroll?.messageID == position.id {
+                        readingState?.offset = 0; readingState?.anchorID = nil
+                        restoreScroll = grouped.last.map { ConversationListScroll(messageID: $0.stableID, position: .bottom) }
+                    }
                 }
-            } else { chatMessages = next }
+                navigationIndex = navigation
+                if navigationPinned { navigationRepairs = 0; navigationRepairLayout = nil }
+            }
+            // A target may arrive before its history projection. Expand the current
+            // message window after resolving the canonical item or process group.
+            if let anchor = pendingNavigation ?? model.activityScrollTarget {
+                let resolved = timeline.first { $0.stableID == anchor || $0["items"].array.contains { $0.stableID == anchor } }?.stableID ?? anchor
+                pendingNavigation = resolved; navigationAnchor = resolved
+                if let index = timeline.firstIndex(where: { $0.stableID == resolved }) {
+                    visibleCount = max(visibleCount, timeline.count - index)
+                }
+            }
+            let (next, updateRows) = await projectedMessages(supplemental: supplemental)
+            guard isCurrent() else { return }
+            guard next != chatMessages else {
+                let growing = Set(next.compactMap { message -> String? in
+                    guard let old = message.presentation,
+                          let entry = message.itemSnapshot, entry["type"].text == "agentMessage",
+                          entry["text"].text != old.item["text"].text, entry["text"].text.hasPrefix(old.item["text"].text) else { return nil }
+                    return message.id
+                })
+                let anchor = !navigationPinned && pendingNavigation == nil && model.activityScrollTarget == nil ? navigationTracker.captureReadingAnchor(in: growing) : nil
+                updateRows.forEach { $0() }
+                if let anchor { navigationTracker.restoreReadingAnchor(anchor, valid: { isCurrent() && !navigationPinned && pendingNavigation == nil && model.activityScrollTarget == nil }) }
+                applyNavigation(); return
+            }
+            if let tableUpdates {
+                let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                let growing = Set(next.compactMap { message -> String? in
+                    guard let old = previous[message.id]?.presentation?.item,
+                          let entry = message.itemSnapshot,
+                          entry["type"].text == "agentMessage", !old["text"].text.isEmpty,
+                          entry["text"].text != old["text"].text, entry["text"].text.hasPrefix(old["text"].text) else { return nil }
+                    return message.id
+                })
+                let nextIDs = Set(next.map(\.id)), previousIDs = Set(previous.keys)
+                let readingCandidates = nextIDs == previousIDs ? growing : previousIDs.intersection(nextIDs)
+                var readingAnchor: ConversationNavigationTracker.ReadingAnchor?
+                // Serialize snapshots and capture the reading position at the actual mutation.
+                await tableUpdates {
+                    if isCurrent() {
+                        if !navigationPinned, pendingNavigation == nil, model.activityScrollTarget == nil {
+                            readingAnchor = navigationTracker.captureReadingAnchor(in: readingCandidates)
+                        }
+                        updateRows.forEach { $0() }; chatMessages = next
+                    }
+                }
+                if isCurrent(), !navigationPinned, pendingNavigation == nil, model.activityScrollTarget == nil,
+                   let readingAnchor { navigationTracker.restoreReadingAnchor(readingAnchor, valid: { isCurrent() && !navigationPinned && pendingNavigation == nil && model.activityScrollTarget == nil }) }
+            } else { updateRows.forEach { $0() }; chatMessages = next }
             if isCurrent() { applyNavigation() }
         }
     }
 
-    private func projectedMessages(supplemental: JSONValue) async -> [ExyteChat.Message] {
+    private func projectedMessages(supplemental: JSONValue) async -> ([ConversationListEntry], [@MainActor () -> Void]) {
         let previous = Dictionary(chatMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let rows = Array(timeline.suffix(visibleCount))
-        var statusMessage: ExyteChat.Message
-        if let existing = previous["carryon:status"], existing.customData["supplemental"] as? JSONValue == supplemental {
-            statusMessage = existing
-        } else {
-            statusMessage = ExyteChat.Message(id: "carryon:status", user: .init(id: "status", name: "", avatarURL: nil, type: .system),
-                createdAt: .distantPast, text: "", customData: ["supplemental": supplemental])
-            statusMessage.triggerRedraw = UUID()
-        }
-        statusMessage.createdAt = Date(timeIntervalSince1970: Double(rows.count))
-        var messages = rows.enumerated().map { index, item in
-            let date = Date(timeIntervalSince1970: Double(index))
-            if var message = previous[item.stableID], message.customData["entry"] as? JSONValue == item,
-               message.customData["canEdit"] as? Bool == TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) {
-                message.createdAt = date
-                return message
+        var messages: [ConversationListEntry] = []
+        var updates: [@MainActor () -> Void] = []
+        for item in rows {
+            let existingRow = previous[item.stableID]?.presentation
+            let prepared: ParsedMessageMarkdown?
+            if let existingRow, existingRow.item == item { prepared = existingRow.markdown }
+            else { prepared = await MessageMarkdownParser.shared.prepare(item) }
+            let canEdit = TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly)
+            if var message = previous[item.stableID], let row = message.presentation {
+                updates.append {
+                    if row.item != item { row.item = item }
+                    if row.markdown?.input != prepared?.input { row.markdown = prepared }
+                }
+                if message.canAskSide != (askInSideAction != nil) || message.canEdit != canEdit || message.itemSnapshot?["type"].text != item["type"].text {
+                    message.canAskSide = askInSideAction != nil; message.canEdit = canEdit; message.configuration = UUID()
+                }
+                message.itemSnapshot = item; messages.append(message)
+            } else {
+                messages.append(ConversationListEntry(id: item.stableID, itemSnapshot: item,
+                    presentation: TimelineRowPresentation(item: item, markdown: prepared), canAskSide: askInSideAction != nil, canEdit: canEdit))
             }
-            var message = ExyteChat.Message(id: item.stableID,
-                user: .init(id: "timeline", name: "", avatarURL: nil, type: .system),
-                createdAt: date, attributedText: AttributedString(item["text"].text), customData: ["entry": item, "canEdit": TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly)])
-            message.triggerRedraw = UUID()
-            return message
         }
-        for index in messages.indices where messages[index].customData["markdown"] == nil {
-            messages[index].customData["markdown"] = await MessageMarkdownParser.shared.prepare(rows[index])
-        }
-        return messages + [statusMessage]
-    }
-    private var transactionBinding: Binding<TableUpdateTransaction?> {
-        Binding(get: { tableUpdates }, set: { transaction in
-            // Exyte publishes this from makeUIView, while SwiftUI is updating.
-            DispatchQueue.main.async { tableUpdates = transaction }
-        })
+        guard supplemental["showEmpty"].bool == true || !supplemental["outgoing"].array.isEmpty else { return (messages, updates) }
+        let status: ConversationListEntry
+        if let existing = previous["carryon:status"], existing.supplemental == supplemental { status = existing }
+        else { status = ConversationListEntry(id: "carryon:status", supplemental: supplemental) }
+        return (messages + [status], updates)
     }
     private func updateContentOffset(_ offset: CGFloat) {
-        let scope = model.scope
+        let scope = model.scope, generation = displayGeneration
         DispatchQueue.main.async {
-            guard model.scope == scope, model.selectedThread?.id == thread.id else { return }
+            guard model.scope == scope, displayGeneration == generation, model.selectedThread?.id == thread.id else { return }
             let reachedBottom = !bottomVisible && offset <= 20
             bottomVisible = offset <= 20
             readingState?.offset = max(0, offset)
-            if bottomVisible { readingState?.anchorID = nil; newMessages = false }
-            if reachedBottom { markRead() }
+            if !chatMessages.isEmpty {
+                if offset <= 20 { readingState?.visiblePosition = nil }
+                else if let position = navigationTracker.captureVisiblePosition() { readingState?.visiblePosition = position }
+            }
             if navigationTracker.isDragging { navigationPinned = false; restoreScroll = nil; navigationPreview = nil }
+            navigationLayoutChanged()
+            if bottomVisible && !navigationPinned && pendingNavigation == nil && model.activityScrollTarget == nil { readingState?.anchorID = nil; newMessages = false }
+            if reachedBottom { markRead() }
             updateNavigationPosition()
         }
     }
+    private func performMessageAction(_ action: CarryOnMessageAction, messageID: String, scope: String, epoch: UUID) {
+        guard model.scope == scope, model.epoch == epoch, model.selectedThread?.id == thread.id, model.allows(.view),
+              let item = chatMessages.first(where: { $0.id == messageID })?.presentation?.item else { return }
+        switch action {
+        case .edit:
+            if TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) { model.beginEditing(item) }
+        case .copy: UIPasteboard.general.string = item["text"].text
+        case .selectText:
+            let user = item["type"].text != "agentMessage"
+            let text = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
+            selectionText = MessageTextSelectionView.plainText(text, resolveCreatedThreads: !user)
+        }
+    }
+    private var historyRows: [ConversationListRow] {
+        guard model.history == .null || model.historyFailure != nil ||
+            (model.history["syncing"].bool == true && !model.history["timeline"].array.isEmpty) else { return [] }
+        return [ConversationListRow(id: "carryon:history-header", configuration: AnyHashable([
+                model.history == .null ? "empty" : "loaded", model.historyFailure,
+                model.device?.value["online"].bool == false ? "offline" : "online",
+                model.history["syncing"].bool == true ? "syncing" : nil] as [String?]),
+                content: AnyView(ConversationListLiveContent { AnyView(historyHeader.frame(maxWidth: .infinity, alignment: .leading)) }.environment(model)))]
+    }
     private var chatContent: some View {
-        ChatView(messages: chatMessages, didSendMessage: { _ in }, messageBuilder: { params in
-            messageRow(params)
-        }, inputViewBuilder: { _ in
-            composerView
-        }, messageMenuAction: { (action: CarryOnMessageAction, _, message) in
-            guard let item = message.customData["entry"] as? JSONValue else { return }
-            switch action {
-            case .edit:
-                if TimelineEntry.canEdit(item, threadID: thread.id, model: model, readOnly: model.conversationReadOnly) { model.beginEditing(item) }
-            case .copy: UIPasteboard.general.string = item["text"].text
-            case .selectText:
-                let user = item["type"].text != "agentMessage"
-                let text = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
-                selectionText = MessageTextSelectionView.plainText(text, resolveCreatedThreads: !user)
-            }
-        })
-        .setAvailableInputs([.text])
-        .updateTransaction(transactionBinding)
-        .scrollTo(restoreScroll)
-        .showDateHeaders(false)
-        .showAvatar(false)
-        .showMessageMenuOnLongPress(false)
-        .showScrollToBottomButton(false)
-        .keyboardDismissMode(.interactive)
-        .mainHeaderBuilder { historyHeader }
-        .enableLoadMoreOlderMessages(hasMoreToLoad: canLoadEarlier, handleClosure: loadEarlierMessages)
-        .betweenListAndInputViewBuilder {
+        let scope = model.scope, epoch = model.epoch
+        return VStack(spacing: 0) {
+            ConversationList(rows: historyRows + chatMessages.map { message in
+                    ConversationListRow(id: message.id, configuration: AnyHashable(message.configuration),
+                        content: AnyView(ConversationListLiveContent { AnyView(messageRow(message, scope: scope, epoch: epoch)
+                            .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))) }
+                            .environment(model).environment(\.conversationDisclosureState, disclosureState)))
+                }, scope: scope + thread.id + epoch.uuidString,
+                isCurrent: { model.scope == scope && model.epoch == epoch && model.selectedThread?.id == thread.id },
+                mayFollowLatest: { !navigationPinned && pendingNavigation == nil && model.activityScrollTarget == nil },
+                onOffset: updateContentOffset, olderBoundaryID: chatMessages.first?.id, canLoadEarlier: canLoadEarlier,
+                loadEarlier: loadEarlierMessages, transaction: tableUpdates, scroll: restoreScroll)
             composerAccessories.frame(maxWidth: .infinity)
                 .anchorPreference(key: ConversationComposerBounds.self, value: .bounds) { $0 }
+            composerView
         }
-        .onContentOffsetChange(updateContentOffset)
-        .carryOnChatAppearance()
+        .background(Design.canvas)
+        .chatTheme(colors: .init(mainBG: Design.canvas, mainTint: Design.ink, inputBG: Design.input,
+                               inputText: Design.ink, sendButtonBackground: Design.composerAccent))
+        .onAppear { if tableUpdates == nil { tableUpdates = ConversationListTransaction() } }
         .overlayPreferenceValue(ConversationComposerBounds.self) { anchor in
             GeometryReader { geometry in
                 if let anchor {
-                    latestButton
-                        .padding(.trailing, 16)
+                    latestButton.padding(.trailing, 16)
                         .padding(.bottom, max(0, geometry.size.height - geometry[anchor].minY) + 8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
@@ -189,18 +278,15 @@ struct ConversationView: View {
         }
         .overlay(alignment: .leading) { navigationRail.offset(x: 8) }
         .overlay(alignment: .leading) { navigationPreviewCard }
-        .background(GeometryReader { geometry in
-            Color.clear.preference(key: ConversationNavigationBounds.self, value: geometry.frame(in: .global))
-        })
-        .onPreferenceChange(ConversationNavigationBounds.self) { navigationBounds = $0 }
         .environment(\.conversationDisclosureState, disclosureState)
         .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))
     }
     private var conversationPresentation: some View {
         chatContent
-        .navigationTitle(thread.title).navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(model.history["thread"]["title"].string ?? model.selectedThread?.title ?? thread.title).navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(!model.threadParents.isEmpty)
         .toolbar {
+            if !model.threadParents.isEmpty || model.otherActivityCount > 0 {
             ToolbarItem(placement: .topBarLeading) {
                 HStack(spacing: 8) {
                     if let parent = model.threadParents.last {
@@ -223,21 +309,55 @@ struct ConversationView: View {
                     }
                 }
             }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { menu = true } label: { Image(systemName: "ellipsis") }.accessibilityLabel("会话操作")
             }
         }
-        .sheet(isPresented: Binding(get: { selectionText != nil }, set: { if !$0 { selectionText = nil } })) {
-            if let selectionText { MessageTextSelectionView(text: selectionText) }
+        .sheet(isPresented: Binding(get: { selectionText != nil }, set: { if !$0 { selectionText = nil } }), onDismiss: {
+            if let launch = pendingSelectionSide {
+                pendingSelectionSide = nil
+                if launch.scope == model.scope, launch.parentID == model.selectedThread?.id, supportsOperation("side-create", in: model.history), model.canWrite(.create) { sideLaunch = launch }
+            }
+        }) {
+            if let selectionText { MessageTextSelectionView(text: selectionText, askInSide: selectionSideAction) }
         }
-        .sheet(isPresented: $activity) { ConversationActivityView(currentThreadID: thread.id) }
+
+        .sheet(item: $sideLaunch) { launch in
+            if model.scope == launch.scope, model.selectedThread?.id == launch.parentID {
+                SideChatsView(initialPrompt: launch.text, sendInitialPrompt: launch.autoSend, onCreated: {
+                    if launch.autoSend, model.scope == launch.scope, model.selectedThread?.id == launch.parentID, model.draft == launch.sourceDraft { model.draft = "" }
+                })
+            }
+        }
         .task(id: model.scope + thread.id + String(model.workspaceRevision)) {
             do { try await model.refreshActivityCounts() }
             catch { model.report(error, operation: "刷新其他会话角标", blocking: false) }
         }
         .sheet(isPresented: $menu) { ConversationMenu() }
+        .sheet(item: $commandPanel) { panel in
+            if model.scope == panel.scope, model.selectedThread?.id == thread.id {
+                switch panel.name {
+                case "review": ReviewConversationView(target: actionTarget, initialInstructions: panel.argument) {}
+                case "fork": ForkConversationView(thread: thread, scope: panel.scope, autoCreate: true) {
+                    if model.scope == panel.scope, model.selectedThread?.id == thread.id, model.draft == panel.sourceDraft { model.draft = "" }
+                }
+                case "goal": ConversationGoalView(target: actionTarget)
+                default: StructuredDetail(title: "会话信息", value: .object(["status": model.history["status"], "settings": model.history["controls"]["settings"], "metadata": model.history["metadata"]]))
+                }
+            }
+        }
+
+        .sheet(isPresented: $composerConfiguration) { ModelInformationView(target: actionTarget, configuration: true) }
+        .alert("上下文用量", isPresented: $contextInformation) { Button("完成", role: .cancel) {} } message: {
+            if let usage = ContextUsage(model.history["metadata"]["latestTokenUsageInfo"]) { Text("最近一轮使用 \(usage.used) / \(usage.capacity) tokens，剩余 \(usage.remaining)。") }
+        }
+        .sheet(isPresented: $showingVoice) { VoiceConversationView(target: actionTarget) }
         .sheet(isPresented: $modelInfo) { ModelInformationView(target: actionTarget) }
-        .sheet(isPresented: $skillsPicker) { SkillsPickerView(target: actionTarget) }
+        .sheet(isPresented: $skillsPicker) { SkillsPickerView(target: .conversation(actionTarget)) }
+        .sheet(item: $filesPicker) { panel in ProjectFilesPicker(threadID: panel.threadID, scope: panel.scope) }
+        .sheet(isPresented: $mentionsPicker) { SkillsPickerView(target: .conversation(actionTarget), mentions: true) }
+        .sheet(item: $commentPanel) { ReviewCommentsView(target: $0.target) }
         .sheet(isPresented: Binding(get: { model.editingMessage != .null }, set: { if !$0 { model.cancelEditing() } })) {
             EditMessageView(item: model.editingMessage, threadID: thread.id, scope: model.scope)
         }
@@ -256,22 +376,39 @@ struct ConversationView: View {
         .onChange(of: model.visibleOutgoing) { _, _ in refreshMessages() }
         .onChange(of: model.historyFailure) { _, _ in refreshMessages() }
         .onChange(of: model.conversationReadOnly) { _, _ in refreshMessages() }
+        .onChange(of: supportsOperation("side-create", in: model.history) && model.canWrite(.create)) { _, _ in refreshMessages() }
         .onChange(of: model.canInteract(.edit)) { _, _ in refreshMessages() }
         .onChange(of: photos) { _, selection in Task { await loadPhotos(selection) } }
-        .onDisappear { displayGeneration = UUID(); selectionGeneration = UUID(); loadingImages = false }
+        .onDisappear { navigationTracker.cancelReadingRestoration(); navigationTracker.onLayout = nil; displayGeneration = UUID(); selectionGeneration = UUID(); loadingImages = false }
         .onAppear {
+            navigationTracker.onLayout = { navigationLayoutChanged() }
             let state = model.readingState(for: thread.id)
             readingState = state; disclosureState = state.disclosure; visibleCount = state.visibleCount
             bottomVisible = state.offset <= 20
-            if let anchor = model.activityScrollTarget ?? state.anchorID { navigationAnchor = anchor; pendingNavigation = anchor; restoreScroll = ScrollToParams(messageID: anchor, position: .middle) }
-            else if state.offset > 20 { restoreScroll = ScrollToParams(offset: state.offset) }
+            if let anchor = model.activityScrollTarget { navigationAnchor = anchor; pendingNavigation = anchor; restoreScroll = ConversationListScroll(messageID: anchor, position: .middle) }
+            else if let position = state.visiblePosition { restoreScroll = ConversationListScroll(messageID: position.id, position: .top, offset: position.offset) }
+            else if let anchor = state.anchorID { navigationAnchor = anchor; pendingNavigation = anchor; restoreScroll = ConversationListScroll(messageID: anchor, position: .middle) }
+            else if state.offset > 20 { restoreScroll = ConversationListScroll(offset: state.offset) }
             refreshMessages()
         }
     }
-    private func messageRow(_ params: MessageBuilderParameters) -> some View {
-        let isProcess = (params.message.customData["entry"] as? JSONValue)?["type"].text == "processGroup"
+    private var askInSideAction: (@MainActor @Sendable (String) -> Void)? { sideAction(afterSelectionDismiss: false) }
+    private var selectionSideAction: (@MainActor @Sendable (String) -> Void)? { sideAction(afterSelectionDismiss: true) }
+    private func sideAction(afterSelectionDismiss: Bool) -> (@MainActor @Sendable (String) -> Void)? {
+        guard supportsOperation("side-create", in: model.history), model.canWrite(.create) else { return nil }
+        let scope = model.scope, target = thread.id
+        return { text in
+            guard model.scope == scope, model.selectedThread?.id == target,
+                  supportsOperation("side-create", in: model.history), model.canWrite(.create) else { return }
+            let launch = SideLaunch(text: text, autoSend: false, sourceDraft: model.draft, scope: scope, parentID: target)
+            if afterSelectionDismiss { pendingSelectionSide = launch; selectionText = nil }
+            else { sideLaunch = launch }
+        }
+    }
+    private func messageRow(_ message: ConversationListEntry, scope: String, epoch: UUID) -> some View {
+        let isProcess = message.presentation?.item["type"].text == "processGroup"
         return Group {
-            if let item = params.message.customData["entry"] as? JSONValue {
+            if let item = message.presentation?.item {
                 Group {
                     if item["type"].text == "changesSummary" {
                         ConversationChangesCard(history: item["history"], projection: .init(item["history"]), threadID: thread.id)
@@ -279,17 +416,21 @@ struct ConversationView: View {
                         ConversationTimelineRow(item: item, threadID: thread.id)
                     }
                 }
-                    .environment(\.preparedMessageMarkdown, params.message.customData["markdown"] as? ParsedMessageMarkdown)
-                    .onLongPressGesture {
-                        if !CarryOnMessageAction.menuItems(for: params.message).isEmpty { params.showContextMenuClosure() }
-                    }
-            } else if let snapshot = params.message.customData["supplemental"] as? JSONValue {
+                    .environment(\.askInSideChat, askInSideAction)
+                    .environment(\.conversationSelectionChanged, { navigationTracker.selectionChanged($0) })
+                    .environment(\.preparedMessageMarkdown, message.presentation?.markdown)
+            } else if let snapshot = message.supplemental {
                 supplementalRows(snapshot)
             }
-        }.padding(.horizontal, 16).padding(.vertical, isProcess ? 2 : 8).frame(maxWidth: .infinity, alignment: .leading)
-            .background(ConversationNavigationMarker(id: params.message.id, tracker: navigationTracker))
+        }.modifier(ConversationListOptionalMenu(enabled: !message.canAskSide && !message.canEdit,
+                actions: CarryOnMessageAction.menuItems(forType: message.presentation?.item["type"].text ?? "", canEdit: message.canEdit).map { action in
+                    (action.title(), { performMessageAction(action, messageID: message.id, scope: scope, epoch: epoch) })
+                }))
+            .padding(.horizontal, 16).padding(.vertical, isProcess ? 2 : 8).frame(maxWidth: .infinity, alignment: .leading)
+            .background(ConversationNavigationMarker(id: message.id, tracker: navigationTracker))
     }
     private func navigate(to anchor: String) {
+        navigationTracker.cancelReadingRestoration()
         let resolved = timeline.first { $0.stableID == anchor || $0["items"].array.contains { $0.stableID == anchor } }?.stableID ?? anchor
         pendingNavigation = resolved
         navigationAnchor = resolved
@@ -303,9 +444,34 @@ struct ConversationView: View {
               chatMessages.contains(where: { $0.id == anchor }) else { return }
         navigationAnchor = anchor
         navigationPinned = true
-        restoreScroll = ScrollToParams(messageID: anchor, position: .middle)
+        navigationRepairs = 0
+        navigationRepairLayout = nil
+        restoreScroll = ConversationListScroll(messageID: anchor, position: .middle)
         pendingNavigation = nil
         model.activityScrollTarget = nil
+    }
+    private func repairNavigationAfterLayout() {
+        guard navigationPinned, !navigationRepairScheduled, navigationRepairs < 3,
+              navigationBounds.width > 0, navigationBounds.height > 0,
+              let anchor = navigationAnchor, chatMessages.contains(where: { $0.id == anchor }) else { return }
+        let scope = model.scope, generation = displayGeneration
+        navigationRepairScheduled = true
+        // Coalesce all offset callbacks from the same transaction before measuring.
+        DispatchQueue.main.async {
+            navigationRepairScheduled = false
+            guard model.scope == scope, displayGeneration == generation, model.selectedThread?.id == thread.id,
+                  navigationPinned, navigationAnchor == anchor, !navigationTracker.isDragging,
+                  let layout = navigationTracker.measuredLayout, layout != navigationRepairLayout,
+                  !(navigationTracker.frames[anchor]?.intersects(navigationBounds) ?? false) else { return }
+            navigationRepairLayout = layout; navigationRepairs += 1
+            // The subpixel offset changes the public Equatable scroll request after
+            // self-sizing layout; it does not define the reading position.
+            restoreScroll = ConversationListScroll(messageID: anchor, position: .middle, offset: CGFloat(navigationRepairs) / 100)
+        }
+    }
+    private func navigationLayoutChanged() {
+        if let viewport = navigationTracker.viewportBounds, viewport != navigationBounds { navigationBounds = viewport }
+        repairNavigationAfterLayout()
     }
     private func updateNavigationPosition() {
         guard !navigationPinned, pendingNavigation == nil, model.activityScrollTarget == nil, navigationBounds.height > 0 else { return }
@@ -408,14 +574,24 @@ struct ConversationView: View {
                 }
         }.accessibilityLabel("对话消息导航")
     }
+    private var composerCommandAllowed: Bool {
+        guard model.draftComments.isEmpty, model.draftFiles.isEmpty, let command = ComposerCommand(ComposerDocument(text: model.draft, skills: model.draftSkills).wireText),
+              ConversationCommands.available(command.name, model: model, target: actionTarget) else { return false }
+        return !["plan", "side"].contains(command.name) || command.argument.isEmpty || model.canWrite(.send)
+    }
+    private var commandInputAllowed: Bool {
+        model.canWrite && ComposerCommand.names.contains {
+            ConversationCommands.available($0, model: model, target: actionTarget)
+        }
+    }
     @ViewBuilder private var composerView: some View {
         @Bindable var model = model
         if !model.conversationReadOnly {
-        CarryOnChatComposer(text: $model.draft,
-            disabled: !(model.canCompose || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
+        CarryOnChatComposer(text: $model.draft, skills: $model.draftSkills, selection: $model.draftSelection,
+            disabled: !(model.canCompose || composerCommandAllowed || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting && !model.writing,
-            sendAllowed: model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable, stopAllowed: model.canInteract(.stop),
-            hasImages: !images.isEmpty || !model.draftSkills.isEmpty, stopping: model.state == "running", submitting: submitting,
+            sendAllowed: composerCommandAllowed || (model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable), commandInputAllowed: commandInputAllowed, stopAllowed: model.canInteract(.stop),
+            hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftFiles.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             sendLabel: model.state == "running" ? (queueFollowUp ? "排队发送" : "补充到当前任务") : nil,
             send: submitMessage,
@@ -425,21 +601,34 @@ struct ConversationView: View {
                     PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
                         Label("照片", systemImage: "photo")
                     }.disabled(images.count >= 3)
+                    if model.history["controls"]["supportsFileReferences"].bool == true && model.allows(.files) {
+                        Button { filesPicker = FilePanel(scope: model.scope, threadID: thread.id) } label: { Label("项目文件", systemImage: "doc") }
+                    }
+                    if model.history["controls"]["supportsMentions"].bool == true {
+                        Button { mentionsPicker = true } label: { Label("应用与插件", systemImage: "at") }
+                    }
                     if model.history["controls"]["supportsSkills"].bool == true {
                         Button { skillsPicker = true } label: { Label("技能", systemImage: "bolt") }
                     }
-                } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
                     .disabled(!model.canCompose || model.editingMessage != .null || loadingImages || submitting)
                     .accessibilityLabel("添加附件或技能")
-                if model.state == "running", canQueue {
-                    Menu {
+                Menu {
+                    Button { composerConfiguration = true } label: { Label("对话配置", systemImage: "gearshape") }
+                    if model.state == "running", canQueue {
                         Button { queueFollowUps = true } label: { Label("排队发送 · 本轮结束后", systemImage: queueFollowUps ? "checkmark" : "text.badge.clock") }
                         Button { queueFollowUps = false } label: { Label("立即补充 · 当前任务", systemImage: !queueFollowUps ? "checkmark" : "arrow.turn.down.right") }.disabled(model.history["controls"]["canSteer"].bool == false)
-                    } label: {
-                        Image(systemName: queueFollowUp ? "text.badge.clock" : "arrow.turn.down.right").frame(width: 44, height: 44)
-                    }.accessibilityLabel("后续消息方式").accessibilityValue(queueFollowUp ? "排队发送" : "立即补充")
-                }
+                    }
+                } label: { Image(systemName: "gearshape").offset(x: -4).frame(width: 44, height: 44) }.accessibilityLabel("对话配置")
                 Spacer(minLength: 4)
+                if let usage = ContextUsage(model.history["metadata"]["latestTokenUsageInfo"]) {
+                    Button { contextInformation = true } label: {
+                        ZStack {
+                            Circle().stroke(Design.secondary.opacity(0.25), lineWidth: 2)
+                            Circle().trim(from: 0, to: usage.fraction).stroke(Design.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
+                        }.frame(width: 18, height: 18).frame(width: 44, height: 44)
+                    }.accessibilityLabel("上下文已用 \(usage.percentage)%")
+                }
                 Button { modelInfo = true } label: {
                     HStack(spacing: 4) {
                         Text(ModelPresentation.name(composerModel, catalog: model.cachedValue("/api/models"))).lineLimit(1).truncationMode(.middle)
@@ -447,6 +636,9 @@ struct ConversationView: View {
                     }.font(.subheadline).frame(minHeight: 44)
                 }
                     .accessibilityLabel("模型与思考强度")
+                if supportsOperation("voice-start", in: model.history) {
+                    Button { showingVoice = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }.accessibilityLabel("语音聊天").disabled(!model.canInteract(.send))
+                }
             }
         }
     }
@@ -470,7 +662,7 @@ struct ConversationView: View {
                     Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { model.retryHistory() }
                 }
             }
-            if model.historyFailure == nil && model.history["syncing"].bool == true && !timeline.isEmpty {
+            if model.historyFailure == nil && model.history["syncing"].bool == true && !model.history["timeline"].array.isEmpty {
                 Text("已显示本地记录，正在同步原生历史").font(.caption).foregroundStyle(Design.secondary)
             }
 
@@ -509,19 +701,51 @@ struct ConversationView: View {
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let query = ComposerCommand.query(model.draft), model.draftSkills.isEmpty, images.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty {
+                let matches = ComposerCommand.names.filter { $0.hasPrefix(query) && ConversationCommands.available($0, model: model, target: actionTarget) }
+                if !matches.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(matches, id: \.self) { name in
+                                Button { model.draft = "/" + name; Task { await send() } } label: {
+                                    Text("/" + name).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
+                                }.disabled(submitting)
+                            }
+                        }
+                    }.frame(maxHeight: 220).background(Design.surface, in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+
             if !model.conversationReadOnly {
                 if !model.connected && !model.commandReady && model.allows(.send) {
                     Text("可继续编辑草稿，连接恢复后可发送").font(.caption).foregroundStyle(Design.secondary)
                 } else if (model.connected || model.commandReady) && !model.canCompose, let reason = model.interactionUnavailableReason(actionTarget, capability: .send) {
                     Text(reason).font(.caption).foregroundStyle(Design.secondary)
                 }
-                if queueUnavailable { Text("当前任务暂不接受补充，请等待队列同步或任务结束。").font(.caption).foregroundStyle(Design.secondary) }
+                if queueUnavailable && !composerCommandAllowed { Text("当前任务暂不接受补充，请等待队列同步或任务结束。").font(.caption).foregroundStyle(Design.secondary) }
                 ConversationActionBar(target: actionTarget)
             }
-            if !model.draftSkills.isEmpty {
-                DraftSkillChips(skills: Binding(get: { model.draftSkills }, set: { model.draftSkills = $0 }), disabled: submitting || model.writing)
+
+            if !model.draftFiles.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.draftFiles) { file in
+                            Button { model.draftFiles.removeAll { $0.path == file.path } } label: {
+                                HStack(spacing: 6) { Label(file.name, systemImage: "doc"); Image(systemName: "xmark") }
+                                    .font(.subheadline).padding(.horizontal, 10).frame(minHeight: 44)
+                            }.background(Design.input, in: RoundedRectangle(cornerRadius: 12))
+                                .accessibilityLabel("移除文件引用 \(file.name)")
+                                .disabled(submitting || model.writing || model.conversationReadOnly)
+                        }
+                    }
+                }
             }
             if loadingImages { ProgressView().controlSize(.small) }
+            if !model.draftComments.isEmpty {
+                Button { commentPanel = CommentPanel(target: actionTarget) } label: {
+                    Label("\(model.draftComments.count) 条待发送评论", systemImage: "text.bubble")
+                }.font(.subheadline).frame(minHeight: 44)
+            }
             if !model.conversationReadOnly && !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 12) {
@@ -536,13 +760,15 @@ struct ConversationView: View {
             }
         }.padding(.horizontal, 16)
     }
+    private func returnToLatest() {
+        navigationTracker.cancelReadingRestoration()
+        newMessages = false; navigationPinned = false; pendingNavigation = nil
+        model.activityScrollTarget = nil
+        if let last = chatMessages.last { restoreScroll = ConversationListScroll(messageID: last.id, position: .bottom) }
+    }
     @ViewBuilder private var latestButton: some View {
         if !bottomVisible {
-            Button {
-                newMessages = false; navigationPinned = false; pendingNavigation = nil
-                model.activityScrollTarget = nil
-                restoreScroll = ScrollToParams(messageID: "carryon:status", position: .bottom)
-            } label: {
+            Button { returnToLatest() } label: {
                 HStack(spacing: 6) {
                     if newMessages { Text("有新消息").font(.subheadline) }
                     Image(systemName: "chevron.down").font(.system(size: 18, weight: .medium))
@@ -554,7 +780,32 @@ struct ConversationView: View {
         }
     }
     private func send() async {
-        guard !submitting, model.canCompose, !loadingImages else { return }
+        guard !submitting, model.canWrite, !loadingImages else { return }
+        let command = ComposerDocument(text: model.draft, skills: model.draftSkills).wireText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = ComposerCommand(command) {
+            guard images.isEmpty, model.draftSkills.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty else { model.report(APIError("此命令不接受图片、引用或评论，请先处理附件")); return }
+            let source = model.draft, scope = model.scope, target = actionTarget
+            submitting = true
+            let effect = await ConversationCommands.execute(parsed, model: model, target: target)
+            submitting = false
+            guard model.scope == scope, model.selectedThread?.id == thread.id else { return }
+            switch effect {
+            case .side(let text): sideLaunch = SideLaunch(text: text, autoSend: true, sourceDraft: source, scope: scope, parentID: thread.id)
+            case .panel(let name, let argument):
+                if name == "model" { modelInfo = true }
+                else { commandPanel = CommandPanel(name: name, argument: argument, scope: scope, sourceDraft: source) }
+                if name != "fork", model.draft == source { model.draft = "" }
+            case .completed: if model.draft == source { model.draft = "" }
+            case .continueWith(let argument): if model.draft == source {
+                model.draft = argument; submitting = true
+                _ = await model.compose(images: [], queueFollowUp: queueFollowUp)
+                submitting = false
+            }
+            case .failed: break
+            }
+            return
+        }
+        guard model.canCompose else { return }
         submitting = true; defer { submitting = false }
         if await model.compose(images: images.map(JSONValue.string), queueFollowUp: queueFollowUp) { photos = [] }
     }
@@ -593,10 +844,18 @@ struct TimelineEntry: View {
     let item: JSONValue
     let threadID: String
     private var canEdit: Bool { Self.canEdit(item, threadID: threadID, model: model, readOnly: contentContext.isReadOnly) }
+    private var editAction: (@MainActor @Sendable () -> Void)? {
+        guard canEdit else { return nil }
+        let scope = model.scope
+        return {
+            guard model.scope == scope, Self.canEdit(item, threadID: threadID, model: model, readOnly: contentContext.isReadOnly) else { return }
+            model.beginEditing(item)
+        }
+    }
     static func canEdit(_ item: JSONValue, threadID: String, model: AppModel, readOnly: Bool) -> Bool {
-        supportsOperation("edit", in: model.history) && !readOnly && model.canInteract(.edit) && model.selectedThread?.id == threadID &&
+        item["type"].text == "userMessage" && item["turnId"] != .null && !readOnly &&
+        supportsOperation("edit", in: model.history) && model.canInteract(.edit) && model.selectedThread?.id == threadID &&
         model.state == "idle" && model.history["syncing"].bool != true &&
-        item["type"].text == "userMessage" && item["turnId"] != .null &&
         item["turnId"] == model.history["controls"]["lastTurnId"] &&
         !model.history["controls"]["lastUserText"].text.isEmpty &&
         model.history["timeline"].array.last(where: { $0["type"].text == "userMessage" })?.stableID == item.stableID
@@ -613,7 +872,7 @@ struct TimelineEntry: View {
                 let refs = item["artifacts"].array.filter { !nativePaths.contains($0["path"].text) && (user || $0["kind"].text == "image" || !ConversationPresentation.referencedArtifactIDs(item).contains($0["id"].text)) }
                 if user {
                     MessageThumbnails(parts: parts, refs: refs, threadID: threadID, alignTrailing: true)
-                    MessageSkillReferences(skills: parts.filter { $0["type"].text == "skill" })
+                    MessageComposerReferences(skills: parts.filter { ["skill", "mention"].contains($0["type"].text) })
                 }
                 else { ForEach(refs.filter { $0["kind"].text == "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID, inlineImage: true) } }
                 let messageText = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
@@ -622,7 +881,7 @@ struct TimelineEntry: View {
                         .environment(\.colorScheme, user ? .dark : colorScheme)
                         .padding(user ? 13 : 0).background(user ? Color.black : .clear, in: RoundedRectangle(cornerRadius: 20))
                         .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
-                        .onTapGesture(count: 2) { if canEdit { model.beginEditing(item) } }
+                        .environment(\.editConversationMessage, editAction)
                         .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
                 }
                 if !contentContext.isReadOnly { ForEach(item["asyncQuestions"].array, id: \.stableID) { question in AsyncQuestionView(question: question, threadID: threadID) } }
@@ -750,11 +1009,13 @@ struct ModelInformationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let target: ConversationActionTarget
+    var configuration = false
     private var snapshot: JSONValue { model.snapshot(for: target) }
     @State private var choices: [JSONValue] = []
     @State private var selectedModel = ""
     @State private var effort = ""
     @State private var workMode = "default"
+    @State private var approvalPolicy = "custom"
     @State private var loading = true
     @State private var saving = false
     @State private var failure: String?
@@ -763,6 +1024,7 @@ struct ModelInformationView: View {
         NavigationStack {
             Form {
                 if loading { ProgressView() }
+                if !configuration {
                 Picker("模型", selection: $selectedModel) {
                     if !choices.contains(where: { $0["id"].text == selectedModel }) { Text(selectedModel.isEmpty ? "未提供" : selectedModel).tag(selectedModel) }
                     ForEach(choices, id: \.stableID) { Text($0["name"].text).tag($0["id"].text) }
@@ -771,28 +1033,39 @@ struct ModelInformationView: View {
                     if !efforts.contains(effort) { Text(effort.isEmpty ? "未提供" : effort).tag(effort) }
                     ForEach(efforts, id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || efforts.isEmpty || saving || !model.canPerform(target, action: "settings"))
+                }
+                if configuration {
                 Picker("工作模式", selection: $workMode) {
                     Text("执行").tag("default")
                     Text("计划").tag("plan")
-                }.disabled(saving || loading || !model.canPerform(target, action: "settings"))
+                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("collaborationMode")) || selectedModel.isEmpty)
+                Picker("执行审批", selection: $approvalPolicy) {
+                    Text("按需请求").tag("on-request")
+                    Text("不可信命令请求").tag("untrusted")
+                    Text("不请求").tag("never")
+                    if approvalPolicy == "custom" { Text("当前自定义策略").tag("custom") }
+                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("approvalPolicy")))
+                }
                 if let failure { Text(failure).foregroundStyle(.red) }
                 if !loading && choices.isEmpty { Text("暂未读取到本机模型目录").foregroundStyle(Design.secondary) }
                 if supportsOperation("settings", in: snapshot) { Text("从下一轮生效").font(.caption).foregroundStyle(Design.secondary) }
-            }.navigationTitle("模型与思考强度").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(configuration ? "对话配置" : "模型与思考强度").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
                         if supportsOperation("settings", in: snapshot) { Button("保存") { Task {
                             saving = true
-                            var settings: JSONValue = .object(["model": .string(selectedModel), "effort": .string(effort)])
-                            if workMode != (snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default") {
+                            var settings: JSONValue = configuration ? .object([:]) : .object(["model": .string(selectedModel), "effort": .string(effort)])
+                            if configuration, approvalPolicy != "custom", approvalPolicy != snapshot["controls"]["settings"]["approvalPolicy"].string { settings = settings.setting("approvalPolicy", .string(approvalPolicy)) }
+                            if (configuration && workMode != (snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default")) || (!configuration && snapshot["controls"]["settings"]["collaborationMode"] != .null) {
                                 let previous = snapshot["controls"]["settings"]["collaborationMode"]["settings"]
                                 settings = settings.setting("collaborationMode", .object(["mode": .string(workMode), "settings": .object([
                                     "model": .string(selectedModel), "reasoning_effort": .string(effort), "developer_instructions": previous["developer_instructions"]])]))
                             }
+                            if settings.object?.isEmpty == true { saving = false; dismiss(); return }
                             if await model.perform("settings", target: target, fields: ["settings": settings]) { dismiss() }
                             saving = false
-                        } }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !efforts.contains(effort)) }
+                        } }.disabled(saving || loading || !model.canPerform(target, action: "settings") || (!configuration && !efforts.contains(effort))) }
                     }
                 }
                 .task {
@@ -805,6 +1078,7 @@ struct ModelInformationView: View {
                         workMode = snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default"
                         selectedModel = snapshot["controls"]["settings"]["model"].string ?? snapshot["metadata"]["latestModel"].text
                         effort = snapshot["controls"]["settings"]["effort"].string ?? snapshot["metadata"]["latestReasoningEffort"].text
+                        approvalPolicy = snapshot["controls"]["settings"]["approvalPolicy"].string ?? "custom"
                     } catch { if model.scope == scope { failure = error.localizedDescription } }
                     loading = false
                 }
@@ -1025,50 +1299,6 @@ private struct MessageThumbnails: View {
             }.frame(height: 88)
         }
     }
-}
-
-enum CarryOnMessageAction: MessageMenuAction {
-    case copy, selectText, edit
-    func title() -> String { self == .copy ? "复制原文" : self == .edit ? "编辑消息" : "选择文字" }
-    func icon() -> Image { Image(systemName: self == .copy ? "doc.on.doc" : self == .edit ? "pencil" : "text.cursor") }
-    static func menuItems(for message: ExyteChat.Message) -> [Self] {
-        guard let item = message.customData["entry"] as? JSONValue,
-              ["userMessage", "steeringUserMessage", "agentMessage"].contains(item["type"].text) else { return [] }
-        return message.customData["canEdit"] as? Bool == true ? [.selectText, .copy, .edit] : [.selectText, .copy]
-    }
-}
-
-@MainActor private final class ConversationNavigationTracker {
-    final class Entry { weak var view: UIView?; init(_ view: UIView) { self.view = view } }
-    var entries: [String: Entry] = [:]
-    var isDragging: Bool {
-        for entry in entries.values {
-            var parent = entry.view?.superview
-            while let view = parent {
-                if let scroll = view as? UIScrollView, scroll.isDragging { return true }
-                parent = view.superview
-            }
-        }
-        return false
-    }
-    var frames: [String: CGRect] {
-        entries = entries.filter { $0.value.view != nil }
-        return entries.reduce(into: [:]) { result, pair in
-            if pair.key != "carryon:status", let view = pair.value.view, view.window != nil {
-                result[pair.key] = view.convert(view.bounds, to: nil)
-            }
-        }
-    }
-}
-private struct ConversationNavigationMarker: UIViewRepresentable {
-    let id: String
-    let tracker: ConversationNavigationTracker
-    func makeUIView(context: Context) -> UIView { let view = UIView(); view.isUserInteractionEnabled = false; tracker.entries[id] = .init(view); return view }
-    func updateUIView(_ view: UIView, context: Context) { view.accessibilityIdentifier = "conversation-message-" + id; tracker.entries[id] = .init(view) }
-}
-private struct ConversationNavigationBounds: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
 private struct ConversationComposerBounds: PreferenceKey {

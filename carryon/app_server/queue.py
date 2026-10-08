@@ -40,7 +40,7 @@ def replace(runtime, tid, desired, expected, before_send=None):
         if [v['id'] for v in desired[:-1]] != list(old) or desired[-1]['id'] != item['id']:
             raise IPCError('队列已变化，请刷新')
         context = item.get('context') or {}
-        if set(context) - {'prompt', 'commentAttachments', 'imageAttachments', 'fileAttachments', 'pastedTextAttachments', 'addedFiles', 'workspaceRoots', 'skills'}:
+        if set(context) - {'prompt', 'commentAttachments', 'imageAttachments', 'fileAttachments', 'pastedTextAttachments', 'addedFiles', 'workspaceRoots', 'skills', 'mentions'}:
             raise IPCError('不支持此排队消息上下文')
         if any(context.get(k) for k in ('commentAttachments', 'fileAttachments', 'pastedTextAttachments', 'addedFiles')):
             raise IPCError('排队附件类型尚不支持')
@@ -48,7 +48,8 @@ def replace(runtime, tid, desired, expected, before_send=None):
         from carryon.contracts import text
         images = validate_images([v['src'] for v in context.get('imageAttachments', [])])
         from carryon.sessions.skills import inputs
-        skill_input = inputs(context.get('skills'))
+        from carryon.sessions.mentions import inputs as mention_inputs
+        skill_input = inputs(context.get('skills')) + mention_inputs(context.get('mentions'))
         prompt = text(item.get('text'), allow_empty=bool(images or skill_input))
         params.update(clientUserMessageId=item['id'], input=([{'type': 'text', 'text': prompt}] if prompt else []) +
                       [{'type': 'image', 'url': url} for url in images] + skill_input)

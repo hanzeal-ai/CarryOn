@@ -11,6 +11,7 @@ struct CreationModelPicker: View {
     @State private var effort = ""
     @State private var loading = true
     @State private var failure: String?
+    private var editable: Bool { scope == model.scope && model.canWrite(.create) && (selection.object?.keys.contains(where: { !["model", "effort"].contains($0) }) != true || model.canWrite(.edit)) }
     private var efforts: [String] { choices.first { $0["id"].text == selected }?["efforts"].array.compactMap(\.string) ?? [] }
     private func normalizeEffort() {
         if !efforts.contains(effort) {
@@ -24,12 +25,14 @@ struct CreationModelPicker: View {
                 if loading { ProgressView("正在读取模型…") }
                 Picker("模型", selection: $selected) {
                     Text("默认模型").tag("")
+                    if !selected.isEmpty && !choices.contains(where: { $0["id"].text == selected }) { Text("当前不可用：" + selected).tag(selected).disabled(true) }
                     ForEach(choices, id: \.stableID) { Text($0["name"].text).tag($0["id"].text) }
-                }.disabled(loading || scope != model.scope)
+                }.disabled(loading || !editable)
                 if !selected.isEmpty {
                     Picker("思考强度", selection: $effort) {
+                        if !effort.isEmpty && !efforts.contains(effort) { Text("当前不可用：" + effort).tag(effort).disabled(true) }
                         ForEach(efforts, id: \.self) { Text($0).tag($0) }
-                    }.disabled(loading || scope != model.scope)
+                    }.disabled(loading || !editable)
                 }
                 if let failure { Text(failure).foregroundStyle(.red) }
             }.navigationTitle("模型与思考强度").navigationBarTitleDisplayMode(.inline)
@@ -37,26 +40,31 @@ struct CreationModelPicker: View {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("完成") {
-                            guard scope == model.scope else { return }
-                            selection = selected.isEmpty ? .null : .object(["model": .string(selected), "effort": .string(effort)])
+                            guard editable, !loading, selected.isEmpty || efforts.contains(effort), selection["collaborationMode"] == .null || !selected.isEmpty else { return }
+                            var values = selection.object ?? [:]
+                            if selected.isEmpty { values.removeValue(forKey: "model"); values.removeValue(forKey: "effort") }
+                            else { values["model"] = .string(selected); values["effort"] = .string(effort) }
+                            if values["collaborationMode"] != nil, values["collaborationMode"] != .null {
+                                var settings = selection["collaborationMode"]["settings"].object ?? [:]
+                                settings["model"] = .string(selected); settings["reasoning_effort"] = .string(effort)
+                                values["collaborationMode"] = selection["collaborationMode"].setting("settings", .object(settings))
+                            }
+                            selection = values.isEmpty ? .null : .object(values)
                             dismiss()
-                        }.disabled(loading || scope != model.scope || (!selected.isEmpty && !efforts.contains(effort)))
+                        }.disabled(loading || !editable || (!selected.isEmpty && !efforts.contains(effort)) || (selection["collaborationMode"] != .null && selected.isEmpty))
                     }
                 }
                 .task {
                     loading = true; failure = nil
+                    selected = selection["model"].text; effort = selection["effort"].text
                     do {
                         let result = try await model.cachedDeviceRequest("/api/models", maxAge: 0)
                         guard !Task.isCancelled, scope == model.scope else { return }
                         choices = result["models"].array
-                        let savedModel = selection["model"].text
-                        if savedModel.isEmpty || choices.contains(where: { $0["id"].text == savedModel }) {
-                            selected = savedModel
-                            effort = selection["effort"].text
-                            normalizeEffort()
-                        } else {
-                            selected = ""; effort = ""
+                        if !selected.isEmpty && !choices.contains(where: { $0["id"].text == selected }) {
                             failure = "此前选择的模型已不可用，请重新选择"
+                        } else if !selected.isEmpty && !efforts.contains(effort) {
+                            failure = "此前选择的思考强度已不可用，请重新选择"
                         }
                     } catch { if scope == model.scope { failure = error.localizedDescription } }
                     loading = false
