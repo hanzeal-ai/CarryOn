@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from carryon.sessions.bridge import Bridge, BridgeError, snapshot_history
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.store import Journal
 
 THREAD = "11111111-1111-4111-8111-111111111111"

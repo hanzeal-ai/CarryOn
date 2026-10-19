@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import patch
 import test_native_archives_integration as fixtures
 from run_appserver_regression import Model, wait_until
-from carryon.app_server.background_terminals import page
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.background_terminals import page
+from carryon.errors import IPCError
 
 
 @unittest.skipUnless(os.environ.get('CARRYON_NATIVE_INTEGRATION') == '1', 'explicit isolated native integration')

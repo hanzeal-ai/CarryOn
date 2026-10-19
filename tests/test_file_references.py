@@ -2,10 +2,16 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.file_references import inventory, selections, project, contained, guard
 from carryon.sessions.user_messages import unwrap_user_message, SEPARATOR
 from carryon.workspaces.workspace_access import required_capabilities
+
+
+class Runtime(SimpleNamespace):
+    @property
+    def connection_identity(self):
+        return self.process, self.session_id
 
 
 class FileReferenceTests(unittest.TestCase):
@@ -32,7 +38,7 @@ class FileReferenceTests(unittest.TestCase):
             (root / 'escaped.py').symlink_to(foreign)
             hits = [{'root': temp, 'path': name, 'file_name': name, 'match_type': 'file'} for name in ['source.py', 'missing.py', 'escaped.py']]
             calls = []
-            runtime = SimpleNamespace(rpc=lambda method, params: calls.append((method, params)) or {'files': hits})
+            runtime = Runtime(rpc=lambda method, params: calls.append((method, params)) or {'files': hits})
             rows = inventory(runtime, temp, 'source', lambda: None)
             self.assertEqual(rows, [{'name': 'source.py', 'path': str(root / 'source.py'), 'relativePath': 'source.py', 'query': 'source'}])
             self.assertEqual(calls, [('fuzzyFileSearch', {'query': 'source', 'roots': [temp]})])
@@ -46,7 +52,7 @@ class FileReferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside:
             root = Path(temp); source = root / 'source.py'; source.write_text('local')
             state = {'cwd': temp}; writes = []
-            runtime = SimpleNamespace(connected=True, process=object(), session_id='original', lock=threading.RLock(),
+            runtime = Runtime(connected=True, process=object(), session_id='original', lock=threading.RLock(),
                 current=lambda _: state, rpc=lambda method, params: {'files': [{'root': params['roots'][0], 'path': 'source.py', 'file_name': 'source.py', 'match_type': 'file'}]})
             files = [{'name': 'source.py', 'path': str(source.resolve()), 'query': 'source'}]
             for change in ['cwd', 'session', 'deleted', 'symlink']:

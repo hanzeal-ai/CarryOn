@@ -1,6 +1,6 @@
 """Read native message search without loading, resuming or executing a task."""
-from carryon.app_server.read_control import reader
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.read_control import reader
+from carryon.errors import IPCError
 from carryon.sessions.native_metadata import record
 from carryon.sessions.catalog import valid_id
 

@@ -17,7 +17,11 @@ def manage(server, data):
     with server.auth_lock, server.binding_invites.lock, server.lock:
         device, record = device_record(server, data)
         action = data.get('action')
-        members = record.get('members', {})
+        from carryon.workspaces.authorization import authority, connections, preview, attach
+        if action == 'connection-preview': return preview(server, device)
+        if action == 'connection-attach': return attach(server, device, data)
+        authority_id, authority_record = authority(server.config['devices'], device)
+        members = authority_record.get('members', {})
         if action == 'list':
             return {'members':[{'account':server.auth.profile(identity), 'permissions':value} for identity,value in members.items()]}
         if action == 'invite':
@@ -50,10 +54,10 @@ def manage(server, data):
         updated = {**members}
         if allowed: updated[identity] = allowed
         else: updated.pop(identity, None)
-        server.save_devices({**server.config['devices'],device:{**record,'members':updated}})
+        server.save_devices({**server.config['devices'],authority_id:{**authority_record,'members':updated}})
         if 'view' not in allowed:
             streams = [sid for sid, stream in server.console_streams.items()
-                       if stream['device'] == device and server.auth.identity(stream['session']) == identity]
+                       if stream['device'] in connections(server.config['devices'], device) and server.auth.identity(stream['session']) == identity]
             for sid in streams:
                 server.release_stream(sid)
         if action == 'confirm':

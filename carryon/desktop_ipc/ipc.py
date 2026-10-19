@@ -1,3 +1,4 @@
+from carryon.errors import IPCError
 """Codex desktop IPC adapter, verified against desktop 26.901.51231.
 
 This is NOT the public app-server JSON-RPC transport. No socket replacement.
@@ -20,10 +21,7 @@ from carryon.desktop_ipc.patches import apply_patches
 from carryon.sessions.history_cache import NativeSnapshot
 
 
-class IPCError(Exception):
-    def __init__(self, message, uncertain=False):
-        super().__init__(message)
-        self.uncertain = uncertain
+
 
 
 class DesktopIPC:

@@ -5,7 +5,7 @@ from pathlib import Path
 from carryon.sessions.bridge import Bridge, BridgeError
 from carryon.store import Journal
 from carryon.routes.api import dispatch
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 PARENT='11111111-1111-4111-8111-111111111111'
 CHILD='22222222-2222-4222-8222-222222222222'

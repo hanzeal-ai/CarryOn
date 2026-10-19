@@ -1,5 +1,5 @@
 """Explicit, removable owner service. Each loaded thread owns one runtime lifetime."""
-from carryon.app_server.realtime_voice import held as voice_held
+from carryon.codex_protocol.realtime_voice import held as voice_held
 import threading
 import weakref
 from contextlib import contextmanager, nullcontext
@@ -8,7 +8,8 @@ import time
 from pathlib import Path
 from collections import OrderedDict, deque
 from carryon.app_server.app_server import AppServer
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.sessions.catalog import valid_id
 from carryon.contracts import digest
 from carryon.owner.requests import APPROVALS, VERSIONS, forward
@@ -476,7 +477,7 @@ class OwnerManager:
         return self._retire(tid, authorize=authorize)
 
     def _retire(self, tid, authorize=lambda: None, expected_entry=None, suspend_if_followed=False):
-        from carryon.app_server.background_terminals import empty, verify
+        from carryon.codex_protocol.background_terminals import empty, verify
         with self.lock:
             authorize()
             if tid in self.loading: raise IPCError('cannot release a loading session')

@@ -5,7 +5,7 @@ import uuid
 from collections import deque
 from contextlib import nullcontext
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 HELD = {'starting', 'active', 'stopping', 'unknown'}
@@ -92,7 +92,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
             if target is None: raise IPCError('语音需要已加载的原生会话')
             runtime, owner_guard = target
             with runtime._queue_lock(tid):
-                identity = (runtime.process, runtime.session_id)
+                identity = runtime.connection_identity
                 voice_id = str(uuid.uuid4()) if action == 'voice-start' else data.get('voiceId')
                 def guarded(write):
                     nonlocal attempted
@@ -101,7 +101,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                         def checked():
                             nonlocal attempted, previous_voice, event_revision
                             with runtime.lock:
-                                if (runtime.process, runtime.session_id) != identity: raise IPCError('原生语音连接已改变')
+                                if runtime.connection_identity != identity: raise IPCError('原生语音连接已改变')
                                 voice, _ = channel(runtime, tid, voice_id if action == 'voice-stop' else None)
                                 previous_voice = dict(voice)
                                 if action == 'voice-start':
@@ -123,7 +123,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                     authorized()
                     def confirm():
                         with runtime.lock:
-                            if (runtime.process, runtime.session_id) != identity or not runtime.connected: raise IPCError('语音回执所属连接已改变', uncertain=True)
+                            if runtime.connection_identity != identity or not runtime.connected: raise IPCError('语音回执所属连接已改变', uncertain=True)
                             channel(runtime, tid, voice_id)
                             bridge.journal.update(job['id'], state='completed', result={'voiceId': voice_id, 'requestAccepted': True}, evidence='native-realtime-request-response')
                     owner_guard(confirm)
@@ -132,7 +132,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
         if runtime and attempted:
             with runtime.lock:
                 state = runtime.current(tid)
-                if state and held(state) and (runtime.process, runtime.session_id) == identity and state['voice'].get('id') == voice_id and runtime.voice_channels.get(tid, {}).get('revision', 0) == event_revision:
+                if state and held(state) and runtime.connection_identity == identity and state['voice'].get('id') == voice_id and runtime.voice_channels.get(tid, {}).get('revision', 0) == event_revision:
                     project(runtime, tid, {**state['voice'], 'state': 'unknown', 'error': str(exc)} if uncertain else (previous_voice or {'state': 'closed'}))
         bridge.journal.update(job['id'], state='uncertain' if uncertain else 'failed', error=str(exc))
     if runtime: runtime.on_change()
@@ -160,14 +160,14 @@ def append_audio(bridge, tid, data, authorize=None):
     with session as target:
         if target is None: raise IPCError('语音需要已加载的原生会话')
         runtime, owner_guard = target
-        identity = (runtime.process, runtime.session_id)
+        identity = runtime.connection_identity
         with runtime._queue_lock(tid):
             def guarded(write):
                 with bridge.lock:
                     authorized()
                     def checked():
                         with runtime.lock:
-                            if (runtime.process, runtime.session_id) != identity: raise IPCError('原生语音连接已改变')
+                            if runtime.connection_identity != identity: raise IPCError('原生语音连接已改变')
                             voice, current = channel(runtime, tid, data['voiceId'])
                             if voice.get('state') != 'active': raise IPCError('语音尚未启动或已停止')
                             if sequence != current['inputSequence'] + 1: raise IPCError('音频序号不连续；不会自动重发')

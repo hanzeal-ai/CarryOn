@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import Catalog
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.store import Journal
 from carryon.routes.websocket import upgrade, serve
 
@@ -104,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
             bridge = self.server.bridge
             data = self.body() if method == "POST" else {}
             if path == '/api/codex-account' and method in ('GET','POST'):
-                if bridge.status().get('backend') != 'app-server': raise ValueError('请在 Codex App 登录')
+                if bridge.status().get('backend') != 'app-server': raise ValueError('请在此工作区对应的 Codex CLI 或 Codex App 中登录')
                 ipc, _ = bridge.require()
                 result = ipc.rpc('account/read', {'refreshToken':False}) if method == 'GET' else ipc.rpc('account/login/start', {'type':'chatgpt'})
                 self.reply(200,result); return
@@ -188,6 +188,13 @@ def run(port, codex_home, directory):
             raise ValueError('独立工作区必须使用创建时分配的 Codex 目录')
         from carryon.app_server.app_server_bridge import AppServerBridge
         bridge = AppServerBridge(codex_home, journal)
+    elif workspace_backend(directory) == 'codex-cli':
+        from carryon.services import records
+        from carryon.codex_cli.bridge import CliBridge
+        saved = records()[str(directory)]
+        if Path(saved['codexHome']).resolve() != codex_home.resolve():
+            raise ValueError('CLI 工作区必须使用创建时指定的 Codex 目录')
+        bridge = CliBridge(codex_home, journal, socket_path=saved.get('cliSocket'))
     else:
         from carryon.services import catalog_directory
         ipc_lock = (private_dir(catalog_directory())/'ipc-workspace.lock').open('a+')
@@ -198,6 +205,8 @@ def run(port, codex_home, directory):
         bridge = OwnerBridge(codex_home / 'ipc/ipc.sock', Catalog(codex_home), journal,
                              owner_directory=directory / 'owner')
     bridge.workspace_directory = directory
+    from carryon.workspaces.connections import descriptor
+    bridge.connection_workspace = descriptor(records().get(str(directory)))
     from carryon.lifecycle import BridgeLifecycle
     bridge.lifecycle = BridgeLifecycle(bridge)
     server = Server(('127.0.0.1', port), Handler)

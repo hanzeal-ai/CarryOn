@@ -4,9 +4,8 @@ import threading
 import time
 from pathlib import Path
 
-from carryon.app_server.app_server import AppServer
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import valid_id
 
@@ -60,11 +59,11 @@ def dispatch(bridge, ipc, generation, job, authorize):
                 raise IPCError('此会话不支持原生分页分叉')
             if not state['turns']: raise IPCError('会话尚无可分叉的轮次')
             selected = job.get('lastTurnId') or state['turns'][-1]['turnId']
-            identity = (runtime.process, runtime.session_id)
+            identity = runtime.connection_identity
             def valid_source():
                 current = runtime.current(tid)
                 if (not current or current.get('_metadataOnly') or not runtime.connected
-                        or (runtime.process, runtime.session_id) != identity):
+                        or runtime.connection_identity != identity):
                     raise IPCError('来源会话连接已改变')
                 turn = next((t for t in current['turns'] if t['turnId'] == selected), None)
                 if turn is None or turn['status'] not in ('completed', 'failed', 'interrupted'):
@@ -76,7 +75,7 @@ def dispatch(bridge, ipc, generation, job, authorize):
                 authorized(); valid_source()
                 # A separate writer owns only the child. Forks are durable without
                 # a first prompt, so the normal Owner loader can reopen it later.
-                creator = AppServer(runtime.home, runtime_directory=runtime.runtime_directory / 'forks' / job['id'])
+                creator = runtime.peer(runtime_directory=runtime.runtime_directory / 'forks' / job['id'])
                 creator.connect(); creator.require_account()
                 def guarded(write):
                     nonlocal sent

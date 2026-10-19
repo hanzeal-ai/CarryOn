@@ -1,8 +1,8 @@
 import copy
 import unittest
 import test_native_skills as fixtures
-from carryon.app_server.goals import read, request
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.goals import read, request
+from carryon.errors import IPCError
 from carryon.sessions.operations import submit, controls
 from carryon.workspaces.workspace_access import required_capabilities
 from carryon.sessions.history_cache import HistoryCache

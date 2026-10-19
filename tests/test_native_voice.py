@@ -1,8 +1,8 @@
 """Voice delivery boundaries, independent of real accounts and audio hardware."""
 import copy
 import unittest
-from carryon.app_server.realtime_voice import append_audio, read
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.realtime_voice import append_audio, read
+from carryon.errors import IPCError
 from carryon.sessions.operations import submit
 from carryon.sessions.history_cache import NativeSnapshot
 import test_native_skills as fixture
@@ -80,7 +80,7 @@ class NativeVoiceTests(unittest.TestCase):
         self.assertEqual(len(self.writes),1)
         self.assertEqual(self.runtime.current(T)['voice']['state'],'active')
     def test_slow_consumer_buffer_is_bounded_and_reports_gap(self):
-        from carryon.app_server.realtime_voice import MAX_BUFFER
+        from carryon.codex_protocol.realtime_voice import MAX_BUFFER
         job=self.start();identifier=job['result']['voiceId']
         self.runtime._event({'method':'thread/realtime/started','params':{'threadId':T,'realtimeSessionId':identifier,'version':'v2'}})
         snapshot=self.runtime.current(T)

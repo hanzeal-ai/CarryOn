@@ -134,7 +134,8 @@ class ConsoleServer(Gateway):
         import socket
         with self.lock:
             if device not in self.config['devices']:raise ValueError('设备不存在')
-            self.save_devices({k:v for k,v in self.config['devices'].items() if k!=device})
+            from carryon.workspaces.authorization import removing
+            self.save_devices(removing(self.config['devices'], device))
             connection=self.devices.pop(device,None)
             if connection:
                 connection.close()
@@ -374,7 +375,8 @@ class ConsoleHandler(Handler):
                 self.reply(200,{'authenticated':False});return
             if path=='/console/session' and method=='GET':
                 with self.server.lock:
-                    devices=[{'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed,
+                    from carryon.workspaces.connections import public_descriptor
+                    devices=[{'workspace':public_descriptor(self.server.config['devices'][d]),'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed,
                               'permissions':granted(self.server,key,d)} for d in self.server.config['devices'] if 'view' in granted(self.server,key,d)]
                 self.reply(200,{'devices':devices,'publicUrl':self.server.public_url,'account':self.server.auth.profile(self.server.auth.identity(key))});return
             if path.startswith('/console/devices/'):

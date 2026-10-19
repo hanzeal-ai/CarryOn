@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
-from carryon.app_server.app_server_bridge import AppServerCatalog
+from carryon.codex_protocol.bridge import ProtocolCatalog
 
 
 def row(ident, name='Task', **extra):
@@ -12,7 +12,7 @@ def row(ident, name='Task', **extra):
 class AppServerPaginationTests(unittest.TestCase):
     def catalog(self, pages):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
-        catalog=AppServerCatalog(temp.name)
+        catalog=ProtocolCatalog(temp.name)
         rpc=Mock(side_effect=pages)
         catalog.bridge=SimpleNamespace(require=lambda:(SimpleNamespace(rpc=rpc),None))
         return catalog,rpc

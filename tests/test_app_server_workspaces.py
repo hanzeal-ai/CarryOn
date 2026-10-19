@@ -111,7 +111,7 @@ class WorkspaceIsolationTests(unittest.TestCase):
                 self.assertTrue(Path(thread['path']).is_relative_to(a.home))
                 self.assertEqual(a.rpc('thread/read',{'threadId':thread['id'],'includeTurns':False})['thread']['id'],thread['id'])
                 self.assertNotIn(thread['id'],[t['id'] for t in b.rpc('thread/list',{'limit':100})['data']])
-                from carryon.desktop_ipc.ipc import IPCError
+                from carryon.errors import IPCError
                 with self.assertRaises(IPCError): b.rpc('thread/read',{'threadId':thread['id'],'includeTurns':False})
             finally: a.close(); b.close()
 
@@ -130,7 +130,7 @@ class AppServerDeliveryTests(unittest.TestCase):
                 bridge.enabled=True;bridge.ipc=ipc;bridge.workspace=Mock()
                 job={'id':'create-test','kind':'create','threadId':'','state':'preparing','created':1,'fingerprint':'hash','clientMessageId':'msg'}
                 journal.insert(job)
-                from carryon.app_server.app_creation import dispatch
+                from carryon.codex_protocol.app_creation import dispatch
                 dispatch(bridge,ipc,0,job,'hello',None)
                 self.assertEqual(journal.get(job['id'])['state'],'accepted')
                 with patch.object(bridge,'turn_evidence',return_value={'status':terminal}):
@@ -220,7 +220,7 @@ class AppServerResponseReceiptTests(unittest.TestCase):
         self.assertEqual(self.bridge._refresh_job('reply-test')['state'], 'uncertain')
 
     def test_cancel_before_write_is_known_failure_and_releases_waiter(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         def cancel(write): raise IPCError('authorization revoked')
         with self.assertRaises(IPCError) as raised:
             self.server.respond(self.tid, {'requestId':17,'decision':'decline'}, cancel, 10)
@@ -229,7 +229,7 @@ class AppServerResponseReceiptTests(unittest.TestCase):
         self.assertEqual(self.server.response_waiters, {})
 
     def test_known_transport_refusal_releases_unsent_waiter(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         def refuse(value): raise IPCError('disconnected')
         self.server._write = refuse
         self.assertEqual(self.submit()['state'], 'failed')

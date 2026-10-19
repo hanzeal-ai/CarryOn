@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from carryon.owner.manager import OwnerManager
 from carryon.owner.requests import forward
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.owner.state import conversation
 
 T = '11111111-1111-4111-8111-111111111111'
@@ -20,6 +20,10 @@ def state(tid=T):
 
 
 class Runtime:
+    @property
+    def connection_identity(self):
+        return self.process, self.session_id
+
     instances = []
     def __init__(self, *args, **kwargs):
         self.lock = threading.RLock()

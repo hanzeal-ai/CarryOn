@@ -2,7 +2,7 @@
 
 **换个设备，接着做。** · Switch devices. Carry on.
 
-CarryOn 让你在另一台设备上继续处理 Mac 上的 AI 工作。它连接本机 Codex App，通过浏览器控制台、iOS 客户端或自己的云端控制台查看会话、发送任务和处理审批，并提供 HTTP / WebSocket API。
+CarryOn 让你在另一台设备上继续处理 Mac 上的 AI 工作。它连接本机 Codex App、Codex CLI 或独立 app-server，通过浏览器控制台、iOS 客户端或自己的云端控制台查看会话、发送任务和处理审批，并提供 HTTP / WebSocket API。
 
 [快速开始](#快速开始) · [开发与验证](#开发与验证) · [文档](#文档) · [反馈与贡献](#反馈与贡献)
 
@@ -13,11 +13,11 @@ CarryOn 让你在另一台设备上继续处理 Mac 上的 AI 工作。它连接
 - 处理停止、补充、编辑、设置、审批和输入请求。
 - 管理多个本地工作区，并将工作区绑定到不同云端。
 - 通过持久化请求标识防止重复投递；结果未知时不自动重发。
-- CLI 与 macOS 桌面端共享本机服务和配置。
+- CarryOn CLI 与 CarryOn macOS 应用共享本机服务和配置。
 
 ## 项目状态与运行条件
 
-项目处于发布前阶段。当前本机服务面向 macOS，需要安装并登录 Codex App；远程设备通过浏览器或 iOS 客户端访问。Codex 内部协议的验证范围见[验证记录](docs/VALIDATION.md)。
+项目处于发布前阶段。当前本机服务面向 macOS，按工作区类型连接 Codex App、Codex CLI daemon 或独立 app-server；远程设备通过浏览器或 iOS 客户端访问。Codex 内部协议的验证范围见[验证记录](docs/VALIDATION.md)。
 
 独立安装包自带 Python，终端用户无需安装 Node.js 或 Python。项目尚未发布到 PyPI，请使用本仓库实际构建的安装包。本机构建产物的正式分发仍需完成签名、公证及目标设备验收。
 
@@ -34,11 +34,36 @@ carryon status
 carryon open
 ```
 
-`init` 完成云端与工作区绑定，需要在已登录的 CarryOn iOS App 中扫码确认。绑定后可自动启动服务。日常使用 `start` 启动、`open` 打开本地控制台，结束时运行 `carryon stop`。关闭网页不会停止服务。
+`init` 首次绑定工作区时，需要在已登录的 CarryOn iOS App 中扫码确认。向同一工作区添加连接时，可在电脑端选择已有绑定、核对账号和权限并确认，无需手机再次扫码。绑定后可自动启动服务。日常使用 `start` 启动、`open` 打开本地控制台，结束时运行 `carryon stop`。关闭网页不会停止服务。
+
+### 连接 Codex CLI
+
+在使用目标 `CODEX_HOME` 的终端启动 Codex daemon，然后注册 CLI 连接：
+
+```sh
+codex app-server daemon start
+carryon services create --backend codex-cli --name "Codex CLI" --codex-home "$HOME/.codex"
+```
+
+非交互执行会返回连接 `directory`；交互执行可选择已有工作区绑定，或首次扫码绑定。之后使用
+`carryon init --state-dir <directory>`、`carryon start --state-dir <directory>`。
+同机同一 Codex Home 的桌面端与 CLI 连接会归入同一个工作区。手机工作区列表显示两种连接，
+首页可以切换。首次扫码绑定一次；添加连接时在电脑端确认沿用已有账号和工作区权限。
+只有展示分组相同不会自动授权，消息和审批仍路由到所选连接。
+
+CLI 连接默认连接该 home 下的 `app-server-control/app-server-control.sock`。
+已有显式 Unix WebSocket 服务时，可在创建工作区时指定 `--cli-socket /绝对路径/server.sock`，
+并让 Codex CLI 连接同一端点。服务运行期间不要切换其 CODEX_HOME。
+
+CarryOn 只附加 CLI 运行时，不启动或停止它。关闭手机、CarryOn 或 CLI 终端后，任务继续由 daemon 执行；
+停止 daemon 本身不在此保证内。重连重新订阅历史与待审批请求，未确认写入不会自动重发。
+CLI 工作区不依赖 Codex 桌面端；已验证版本为 Codex CLI 0.155.1。CLI 后端当前不提供临时聊天入口。
+恢复订阅使用原生 `thread/resume`；外部客户端并发卸载会话时，存在重新加载并继续活动目标的原生竞态，见[架构边界](docs/ARCHITECTURE.md)。
+若尚无托管安装，请先按 `codex app-server daemon bootstrap --help` 完成 Codex 自身的 daemon 安装，或使用显式 Unix 监听端点。
 
 ### 从源码运行本机服务
 
-需要 Git、Python 3.10+ 和本机 Codex App。在终端执行：
+需要 Git、Python 3.10+，以及对应工作区使用的 Codex 运行时。在终端执行：
 
 ```sh
 git clone https://github.com/hanzeal-ai/CarryOn.git

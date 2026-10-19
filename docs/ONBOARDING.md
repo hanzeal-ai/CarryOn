@@ -50,3 +50,19 @@ python3 scripts/apple_association.py --aasa output/apple-app-site-association --
 ## 验证与恢复边界
 
 本任务只授权本地实现与验证；不提交、推送、部署、修改真实用户授权或代替用户进行生产扫码确认。恢复前停止新版本服务，保留每个工作区目录、云端 users/sessions/binding-invites 文件及设备注册表备份。含多账号授权的数据不能直接交给旧单管理员程序公开运行。详细验证结果和未完成门禁见 `implementation-onboarding.md`。
+
+
+## 向已有工作区添加连接
+
+CLI 的 `carryon init` 自动列出同一工作区已经保存的云端绑定；选择后展示账号、权限及本机远程操作范围，
+输入确认才开放新连接。CarryOn 桌面端初始化页提供同样的已有绑定选择和确认弹窗。手机无需再扫码。
+首次绑定及新增账号仍沿用扫码/定向申请流程，不根据展示分组自动授权。
+
+自动化调用可使用 `carryon init --input-json`：
+- `action: share-preview`，传 `sourceDirectory`、`sourceBindingId`，返回账号权限及 `shareConfirmation`。
+- 人类核对后 `action: share-confirm`，传原 `shareConfirmation`、`confirmed: true`，可指定 `autoStart`。
+- 结果未知时 `action: status` 读取 `sharedPending`，使用原确认重试，不生成新请求编号。
+  输入 JSON 和返回状态不暴露来源 token；连接凭证仅写入受保护的本机配置。
+
+`members grant/revoke/list/invite` 对已加入连接解析到同一工作区成员权威记录；
+取消某个连接的本机远程操作开关仍只限制该连接。

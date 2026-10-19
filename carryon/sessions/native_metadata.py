@@ -1,5 +1,5 @@
 """Eligibility for persistent native metadata controls."""
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.subagents import is_subagent
 
 def record(bridge, tid):

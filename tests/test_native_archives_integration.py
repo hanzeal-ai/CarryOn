@@ -9,7 +9,8 @@ from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 from carryon.app_server.app_server import AppServer
 from carryon.app_server.app_server_bridge import AppServerBridge
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.routes.api import dispatch
 from carryon.store import Journal
 from run_appserver_regression import Model, wait_until

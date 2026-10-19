@@ -8,7 +8,7 @@ from pathlib import Path
 
 from carryon.contracts import digest, text, validate_request_id
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.workspaces.workspace import project_identity
 
 

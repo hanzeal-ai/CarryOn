@@ -8,7 +8,8 @@ from unittest.mock import Mock
 from carryon.routes.api import dispatch as api
 from carryon.sessions.bridge import BridgeError
 from carryon.contracts import digest
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.sessions.operations import submit
 from carryon.store import Journal
 import test_bridge as message_fixture

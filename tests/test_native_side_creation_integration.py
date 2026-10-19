@@ -12,7 +12,7 @@ from unittest.mock import patch
 from run_appserver_regression import Model, wait_until
 from carryon.app_server.app_server import AppServer
 from carryon.app_server.app_server_bridge import AppServerBridge
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.routes.api import dispatch
 from carryon.sessions.side_creation import BOUNDARY
 from carryon.store import Journal

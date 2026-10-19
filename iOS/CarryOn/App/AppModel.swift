@@ -153,6 +153,10 @@ import CarryOnCore
     }
 
     var activityBadgeCount: Int { authenticated ? max(0, activityCount ?? 0) + requests.count : 0 }
+    var workspaceGroups: [WorkspaceGroup] { WorkspaceGroup.groups(devices) }
+    var selectedWorkspace: WorkspaceGroup? { workspaceGroups.first { $0.connections.contains { $0.id == selectedDevice } } }
+    var workspaceTitle: String { selectedWorkspace?.title ?? device?.title ?? "选择工作区" }
+    var connectionTitle: String { device.map(WorkspaceGroup.connectionLabel) ?? "未选择连接" }
     var device: Record? { devices.first { $0.id == selectedDevice } }
     func allows(_ capability: WorkspaceCapability) -> Bool { capability.isGranted(in: device?.value["permissions"] ?? .null) }
     func canWrite(_ capability: WorkspaceCapability) -> Bool { canWrite && allows(capability) }
@@ -308,6 +312,7 @@ import CarryOnCore
         }
     }
     func switchDevice(_ id: String) {
+        guard id.isEmpty || devices.contains(where: { $0.id == id }) else { return }
         draftStore.save()
         workspacePreferences.selectDevice(id, server: addressText)
         conversationPrefetcher.stop()

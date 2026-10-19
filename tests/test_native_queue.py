@@ -1,9 +1,10 @@
 import tempfile
 import unittest
 from types import SimpleNamespace
-from carryon.app_server.app_server import AppServer, thread_settings
+from carryon.app_server.app_server import AppServer
+from carryon.codex_protocol.client import thread_settings
 from carryon.contracts import digest
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 class QueueDispatchTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class QueueDispatchTests(unittest.TestCase):
         return {}
 
     def test_idle_queue_resumes_through_native_start(self):
-        from carryon.app_server.queue import replace
+        from carryon.codex_protocol.queue import replace
         rows = self.runtime.queue_snapshot('t', refresh=True)
         resumed = [{k: v for k, v in rows[0].items() if k != 'pausedReason'}]
         replace(self.runtime, 't', resumed, digest(rows), lambda write: write())

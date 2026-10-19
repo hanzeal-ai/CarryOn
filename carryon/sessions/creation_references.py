@@ -2,7 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.paths import private_dir
 from carryon.workspaces.workspace import project_identity
 from carryon.sessions import skills, mentions
@@ -27,13 +27,13 @@ def discover(bridge, project_id=None, authorize=None):
                 raise BridgeError('目标项目已改变，请重新选择项目')
     def read(runtime):
         check(); runtime.require_account()
-        identity = (runtime.process, runtime.session_id)
+        identity = runtime.connection_identity
         if not runtime.connected: raise IPCError('原生连接已断开')
         skill_rows = skills.catalog(runtime, cwd)
         skill_rows = {**skill_rows, 'skills': skills.skill_icons(skill_rows['skills'])}
         mention_rows = mentions.catalog(runtime, cwd)
         check()
-        if not runtime.connected or (runtime.process, runtime.session_id) != identity:
+        if not runtime.connected or runtime.connection_identity != identity:
             raise IPCError('引用目录所属原生连接已改变')
         return {'cwd': cwd, 'skills': skill_rows['skills'], 'mentions': mention_rows['mentions'],
                 'errors': skill_rows['errors'] + mention_rows['errors']}

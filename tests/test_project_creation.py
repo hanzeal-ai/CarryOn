@@ -10,7 +10,7 @@ from carryon.owner.integration import OwnerBridge
 from carryon.owner.manager import OwnerManager
 from carryon.sessions.creation import submit, resolve_project
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.store import Journal
 from carryon.workspaces.workspace import project_identity
 from test_bridge import FakeIPC, CHILD

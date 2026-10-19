@@ -3,9 +3,9 @@ import json
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from carryon.app_server.read_control import reader
-from carryon.app_server.app_server import native_turn
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.read_control import reader
+from carryon.codex_protocol.client import native_turn
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 
@@ -55,7 +55,7 @@ class NativeHistory:
                 seen.add(cursor)
             verify()
             if bridge.catalog.archive_record(tid).get('archived'): raise IPCError('读取期间会话已归档')
-            state = NativeSnapshot({'id': tid, 'title': thread.get('name') or row.get('name') or row.get('title') or '', 'cwd': thread.get('cwd') or row.get('cwd'), 'threadMetadata': thread, 'turns': list(reversed(turns)), 'threadRuntimeStatus': {'type': 'notLoaded'}, 'requests': []})
+            state = NativeSnapshot({'id': tid, 'executionBackend': getattr(ipc, 'execution_backend', 'desktop'), 'title': thread.get('name') or row.get('name') or row.get('title') or '', 'cwd': thread.get('cwd') or row.get('cwd'), 'threadMetadata': thread, 'turns': list(reversed(turns)), 'threadRuntimeStatus': {'type': 'notLoaded'}, 'requests': []})
             result = snapshot_history(state)
             result.update(source='native-persisted', controls={}, pendingRequests=[], access={'nativeReady': False, 'canInteract': False}, historyWindow={'limit': limit, 'hasMore': cursor is not None, 'unit': 'turns'}, historyRevision='native-read:' + state.history_revision)
         # Reuse only a stable native file version; never cache across a concurrent write.

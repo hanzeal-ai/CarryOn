@@ -1,6 +1,6 @@
 """Canonical installed-plugin and accessible-app references from the native runtime."""
 from pathlib import Path
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 def selections(value):
@@ -30,7 +30,7 @@ def inventory(runtime, tid, *, plugins=True, apps=True, strict=False):
         raise IPCError('引用发现需要已加载的原生会话')
     cwd = state.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute(): raise IPCError('会话工作目录无效')
-    identity = (runtime.process, runtime.session_id, cwd)
+    identity = (runtime.connection_identity, cwd)
     result = catalog(runtime, cwd, tid, plugins=plugins, apps=apps, strict=strict)
     verify(runtime, tid, identity)
     return result, identity

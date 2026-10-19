@@ -1,8 +1,8 @@
 """Project-scoped native file discovery and ordinary-text reference projection."""
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from carryon.app_server.read_control import reader
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.read_control import reader
+from carryon.errors import IPCError
 from carryon.sessions.native_metadata import configuration_cwd
 from carryon.sessions.user_messages import HEADER, SEPARATOR, REQUEST_HEADER
 
@@ -123,7 +123,7 @@ def guard(runtime, tid, files, before_send):
     cwd = state.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute():
         raise IPCError('项目工作目录无效')
-    identity = (runtime.process, runtime.session_id, cwd)
+    identity = (runtime.connection_identity, cwd)
     source_cwd = cwd
     cwd = project_root(source_cwd)
     def current():

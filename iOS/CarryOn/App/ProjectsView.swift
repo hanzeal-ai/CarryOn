@@ -21,6 +21,22 @@ struct ProjectsView: View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if let workspace = model.selectedWorkspace {
+                    HStack {
+                        Text(workspace.title).font(.subheadline).foregroundStyle(Design.secondary).lineLimit(1)
+                        Spacer()
+                        Menu {
+                            ForEach(workspace.connections) { connection in
+                                Button { if connection.id != model.selectedDevice { model.switchDevice(connection.id) } } label: {
+                                    if connection.id == model.selectedDevice {
+                                        Label(WorkspaceGroup.connectionLabel(connection), systemImage: "checkmark")
+                                    } else { Text(WorkspaceGroup.connectionLabel(connection)) }
+                                }
+                            }
+                        } label: { Label(model.connectionTitle, systemImage: "arrow.left.arrow.right") }
+                        .accessibilityLabel("切换连接")
+                    }
+                }
                 Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4).padding(.bottom, 5)
                 if model.status["supportsThreadSections"].bool == true { PinnedThreadsSummary { browsingSections = true } }
                 VStack(alignment: .leading, spacing: 8) {

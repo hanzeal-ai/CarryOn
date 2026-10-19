@@ -3,28 +3,24 @@ import copy
 import threading
 
 from carryon.sessions.catalog import ID
+from carryon.codex_protocol.events import ProjectionEvents
 
 VERSIONS = {'thread-stream-following-status-requested': 1, 'ipc-connection-reset': 1,
             'thread-read-state-changed': 3, 'thread-archived': 2,
             'thread-unarchived': 1, 'thread-queued-followups-changed': 2}
 
 
-class Events:
+class Events(ProjectionEvents):
     def __init__(self, ipc):
         self.ipc = ipc
-        self.queues = {}
-        self.flags = {}
-        self.catalog_revision = 0
-        self.reset_revision = 0
+        super().__init__()
         self.read_refreshes = {}
         self.read_dirty = set()
 
     def clear(self):
         self.read_refreshes.clear()
         self.read_dirty.clear()
-        self.queues.clear()
-        self.flags.clear()
-        self.catalog_revision += 1
+        super().clear()
 
     def handle(self, message):
         method = message.get('method')
@@ -105,7 +101,7 @@ class Events:
         threading.Thread(target=self._refresh_read, args=(tid, token), daemon=True).start()
 
     def _refresh_read(self, tid, token):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         ipc = self.ipc
         try:
             while True:

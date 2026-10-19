@@ -1,6 +1,6 @@
 """Validate follower requests against the owned runtime before forwarding."""
 from carryon.contracts import digest
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.operations import build, REQUEST_METHODS
 
 APPROVALS = {

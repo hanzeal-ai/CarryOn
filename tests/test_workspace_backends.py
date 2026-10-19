@@ -7,7 +7,7 @@ from unittest.mock import patch
 from carryon.services import workspace_backend, workspace_codex_home
 from carryon.services import register, records
 from carryon.app_server.app_server import AppServer
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.operations import controls
 
 
@@ -33,6 +33,15 @@ class WorkspaceBackendTests(unittest.TestCase):
         with patch.dict(os.environ, {'CARRYON_HOME':str(a)}):
             self.assertEqual(workspace_backend(a), 'app-server')
         self.assertNotEqual(records()[str(a)]['codexHome'], records()[str(b)]['codexHome'])
+
+    def test_group_migration_and_desktop_home_change_split_identity(self):
+        desktop = register(self.root/'default', name='电脑', codex_home=self.root/'one', backend='desktop-ipc')
+        cli = register(self.root/'cli', codex_home=self.root/'one', backend='codex-cli')
+        self.assertEqual(desktop['workspaceId'], cli['workspaceId'])
+        changed = register(self.root/'default', codex_home=self.root/'two')
+        self.assertNotEqual(changed['workspaceId'], cli['workspaceId'])
+        self.assertEqual(records()[str(self.root/'cli')]['workspaceId'], cli['workspaceId'])
+        self.assertEqual(register(self.root/'default')['workspaceId'], changed['workspaceId'])
 
     def test_first_custom_workspace_uses_registered_desktop_identity(self):
         from carryon.workspaces.workspaces import initialize

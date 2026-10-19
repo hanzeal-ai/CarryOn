@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 from carryon.app_server.app_server import AppServer
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.routes.api import dispatch
 import test_native_archives_integration as fixtures
 from run_appserver_regression import wait_until

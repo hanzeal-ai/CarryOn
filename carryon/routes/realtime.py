@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from carryon.sessions.catalog import valid_id
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.thread_status import project_status
 
 

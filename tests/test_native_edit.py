@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from carryon.app_server.app_server import AppServer
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.operations import submit
 from carryon.store import Journal

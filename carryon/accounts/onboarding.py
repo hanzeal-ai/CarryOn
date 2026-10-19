@@ -17,6 +17,12 @@ DEFAULT_CLOUD_URL = cloud_url()
 from carryon.routes.http_transport import request_json
 
 
+class BindingRequestError(ValueError):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
 class InvalidDeviceCredentials(ValueError):
     pass
 
@@ -36,7 +42,7 @@ def request(url, action, body):
             error.close()
         if error.code == 403 and detail == '设备凭证无效':
             raise InvalidDeviceCredentials('设备凭证无效，请重新绑定此云端工作区后再试') from None
-        raise ValueError(f'云端请求失败（HTTP {error.code}）' + (f'：{detail[:500]}' if isinstance(detail, str) else '')) from None
+        raise BindingRequestError(error.code, f'云端请求失败（HTTP {error.code}）' + (f'：{detail[:500]}' if isinstance(detail, str) else '')) from None
 
 
 def install_binding(directory, config, replacement=None):
@@ -67,7 +73,7 @@ def exchange(directory, data):
     if not isinstance(data, dict): raise ValueError('初始化输入无效')
     if data.get('useDefaultCloud') is True:
         data = {**data, 'url':cloud_url()}
-    directory = private_dir(directory)
+    directory = private_dir(Path(directory).expanduser().resolve())
     with (directory/'init.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         from carryon.workspaces.workspaces import initialize
@@ -75,6 +81,14 @@ def exchange(directory, data):
         path = directory/'onboarding.json'
         state = json.loads(path.read_text()) if path.exists() else {'state':'new'}
         action = data.get('action', 'status')
+        if action in ('share-preview', 'share-confirm', 'share-cancel'):
+            if state.get('pending'): raise ValueError('请先完成或取消当前扫码绑定')
+            from carryon.accounts.shared_binding import exchange as share
+            result = share(directory, data)
+            if action == 'share-preview': return result
+            if action == 'share-cancel': return exchange_ready(directory, state, 'status')
+            save_json(path, result)
+            return exchange_ready(directory, result, 'prepare')
         if action not in ('status', 'prepare', 'poll', 'apply-confirmed', 'cancel'): raise ValueError('初始化操作无效')
         if state.get('pending') and not state['pending'].get('confirmed') and state['pending']['expiresAt'] <= time.time():
             state.pop('pending'); state['state'] = 'configured'; save_json(path, state)
@@ -193,11 +207,12 @@ def exchange_ready(directory, state, action):
     if action in ('prepare','poll') and state['state'] == 'bound' and state.get('autoStart', True):
         saved = records()[str(directory)]
         with contextlib.redirect_stdout(io.StringIO()):
-            start(SimpleNamespace(state_dir=directory, port=saved['port'], codex_home=Path(saved['codexHome']), no_open=True))
+            start(SimpleNamespace(state_dir=directory, port=saved.get('port', 0), codex_home=Path(saved['codexHome']), no_open=True))
     info = running(directory)
     bridge = call(directory, '/status') if info else {}
     cloud = call(directory, '/cloud') if info else {}
-    return {k:v for k,v in {**state, 'url':state.get('url', cloud_url()), 'pending':None,
+    from carryon.accounts.shared_binding import candidates, pending_preview
+    return {k:v for k,v in {**state, 'sharedPending': pending_preview(directory), 'sharedConnections': candidates(directory) if not state.get('pending') else [], 'url':state.get('url', cloud_url()), 'pending':None,
             'environment': {'supportedPlatform':sys.platform == 'darwin', 'codexHome':str(codex),
                             'ipcAvailable':(codex/'ipc/ipc.sock').exists(), 'databaseAvailable':any(codex.glob('state_*.sqlite')), 'backend':saved.get('backend','desktop-ipc')},
             'confirmedAccount':state.get('pending', {}).get('confirmed', {}).get('account'),
@@ -219,6 +234,23 @@ def command(args):
     if not state['environment']['supportedPlatform']: raise ValueError('当前 CLI 桥接仅支持 macOS')
     if state['environment']['backend'] == 'desktop-ipc' and not state['environment']['ipcAvailable']:
         print('尚未发现运行中的 Codex App；可以先绑定，启动服务后将等待 Codex。')
+    if state.get('sharedPending') or (state['state'] != 'bound' and state.get('sharedConnections')):
+        preview = state.get('sharedPending')
+        if not preview:
+            options = state['sharedConnections']
+            print('此工作区已有绑定，可将当前连接开放给已绑定账号，无需手机再次扫码：')
+            for index, option in enumerate(options, 1): print(f"{index}. {option['name']} · {option['url']}")
+            selected = input('选择已有绑定编号（回车单独扫码）：').strip()
+            if selected:
+                if not selected.isdigit() or not 1 <= int(selected) <= len(options): raise ValueError('请选择有效编号')
+                option = options[int(selected)-1]
+                preview = exchange(args.state_dir, {'action':'share-preview', 'sourceDirectory':option['directory'], 'sourceBindingId':option['bindingId']})
+        if preview:
+            print(json.dumps({'账号和权限':preview['members'], '允许远程操作':preview['control']}, ensure_ascii=False, indent=2))
+            if input('确认将此连接开放给上述工作区账号，并沿用工作区权限？[y/N]：').strip().lower() != 'y':
+                if not preview.get('submitted'): exchange(args.state_dir, {'action':'share-cancel'})
+                print('本次未继续确认；先前结果未知的加入请求会保留，供下次恢复。'); return 0
+            state = exchange(args.state_dir, {'action':'share-confirm','shareConfirmation':preview['shareConfirmation'],'confirmed':True})
     if state['state'] != 'bound':
         if state['state'] != 'waiting':
             url = args.url or state.get('url') or cloud_url()

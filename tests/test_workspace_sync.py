@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from carryon.desktop_ipc.read_state import DesktopReadState, _hash
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.routes.realtime import Realtime
 import test_workspace
 from test_workspace import T, U

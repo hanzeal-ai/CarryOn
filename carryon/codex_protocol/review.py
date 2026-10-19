@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from carryon.contracts import validate
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 CONTRACT = json.loads(Path(__file__).with_name('review_contract.json').read_text())
@@ -13,7 +13,7 @@ CONTRACT = json.loads(Path(__file__).with_name('review_contract.json').read_text
 def invalidate(runtime, tid, identity):
     with runtime.lock:
         state = runtime.current(tid)
-        if state is not None and (runtime.process, runtime.session_id, state.get('cwd')) == identity:
+        if state is not None and (runtime.connection_identity, state.get('cwd')) == identity:
             runtime.snapshots[tid] = NativeSnapshot({**state, '_metadataOnly': True,
                 'threadRuntimeStatus': {'type': 'notLoaded'}})
     runtime.on_change()
@@ -51,7 +51,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                 state = runtime.current(tid)
                 if not state or state.get('_metadataOnly') or not runtime.queue_idle(state):
                     raise IPCError('审查需要已加载且空闲的原生会话')
-                identity = (runtime.process, runtime.session_id, state.get('cwd'))
+                identity = (runtime.connection_identity, state.get('cwd'))
                 if runtime.queue_snapshot(tid, refresh=True): raise IPCError('请先处理排队消息再审查')
                 def guarded(write):
                     nonlocal attempted
@@ -63,7 +63,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                                 current = runtime.current(tid)
                                 if (not current or current.get('_metadataOnly') or not runtime.connected
                                         or not runtime.queue_idle(current)
-                                        or (runtime.process, runtime.session_id, current.get('cwd')) != identity):
+                                        or (runtime.connection_identity, current.get('cwd')) != identity):
                                     raise IPCError('审查前原生会话状态已改变')
                                 bridge.journal.update(job['id'], state='dispatching')
                                 attempted = True
@@ -80,7 +80,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                             with runtime.lock:
                                 current = runtime.current(tid)
                                 if (not current or not runtime.connected or
-                                        (runtime.process, runtime.session_id, current.get('cwd')) != identity):
+                                        (runtime.connection_identity, current.get('cwd')) != identity):
                                     raise IPCError('审查回执所属连接已改变', uncertain=True)
                                 runtime.record_started(tid, result['turn'])
                                 submitted.add(result['turn']['id'])

@@ -4,7 +4,7 @@ import threading
 import time
 from carryon.app_server import background_terminals as native
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import valid_id
 from carryon.sessions.native_metadata import record

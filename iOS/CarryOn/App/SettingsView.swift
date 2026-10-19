@@ -20,7 +20,7 @@ struct SettingsView: View {
                 Paper {
                     VStack(spacing: 12) {
                         Image(systemName: "laptopcomputer").font(.system(size: 40, weight: .ultraLight)).foregroundStyle(Design.secondary).padding(.top, 8)
-                        HStack(spacing: 5) { Text(model.device?.title ?? "选择工作区").font(.system(size: 18, weight: .semibold)); Button { switcher = true } label: { Image(systemName: "arrow.left.arrow.right").frame(width: 44, height: 44) }.accessibilityLabel("切换工作区") }
+                        HStack(spacing: 5) { Text(model.workspaceTitle + " · " + model.connectionTitle).font(.system(size: 18, weight: .semibold)); Button { switcher = true } label: { Image(systemName: "arrow.left.arrow.right").frame(width: 44, height: 44) }.accessibilityLabel("切换工作区") }
                         Label(model.connectionLabel, systemImage: "circle.fill").font(.caption).foregroundStyle(model.connected ? Design.green : Design.secondary)
                     }.padding(12).frame(maxWidth: .infinity)
                     SettingRow(icon: "waveform.path", title: "远程待机", value: standby["supported"].bool == false ? "不支持" : standby["effective"].bool == true ? "已开启" : standby["enabled"].bool == false ? "未开启" : "状态未知")

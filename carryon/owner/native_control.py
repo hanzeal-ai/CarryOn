@@ -1,6 +1,6 @@
 """Hold an existing Owner during metadata control without resuming its task."""
 from contextlib import contextmanager
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 @contextmanager

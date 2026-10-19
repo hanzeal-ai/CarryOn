@@ -50,6 +50,9 @@ def granted(server, key, device):
     record = server.config['devices'].get(device)
     if record is None:
         return []
+    from carryon.workspaces.authorization import authority
+    try: _, record = authority(server.config['devices'], device)
+    except PermissionError: return []
     members = record.get('members', {})
     return members.get(identity, [])
 

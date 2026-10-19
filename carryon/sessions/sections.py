@@ -1,9 +1,9 @@
 """Native persisted sidebar groups and thread membership; never resume a task."""
 import threading
 import time
-from carryon.app_server.read_control import reader
+from carryon.codex_protocol.read_control import reader
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import valid_id
 from carryon.sessions.native_metadata import record, supported

@@ -78,7 +78,7 @@ class NativeSearchIntegration(unittest.TestCase):
         self.assertEqual(self.requests, self.baseline_requests)
 
     def test_occurrences_refuse_archived_and_archive_during_read(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         from carryon.app_server.app_server import AppServer
         original = self.runtime.rpc
         def archived(method, params, *args, **kwargs):
@@ -106,7 +106,7 @@ class NativeSearchIntegration(unittest.TestCase):
 
     def test_inclusive_occurrence_cursor_locates_native_tail_without_loading(self):
         from urllib.parse import urlencode
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         self.bridge.disable(); self.bridge.enable(); self.runtime = self.bridge.ipc
         hits = self.runtime.rpc('thread/searchOccurrences', {'threadId': self.tid, 'searchTerm': 'local fixture', 'limit': 1})['data']
         hit = hits[0]; target = '/api/threads/' + self.tid + '/search-anchor?'
@@ -155,7 +155,7 @@ class NativeSearchIntegration(unittest.TestCase):
         self.assertEqual(self.requests, self.baseline_requests)
 
     def test_cached_history_refuses_archive_and_connection_change_during_lookup(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         self.bridge.disable(); self.bridge.enable(); self.runtime = self.bridge.ipc
         self.bridge.persisted_history(self.tid, 1)
         # Exercise the cache directly after its caller has obtained a catalog row.
@@ -175,7 +175,7 @@ class NativeSearchIntegration(unittest.TestCase):
 
     def test_anchor_counts_opaque_tail_pages_and_rejects_cursor_loops(self):
         from urllib.parse import urlencode
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         hit = self.runtime.rpc('thread/searchOccurrences', {'threadId': self.tid, 'searchTerm': 'local fixture', 'limit': 1})['data'][0]
         query = urlencode({key: hit[key] for key in ('turnCursor', 'turnId', 'itemId')})
         target = '/api/threads/' + self.tid + '/search-anchor?' + query

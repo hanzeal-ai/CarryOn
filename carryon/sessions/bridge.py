@@ -6,7 +6,7 @@ import uuid
 
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import valid_id
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.errors import IPCError
 from carryon.sessions.timeline import project_timeline
 from carryon.sessions.thread_status import project_status, idle_snapshot
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +58,7 @@ class Bridge:
             self.check_generation(ipc, generation)
         return result
 
-    def __init__(self, socket_path, catalog, journal, ipc_factory=DesktopIPC):
+    def __init__(self, socket_path, catalog, journal, ipc_factory=None):
         self.socket_path = socket_path
         self.catalog = catalog
         self.journal = journal
@@ -118,6 +118,7 @@ class Bridge:
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
                     "workspaceSession": self.workspace_session,
+                    "connectionWorkspace": getattr(self, "connection_workspace", None),
                     "protocol": getattr(self.ipc_factory, 'protocol', 'codex-desktop-ipc'),
                     "testedDesktopVersion": "26.901.51231",
                     **({'accountReady': self.ipc.account_ready} if self.ipc is not None and hasattr(self.ipc, 'account_ready') else {}),
@@ -127,11 +128,12 @@ class Bridge:
         with self.lock:
             if self.enabled and self.ipc and self.ipc.connected:
                 return self.status()
+            if self.ipc_factory is None: raise BridgeError("工作区未配置连接适配器", 503)
             ipc = self.ipc_factory(self.socket_path)
             try:
                 ipc.connect()
             except (OSError, IPCError, ValueError) as exc:
-                label = '无法启动工作区 app-server：' if getattr(self.ipc_factory, 'protocol', None) else '无法连接 Codex App，请确认应用已启动：'
+                label = getattr(ipc, 'connection_error_label', '无法连接 Codex App，请确认应用已启动：')
                 raise BridgeError(label + str(exc), 503) from exc
             ipc.on_change = self.notify
             ipc.on_read = lambda tid, state=None, token=None: self.native_read(ipc, tid, state, token)
@@ -602,7 +604,7 @@ class Bridge:
             from carryon.sessions.archives import recover
             return recover(self, job)
         if job["state"] == "uncertain" and job['kind'] in ('operation:voice-start', 'operation:voice-stop'):
-            from carryon.app_server.realtime_voice import recover
+            from carryon.codex_protocol.realtime_voice import recover
             job = recover(self, job)
         if job["state"] == "uncertain" and job.get("clientMessageId"):
             job = self._recover_receipt(job)

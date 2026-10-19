@@ -26,7 +26,7 @@ def records():
     return data['services']
 
 
-def register(directory, *, name=None, port=None, codex_home=None, backend=None):
+def register(directory, *, name=None, port=None, codex_home=None, backend=None, cli_socket=None):
     directory=str(Path(directory).expanduser().resolve())
     if name is not None and (not isinstance(name,str) or not name.strip() or len(name)>100):raise ValueError('工作区名称应为 1–100 个字符')
     if port is not None and (type(port) is not int or not 0<=port<=65535):raise ValueError('端口无效')
@@ -34,25 +34,44 @@ def register(directory, *, name=None, port=None, codex_home=None, backend=None):
     with (root/'services.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         data=records();previous=data.get(directory,{})
-        if previous.get('backend') == 'app-server':
+        if previous.get('backend') in ('app-server', 'codex-cli'):
             if codex_home is not None and str(Path(codex_home).expanduser().resolve()) != previous['codexHome']:
                 raise ValueError('独立工作区的 Codex 目录不能更改')
-            if backend not in (None, 'app-server'): raise ValueError('独立工作区的后端不能更改')
+            if backend not in (None, previous['backend']): raise ValueError('独立工作区的后端不能更改')
         entry={**previous,'removed':False,'directory':directory,'name':name.strip() if name is not None else previous.get('name',Path(directory).name)}
         if port is not None:entry['port']=port
         if codex_home is not None:entry['codexHome']=str(Path(codex_home).expanduser().resolve())
         if backend is not None:
-            if backend not in ('desktop-ipc','app-server'): raise ValueError('工作区后端无效')
+            if backend not in ('desktop-ipc','app-server','codex-cli'): raise ValueError('工作区后端无效')
             entry['backend']=backend
         if 'backend' not in entry: entry['backend'] = workspace_backend(directory)
-        if entry['backend'] == 'app-server':
+        if cli_socket is not None and entry['backend'] != 'codex-cli':
+            raise ValueError('只有 CLI 工作区支持 cli_socket')
+        if entry['backend'] == 'codex-cli':
+            from carryon.codex_cli.client import endpoint
+            entry.setdefault('codexHome', str(default_codex_home()))
+            entry['cliSocket'] = str(endpoint(entry['codexHome'], cli_socket or previous.get('cliSocket')))
+            if previous.get('cliSocket') and previous['cliSocket'] != entry['cliSocket']:
+                raise ValueError('CLI 工作区的 socket 不能更改，请新建工作区')
+            for other, saved in data.items():
+                if other == directory or saved.get('removed'): continue
+                if saved.get('backend') == 'codex-cli' and saved.get('cliSocket') == entry['cliSocket']:
+                    raise ValueError('此 CLI socket 已被其他工作区使用')
+                if saved.get('backend') == 'app-server' and saved.get('codexHome') == entry['codexHome']:
+                    raise ValueError('此 Codex 目录属于独立 app-server 工作区')
+        elif entry['backend'] == 'app-server':
             entry['codexHome'] = str(workspace_codex_home(directory, entry.get('codexHome')))
             for other, saved in data.items():
                 if other != directory and not saved.get('removed') and saved.get('codexHome') and Path(saved['codexHome']).resolve() == Path(entry['codexHome']):
                     raise ValueError('此 Codex 目录已被其他工作区使用，请选择独立目录')
         elif 'codexHome' not in entry:
             entry['codexHome'] = str(workspace_codex_home(directory))
+        if previous and (entry.get('codexHome') != previous.get('codexHome') or entry.get('backend') != previous.get('backend', 'desktop-ipc')):
+            entry.pop('workspaceId', None)
+            entry.pop('workspaceName', None)
         data[directory]=entry
+        from carryon.workspaces.connections import assign_workspaces
+        assign_workspaces(data)
         save_json(root/'services.json',{'version':1,'services':data})
     return entry
 
@@ -108,7 +127,7 @@ def workspace_backend(directory):
     directory = Path(directory).expanduser().resolve()
     saved = records().get(str(directory), {}).get('backend')
     if saved == 'desktop-ipc': return 'desktop-ipc'
-    if saved == 'app-server': return saved
+    if saved in ('app-server', 'codex-cli'): return saved
     return 'desktop-ipc' if directory == state_dir().resolve() else 'app-server'
 
 
@@ -116,7 +135,7 @@ def workspace_codex_home(directory, configured=None):
     """Resolve workspace storage while keeping independent Codex homes isolated."""
     directory = Path(directory).expanduser().resolve()
     home = Path(configured).expanduser().resolve() if configured else None
-    if workspace_backend(directory) == 'desktop-ipc':
+    if workspace_backend(directory) in ('desktop-ipc', 'codex-cli'):
         return home or default_codex_home()
     shared = {default_codex_home(), (Path.home() / '.codex').resolve()}
     result = (directory / 'codex-home').resolve() if home is None or home in shared else home

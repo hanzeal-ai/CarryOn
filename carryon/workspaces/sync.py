@@ -4,7 +4,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 class WorkspaceSync:

@@ -1,6 +1,6 @@
 """Native goal state and user-authorized mutations; no local continuation loop."""
 from contextlib import nullcontext
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 STATUSES = {'active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'}
@@ -25,12 +25,12 @@ def loaded(runtime, tid):
 def read(runtime, tid):
     with runtime.lock:
         state = loaded(runtime, tid)
-        identity = (runtime.process, runtime.session_id, state.get('cwd'))
+        identity = (runtime.connection_identity, state.get('cwd'))
         revision = state.get('_goalRevision', 0)
     goal = value(runtime.rpc('thread/goal/get', {'threadId': tid}), tid)
     with runtime.lock:
         state = loaded(runtime, tid)
-        if (runtime.process, runtime.session_id, state.get('cwd')) != identity:
+        if (runtime.connection_identity, state.get('cwd')) != identity:
             raise IPCError('目标所属连接已改变')
         if state.get('_goalRevision', 0) == revision:
             state = NativeSnapshot({**state, 'threadGoal': goal, '_goalUnknown': False})
@@ -47,10 +47,10 @@ def discover(bridge, tid):
                 bridge.check_generation(ipc, generation); bridge.assert_target(tid)
         with session(bridge, tid, authorized) as control:
             if control is not None:
-                identity = (control.runtime.process, control.runtime.session_id)
+                identity = control.runtime.connection_identity
                 goal = value(control.runtime.rpc('thread/goal/get', {'threadId': tid}), tid)
                 with bridge.lock:
-                    if (control.runtime.process, control.runtime.session_id) != identity or not control.runtime.connected:
+                    if control.runtime.connection_identity != identity or not control.runtime.connected:
                         raise IPCError('目标控制读取所属连接已改变')
                     authorized(); control.project(goal)
                 bridge.notify()
@@ -106,14 +106,14 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
             with control_session(bridge, tid, authorized) as control:
                 if control is not None:
                     runtime = control.runtime
-                    identity = (runtime.process, runtime.session_id)
+                    identity = runtime.connection_identity
                     def controlled(write):
                         nonlocal attempted
                         with bridge.lock:
                             authorized()
                             def checked():
                                 nonlocal attempted
-                                if (runtime.process, runtime.session_id) != identity or not runtime.connected:
+                                if runtime.connection_identity != identity or not runtime.connected:
                                     raise IPCError('目标控制连接已改变')
                                 bridge.journal.update(job['id'], state='dispatching')
                                 attempted = True; write()
@@ -126,7 +126,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                             raise IPCError('原生目标控制回执未确认', uncertain=True)
                         with bridge.lock:
                             authorized()
-                            if (runtime.process, runtime.session_id) != identity or not runtime.connected:
+                            if runtime.connection_identity != identity or not runtime.connected:
                                 raise IPCError('目标控制回执所属连接已改变', uncertain=True)
                             control.project(goal)
                             bridge.journal.update(job['id'], state='completed', result=result, evidence='native-goal-response')
@@ -146,11 +146,11 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
             with runtime._queue_lock(tid):
                 read(runtime, tid)
                 state = loaded(runtime, tid)
-                identity = (runtime.process, runtime.session_id, state.get('cwd'))
+                identity = (runtime.connection_identity, state.get('cwd'))
                 revision = state.get('_goalRevision', 0)
                 def current():
                     state = loaded(runtime, tid)
-                    if (runtime.process, runtime.session_id, state.get('cwd')) != identity:
+                    if (runtime.connection_identity, state.get('cwd')) != identity:
                         raise IPCError('目标所属连接已改变', uncertain=attempted)
                     return state
                 def guarded(write):
@@ -188,7 +188,7 @@ def dispatch(bridge, ipc, generation, job, data, authorize):
                     if attempted and (replied or not isinstance(exc, IPCError) or exc.uncertain):
                         with runtime.lock:
                             state = runtime.current(tid)
-                            if state and (runtime.process, runtime.session_id, state.get('cwd')) == identity:
+                            if state and (runtime.connection_identity, state.get('cwd')) == identity:
                                 runtime.snapshots[tid] = NativeSnapshot({**state, '_goalUnknown': True,
                                     '_goalRevision': state.get('_goalRevision', 0) + 1})
                     raise

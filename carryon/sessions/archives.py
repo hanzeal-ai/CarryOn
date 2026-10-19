@@ -3,12 +3,11 @@ from contextlib import nullcontext
 import threading
 import time
 
-from carryon.app_server.app_server import AppServer
-from carryon.app_server.goals import read as read_goal, value as goal_value
-from carryon.app_server.queue import messages as queue_messages
-from carryon.app_server.realtime_voice import held as voice_held
+from carryon.codex_protocol.goals import read as read_goal, value as goal_value
+from carryon.codex_protocol.queue import messages as queue_messages
+from carryon.codex_protocol.realtime_voice import held as voice_held
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.catalog import valid_id
 from carryon.sessions.native_metadata import record, supported
@@ -48,7 +47,7 @@ def submit(bridge, tid, action, data, source=None, authorize=None):
 
 def safe_idle(runtime, tid, identity, state=None, queue=None, goal=None):
     state = state if state is not None else runtime.current(tid)
-    if (not runtime.connected or (runtime.process, runtime.session_id) != identity
+    if (not runtime.connected or runtime.connection_identity != identity
             or not state or state.get('_metadataOnly') or state['threadRuntimeStatus']['type'] != 'idle'
             or state.get('requests') or (bool(queue) if queue is not None else runtime.queue_busy(tid))
             or any(turn['status'] == 'inProgress' for turn in state['turns'])
@@ -90,14 +89,14 @@ def dispatch(bridge, ipc, generation, job, authorize):
                 from carryon.owner.native_control import session as owned_session
                 session = owned_session(bridge, tid)
             with session as (runtime, owner_guard, state_provider, suspended, owner_session), runtime._queue_lock(tid):
-                authorized(); identity = (runtime.process, runtime.session_id)
+                authorized(); identity = runtime.connection_identity
                 if suspended:
                     queue = queue_messages(runtime, tid)
                     goal = goal_value(runtime.rpc('thread/goal/get', {'threadId': tid}), tid)
                 else:
                     queue = runtime.queue_snapshot(tid, refresh=True)
                     goal = read_goal(runtime, tid)['goal']
-                from carryon.app_server.background_terminals import empty, verify as verify_terminals
+                from carryon.codex_protocol.background_terminals import empty, verify as verify_terminals
                 terminal_proof = None if suspended else empty(runtime, tid)
                 safe_idle(runtime, tid, identity, state_provider(), queue, goal)
                 def guarded(write):
@@ -127,7 +126,7 @@ def dispatch(bridge, ipc, generation, job, authorize):
                         if tid in service.entries or tid in service.loading: raise IPCError('会话仍有 CarryOn Owner，请先核对归档')
                     reader = service.prewarm.take()
                 else:
-                    reader = AppServer(ipc.home, runtime_directory=ipc.runtime_directory / 'archives' / job['id'])
+                    reader = ipc.peer(runtime_directory=ipc.runtime_directory / 'archives' / job['id'])
                     reader.connect()
                 reader.require_account()
                 def guarded(write):

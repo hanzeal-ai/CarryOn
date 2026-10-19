@@ -1,6 +1,6 @@
 """Native skill inventory and validated structured selections."""
 from pathlib import Path
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.reference_icons import skill_icons
 
 
@@ -29,7 +29,7 @@ def inventory(runtime, tid):
         raise IPCError('技能发现需要已加载的原生会话')
     cwd = state.get('cwd')
     if not isinstance(cwd, str) or not Path(cwd).is_absolute(): raise IPCError('会话工作目录无效')
-    identity = (runtime.process, runtime.session_id, cwd)
+    identity = (runtime.connection_identity, cwd)
     result = catalog(runtime, cwd)
     verify(runtime, tid, identity)
     return result, identity
@@ -45,7 +45,7 @@ def catalog(runtime, cwd):
 def verify(runtime, tid, identity):
     state = runtime.current(tid)
     if (not runtime.connected or not state or state.get('_metadataOnly')
-            or (runtime.process, runtime.session_id, state.get('cwd')) != identity):
+            or (runtime.connection_identity, state.get('cwd')) != identity):
         raise IPCError('技能所属会话或工作目录已改变')
 
 

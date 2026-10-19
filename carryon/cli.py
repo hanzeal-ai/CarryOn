@@ -34,6 +34,19 @@ def doctor(args):
         result['appServerConnected'] = bridge.get('enabled', False)
         result['accountReady'] = bridge.get('accountReady', False)
         ready = bool(result.get('codexExecutable') and result['appServerConnected'] and result['accountReady'])
+    elif result['backend'] == 'codex-cli':
+        from carryon.codex_cli.client import endpoint
+        saved = services.records().get(str(args.state_dir), {})
+        path = endpoint(args.codex_home, saved.get('cliSocket'))
+        result['cliSocket'] = str(path)
+        try:
+            info = path.stat()
+            result['cliSocketAvailable'] = stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid()
+        except OSError: result['cliSocketAvailable'] = False
+        bridge = services.call(args.state_dir, '/status') if result['service'] else {}
+        result['cliConnected'] = bridge.get('enabled', False)
+        result['accountReady'] = bridge.get('accountReady', False)
+        ready = result['cliConnected'] and result['accountReady']
     else: ready = ipc
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result['supportedPlatform'] and ready else 1
@@ -72,6 +85,9 @@ def main(argv=None):
         if name=='services':
             p.add_argument('action',choices=['list','create','remove','login','auth-status','auth-start'])
             p.add_argument('--name')
+            p.add_argument('--backend', choices=['app-server', 'codex-cli'], default='app-server')
+            p.add_argument('--codex-home', type=Path)
+            p.add_argument('--cli-socket', type=Path)
         if name in ('bridge','standby'):p.add_argument('action',choices=['on','off','status'])
         if name == 'notifications':
             p.add_argument('action',choices=['status','set'])
@@ -109,13 +125,11 @@ def main(argv=None):
             args.codex_home = (args.codex_home or Path(saved.get('codexHome', default_codex_home()))).expanduser().resolve()
             if hasattr(args, 'port') and args.port is None:
                 args.port = saved.get('port', 0)
-        elif hasattr(args, 'codex_home'):
-            args.codex_home = workspace_codex_home(args.state_dir, args.codex_home)
         if args.command=='services':
             from carryon.services import list_services, remove
             if args.action=='create':
                 from carryon.workspaces.workspaces import create
-                result=create(args.name or '新工作区')
+                result=create(args.name or '新工作区', backend=args.backend, codex_home=args.codex_home, cli_socket=args.cli_socket)
                 if sys.stdin.isatty():
                     from types import SimpleNamespace
                     from carryon.accounts.onboarding import command as initialize
@@ -126,7 +140,7 @@ def main(argv=None):
                 from carryon.services import records
                 from carryon.usage import executable
                 row=records().get(str(args.state_dir), {})
-                if row.get('backend') != 'app-server': raise ValueError('请在 Codex App 登录默认工作区')
+                if row.get('backend') != 'app-server': raise ValueError('请在对应的 Codex CLI 或 Codex App 中登录后重新连接')
                 return subprocess.call([executable(), 'login', '--device-auth'], env=dict(os.environ, CODEX_HOME=row['codexHome']), cwd=row['codexHome'])
             elif args.action=='remove':result=remove(args.state_dir)
             else:result=list_services(args.state_dir)

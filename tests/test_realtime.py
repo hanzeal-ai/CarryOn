@@ -60,7 +60,7 @@ class FakeIPC:
     def unwatch(self, tid): pass
     def current(self, tid): return self.states.get(tid)
     def snapshot(self, tid):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         raise IPCError('no-client-found')
     sidebar_snapshot = snapshot
 
@@ -166,7 +166,7 @@ class StatusSchedulingTests(unittest.TestCase):
         self.assertEqual(self.realtime.thread_status(tid,new,new.current(tid))['state'],'running')
 
     def test_visible_thread_recovers_when_busy_background_workers_finish(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         active=self.ids[-1];release=threading.Event();busy=threading.Event()
         entered=[];lock=threading.Lock()
         self.bridge.workspace=SimpleNamespace(thread_ids=lambda:set(self.ids),invalidate_status=self.bridge.notify,revision=0)

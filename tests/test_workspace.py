@@ -627,7 +627,7 @@ class AvailableConversationTests(unittest.TestCase):
         self.assertFalse(row['available'])
         # A definite native routing miss hides only that conversation, including
         # from project aggregates, and invalidates already displayed pages.
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         self.bridge.ipc.sidebar_snapshot=lambda tid:(_ for _ in ()).throw(IPCError('no-client-found'))
         before=self.workspace.revision
         realtime._load(T)

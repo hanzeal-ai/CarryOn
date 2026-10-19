@@ -4,7 +4,8 @@ import struct
 import threading
 import unittest
 from unittest.mock import patch, Mock
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 
 
 class ProtocolTests(unittest.TestCase):

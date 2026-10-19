@@ -16,22 +16,39 @@ import CoreImage.CIFilterBuiltins
     @State private var polling: Task<Void, Never>?
     @State private var selectedAccount = ""
     @State private var directed = false
+    @State private var sharedOptions: [[String: Any]] = []
+    @State private var sharedIndex = 0
+    @State private var sharePreview: [String: Any]?
+    @State private var confirmingShare = false
     @State private var fineGrained = false
     @State private var permissions: Set<String> = ["view", "files"]
     @State private var codexAvailable = false
     @State private var appServer = false
+    @State private var cli = false
     @State private var loginCode = false
     private var allowsControl: Bool { !permissions.subtracting(["view", "files"]).isEmpty }
     private var cloudURL: String { url.trimmingCharacters(in: .whitespacesAndNewlines) }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack { Text("连接工作区").font(.title2.weight(.semibold)); Spacer(); Button("账号登录码") { loginCode = true }.disabled(url.isEmpty) }
-            Label(appServer ? "独立 Codex 工作区" : "本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
+            Label(cli ? "本机 Codex CLI" : appServer ? "独立 Codex 工作区" : "本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
             if appServer {
                 Button("登录 Codex 模型账号") { Task { await loginCodex() } }.disabled(busy)
             }
-            if !codexAvailable && !appServer { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
+            if !codexAvailable && !appServer && !cli { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
             if phase != "waiting" && phase != "bound" && phase != "confirming" {
+                if !sharedOptions.isEmpty {
+                    Picker("已有工作区绑定", selection: $sharedIndex) {
+                        ForEach(sharedOptions.indices, id: \.self) { index in
+                            Text((sharedOptions[index]["name"] as? String ?? "工作区") + " · " + (sharedOptions[index]["url"] as? String ?? "")).tag(index)
+                        }
+                    }
+                    Button("使用已有工作区绑定") { Task { await previewShare() } }.disabled(busy)
+                    Divider()
+                }
+                if sharePreview != nil {
+                    Button("继续确认加入工作区") { confirmingShare = true }.disabled(busy)
+                }
                 Picker("绑定方式", selection: $directed) {
                     Text("手机扫码").tag(false)
                     Text("向账号发起申请").tag(true)
@@ -79,6 +96,14 @@ import CoreImage.CIFilterBuiltins
         }.padding(28).frame(width: 470).background(DesktopDesign.background)
             .sheet(isPresented: $loginCode) { AccountLoginCodeView(model: model, url: url) }
             .task { await load() }.onDisappear { polling?.cancel() }
+            .alert("将此连接开放给已有账号？", isPresented: $confirmingShare) {
+                Button("取消", role: .cancel) { Task {
+                    if sharePreview?["submitted"] as? Bool != true, let state = await exchange(["action":"share-cancel"]) {
+                        sharePreview = nil; render(state)
+                    }
+                } }
+                Button("确认开放") { Task { await confirmShare() } }
+            } message: { Text(shareDescription) }
             .alert("应用本次扫码绑定？", isPresented: $applyingConfirmed) {
                 Button("取消", role: .cancel) {}
                 Button("应用") { Task {
@@ -86,6 +111,29 @@ import CoreImage.CIFilterBuiltins
                     if let state = await exchange(["action":"apply-confirmed"]) { render(state) }
                 } }
             } message: { Text("将使用本次扫码确认的账号「\(confirmedAccount)」替换此云端当前的绑定。") }
+    }
+    private var shareDescription: String {
+        let members = sharePreview?["members"] as? [[String: Any]] ?? []
+        let lines = members.map { member in
+            let account = member["account"] as? [String: Any] ?? [:]
+            return (account["username"] as? String ?? "账号") + "：" + ((member["permissions"] as? [String]) ?? []).joined(separator: ", ")
+        }
+        return lines.joined(separator: "\n") + "\n后续成员权限由工作区统一管理。" + ((sharePreview?["control"] as? Bool == true) ? "此连接允许远程操作。" : "此连接仅开放读取。")
+    }
+    private func previewShare() async {
+        guard sharedOptions.indices.contains(sharedIndex) else { return }
+        busy = true; defer { busy = false }
+        let option = sharedOptions[sharedIndex]
+        if let result = await exchange(["action":"share-preview", "sourceDirectory":option["directory"] ?? "", "sourceBindingId":option["bindingId"] ?? ""]) {
+            sharePreview = result; confirmingShare = true
+        }
+    }
+    private func confirmShare() async {
+        guard let confirmation = sharePreview?["shareConfirmation"] as? String else { return }
+        busy = true; defer { busy = false }
+        if let state = await exchange(["action":"share-confirm", "shareConfirmation":confirmation, "confirmed":true, "autoStart":autoStart]) {
+            sharePreview = nil; render(state); await model.refresh()
+        }
     }
     private func loginCodex() async {
         busy = true; defer { busy = false }
@@ -128,9 +176,13 @@ import CoreImage.CIFilterBuiltins
         }
     }
     private func render(_ state: [String: Any]) {
+        sharedOptions = state["sharedConnections"] as? [[String: Any]] ?? []
+        if !sharedOptions.indices.contains(sharedIndex) { sharedIndex = 0 }
+        if let pending = state["sharedPending"] as? [String: Any] { sharePreview = pending }
+        cli = (state["environment"] as? [String: Any])?["backend"] as? String == "codex-cli"
         appServer = (state["environment"] as? [String: Any])?["backend"] as? String == "app-server"
         codexAvailable = (state["environment"] as? [String: Any])?["ipcAvailable"] as? Bool ?? false
-        phase = state["state"] as? String ?? "new"
+        phase = state["sharedPending"] is [String: Any] ? "share-pending" : (state["state"] as? String ?? "new")
         message = state["error"] as? String ?? ""
         confirmedAccount = (state["confirmedAccount"] as? [String: Any])?["username"] as? String ?? ""
         qr = nil

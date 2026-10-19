@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from carryon.cloud.cloud_wire import connect, close, endpoint
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 PROTOCOL='carryon/1'
 ID=re.compile(r'^[A-Za-z0-9_-]{1,100}$')
@@ -169,7 +169,8 @@ class CloudConnector:
                 with self.lock:
                     if cancel.is_set():break
                     self.ws=ws
-                ws.send({'type':'hello','protocol':PROTOCOL,'deviceId':config['deviceId'],'token':config['token']})
+                ws.send({'type':'hello','protocol':PROTOCOL,'deviceId':config['deviceId'],'token':config['token'],
+                         **({'workspace': self.bridge.connection_workspace} if getattr(self.bridge, 'connection_workspace', None) else {})})
                 ready=ws.receive()
                 if ready.get('type')!='ready' or ready.get('protocol')!=PROTOCOL or ready.get('deviceId')!=config['deviceId']:
                     raise ValueError('云端设备认证或协议不匹配')

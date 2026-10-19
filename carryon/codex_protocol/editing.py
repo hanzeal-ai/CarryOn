@@ -1,13 +1,13 @@
 """Two native writes for a last-turn edit; callers own authority and receipts."""
 from copy import deepcopy
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 
 def refresh_retained(runtime, tid, thread):
     """Revert returns metadata only. Hydrate retained turns with buffered events."""
-    from carryon.app_server.app_server import native_turn
+    from carryon.codex_protocol.client import native_turn
     if thread.get('id') != tid: raise IPCError('原生回退结果属于其他会话')
     with runtime.load_lock:
         with runtime.lock:
@@ -62,7 +62,7 @@ def edit_last(runtime, tid, turn_id, prompt, client_id, before_write, progress):
             raise IPCError('带文本引用的消息请在原生客户端编辑')
         inputs = [{'type': 'text', 'text': prompt, 'text_elements': []}] + [deepcopy(i) for i in content if i['type'] != 'text']
         retained = [t['turnId'] for t in turns[:-1]]
-        identity = (runtime.process, runtime.session_id)
+        identity = runtime.connection_identity
 
         def guard(phase, expected):
             def guarded(write):
@@ -72,7 +72,7 @@ def edit_last(runtime, tid, turn_id, prompt, client_id, before_write, progress):
                 def checked():
                     with runtime.lock:
                         current = runtime.current(tid)
-                        if ((runtime.process, runtime.session_id) != identity or not runtime.connected
+                        if (runtime.connection_identity != identity or not runtime.connected
                                 or not runtime.queue_idle(current)
                                 or [t['turnId'] for t in current['turns']] != expected):
                             raise IPCError('编辑期间会话状态已改变')

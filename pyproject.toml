@@ -22,4 +22,4 @@ carryon-console = "carryon.cloud.console:main"
 include = ["carryon", "carryon.*"]
 
 [tool.setuptools.package-data]
-carryon = ["native_contracts.json", "product.json", "app_server/review_contract.json", "web/*"]
+carryon = ["native_contracts.json", "product.json", "codex_protocol/review_contract.json", "web/*"]

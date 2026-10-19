@@ -13,7 +13,8 @@ from pathlib import Path
 from run_appserver_regression import Model, wait_until
 from carryon.app_server.app_server import AppServer
 from carryon.app_server.app_server_bridge import AppServerBridge
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.owner.integration import OwnerBridge
 from carryon.owner.manager import OwnerManager
 from carryon.sessions.catalog import Catalog
@@ -139,7 +140,7 @@ class NativeMentionsIntegration(unittest.TestCase):
         import json
         from carryon.sessions.creation_references import discover as discover_creation
         from carryon.sessions.creation import submit as owner_create
-        from carryon.app_server.app_creation import submit as direct_create
+        from carryon.codex_protocol.app_creation import submit as direct_create
         from carryon.workspaces.workspace import project_identity
         from carryon.errors import BridgeError
         skill = home / 'skills' / 'fixture-skill' / 'SKILL.md'

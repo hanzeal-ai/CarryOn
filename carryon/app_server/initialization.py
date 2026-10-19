@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import fcntl
 import time
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 @contextmanager

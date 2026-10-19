@@ -5,8 +5,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 from carryon.app_server.app_server import AppServer
-from carryon.app_server.review import request
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.codex_protocol.review import request
+from carryon.errors import IPCError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.operations import submit, controls, build
 from carryon.store import Journal
@@ -90,7 +90,7 @@ class NativeReviewTests(unittest.TestCase):
         self.assertEqual(len(self.writes), 1)
 
     def test_canonical_refresh_removes_worker_but_replays_new_real_turn(self):
-        from carryon.app_server.review_history import refresh
+        from carryon.codex_protocol.review_history import refresh
         state = self.runtime.current(T)
         completed = {'id': 'outer', 'status': 'completed', 'items': [{'id': 'review', 'type': 'enteredReviewMode'}]}
         state['turns'] = [{**completed, 'turnId': 'outer'}, {'turnId': 'worker', 'status': 'inProgress', 'items': []}]
@@ -102,20 +102,20 @@ class NativeReviewTests(unittest.TestCase):
                 'turn': {'id': 'new-real', 'status': 'inProgress', 'items': []}}})
             return {'data': [completed], 'nextCursor': None}
         self.runtime.rpc = rpc
-        refresh(self.runtime, T, (self.runtime.process, self.runtime.session_id))
+        refresh(self.runtime, T, self.runtime.connection_identity)
         current = self.runtime.current(T)
         self.assertEqual([turn['turnId'] for turn in current['turns']], ['outer', 'new-real'])
         self.assertEqual(current['threadRuntimeStatus']['type'], 'active')
 
     def test_canonical_refresh_failure_is_unknown_not_idle(self):
-        from carryon.app_server.review_history import refresh
+        from carryon.codex_protocol.review_history import refresh
         self.runtime.rpc = lambda *_: (_ for _ in ()).throw(IPCError('read failed'))
-        refresh(self.runtime, T, (self.runtime.process, self.runtime.session_id))
+        refresh(self.runtime, T, self.runtime.connection_identity)
         self.assertTrue(self.runtime.current(T)['_metadataOnly'])
         self.assertEqual(self.runtime.current(T)['threadRuntimeStatus']['type'], 'notLoaded')
 
     def test_buffered_review_completion_gets_one_followup_canonical_read(self):
-        from carryon.app_server.review_history import refresh
+        from carryon.codex_protocol.review_history import refresh
         reads = []; finished = threading.Event()
         original = {'id': 'old', 'status': 'completed', 'items': [{'id': 'r', 'type': 'enteredReviewMode'}]}
         new = {'id': 'new', 'status': 'completed', 'items': [{'id': 'nr', 'type': 'enteredReviewMode'}]}
@@ -135,7 +135,7 @@ class NativeReviewTests(unittest.TestCase):
         previous = self.runtime.on_change
         settled = threading.Event()
         self.runtime.on_change = lambda: settled.set() if finished.is_set() and not self.runtime.review_refreshing else previous()
-        refresh(self.runtime, T, (self.runtime.process, self.runtime.session_id))
+        refresh(self.runtime, T, self.runtime.connection_identity)
         self.assertTrue(settled.wait(2))
         self.assertEqual(len(reads), 2)
         self.assertEqual([turn['turnId'] for turn in self.runtime.current(T)['turns']], ['old', 'new'])

@@ -148,12 +148,12 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         if handler is None: raise BridgeError('当前工作区未启用会话加载', 409)
         respond(200, handler(path.split('/')[3], data, source, authorize))
     elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/voice'):
-        from carryon.app_server.realtime_voice import read
+        from carryon.codex_protocol.realtime_voice import read
         after = parse_qs(parsed.query).get('after', ['0'])
         if len(after) != 1 or not after[0].isdigit() or len(after[0]) > 16: raise ValueError('语音游标无效')
         respond(200, read(bridge, path.split('/')[3], int(after[0])))
     elif method == 'POST' and path.startswith('/api/threads/') and path.endswith('/voice/audio'):
-        from carryon.app_server.realtime_voice import append_audio
+        from carryon.codex_protocol.realtime_voice import append_audio
         respond(200, append_audio(bridge, path.split('/')[3], data, authorize))
     elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/mentions'):
         from carryon.sessions.mentions import discover
@@ -165,7 +165,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         from carryon.sessions.skills import discover
         respond(200, discover(bridge, path.split('/')[3]))
     elif method == 'GET' and path.startswith('/api/threads/') and path.endswith('/goal'):
-        from carryon.app_server.goals import discover
+        from carryon.codex_protocol.goals import discover
         respond(200, discover(bridge, path.split('/')[3]))
     elif method == "GET" and path.startswith("/api/threads/") and path.endswith("/history"):
         values = parse_qs(parsed.query, keep_blank_values=True).get('limit', ['40'])
@@ -179,7 +179,7 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         respond(200, bridge.queue(path.split('/')[3]))
     elif method == "POST" and path == "/api/threads":
         if getattr(bridge.catalog, 'independent', False):
-            from carryon.app_server.app_creation import submit
+            from carryon.codex_protocol.app_creation import submit
             respond(202, submit(bridge, data.get('requestId'), data.get('prompt'), data.get('projectId'), source, authorize, images=data.get('images'), settings=data.get('settings'), skills=data.get('skills'), mentions=data.get('mentions')))
         else:
             from carryon.sessions.creation import submit

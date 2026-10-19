@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, Mock
 
 from carryon.app_server.app_server import AppServer
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.forking import submit
@@ -44,7 +44,7 @@ class NativeForkTests(unittest.TestCase):
                 if outer.error: raise outer.error
                 return {'thread': {'id': C, 'forkedFromId': T, 'cwd': outer.temp.name,
                     'historyMode': 'paginated', 'status': {'type': 'idle'}}}
-        self.patch = patch('carryon.sessions.forking.AppServer', Creator); self.patch.start(); self.addCleanup(self.patch.stop)
+        self.patch = patch.object(self.runtime, 'peer', side_effect=lambda **kwargs: Creator(**kwargs)); self.patch.start(); self.addCleanup(self.patch.stop)
 
     def settled(self, key):
         for _ in range(200):

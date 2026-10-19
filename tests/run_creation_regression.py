@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from run_appserver_regression import Model, wait_until
 from carryon.app_server.app_server import AppServer
 from carryon.sessions.catalog import Catalog
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.owner.integration import OwnerBridge
 from carryon.owner.manager import OwnerManager
 from carryon.routes.remote_scope import scoped_dispatch, request_key

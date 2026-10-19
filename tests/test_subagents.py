@@ -11,7 +11,7 @@ from carryon.sessions.bridge import Bridge
 from carryon.sessions.catalog import Catalog
 from carryon.errors import BridgeError
 from carryon.sessions.history_cache import NativeSnapshot
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.operations import METHODS
 from carryon.store import Journal
 from carryon.sessions.timeline import project_item

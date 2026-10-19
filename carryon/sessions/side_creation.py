@@ -4,9 +4,9 @@ from pathlib import Path
 import threading
 import time
 
-from carryon.app_server.app_server import AppServer, thread_settings
+from carryon.codex_protocol.client import thread_settings
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.catalog import valid_id
@@ -69,6 +69,8 @@ def submit(bridge, parent_id, data, source=None, authorize=None):
         raise ValueError('临时聊天创建只接受 requestId')
     request_id = data['requestId']; validate_request_id(request_id)
     ipc, generation = bridge.require()
+    if getattr(ipc, 'protocol', None) == 'codex-app-server' and 'side-create' not in ipc.supported_operations:
+        raise IPCError('当前运行时不支持创建临时聊天')
     fingerprint = digest(['side-create', parent_id])
     with bridge.lock:
         bridge.check_generation(ipc, generation)
@@ -106,10 +108,10 @@ def dispatch(bridge, ipc, generation, job, authorize):
                 raise IPCError('请先加载父会话；创建临时聊天不会恢复或执行父任务')
             if state.get('threadMetadata', {}).get('historyMode') != 'paginated':
                 raise IPCError('此会话不支持原生临时聊天')
-            identity = (runtime.process, runtime.session_id)
+            identity = runtime.connection_identity
             cwd = state.get('cwd')
             if not isinstance(cwd, str) or not Path(cwd).is_absolute(): raise IPCError('父会话工作目录无效')
-            creator = AppServer(runtime.home, runtime_directory=runtime.runtime_directory / 'sides' / job['id'])
+            creator = runtime.peer(runtime_directory=runtime.runtime_directory / 'sides' / job['id'])
             creator.supported_operations = creator.supported_operations - {'fork', 'side-create', 'review', 'compact', 'edit', 'goal-set', 'goal-pause', 'goal-clear', 'voice-start', 'voice-stop', 'queue-add', 'queue-edit', 'queue-delete', 'queue-reorder', 'queue-resume', 'clear-queue'}
             creator.connect(); creator.require_account()
             def guard(phase):
@@ -121,7 +123,7 @@ def dispatch(bridge, ipc, generation, job, authorize):
                             nonlocal attempted
                             with runtime.lock:
                                 current = runtime.current(parent_id)
-                                if not runtime.connected or (runtime.process, runtime.session_id) != identity or not current or current.get('cwd') != cwd:
+                                if not runtime.connected or runtime.connection_identity != identity or not current or current.get('cwd') != cwd:
                                     raise IPCError('父会话连接已改变')
                                 bridge.journal.update(job['id'], state='dispatching', phase=phase)
                                 attempted = True
@@ -145,13 +147,13 @@ def dispatch(bridge, ipc, generation, job, authorize):
             def publish():
                 with runtime.lock:
                     current = runtime.current(parent_id)
-                    if not runtime.connected or (runtime.process, runtime.session_id) != identity or not current or current.get('cwd') != cwd:
+                    if not runtime.connected or runtime.connection_identity != identity or not current or current.get('cwd') != cwd:
                         raise IPCError('父会话连接已改变', uncertain=True)
                     with creator.lock:
                         snapshot = creator.current(child_id)
                         if snapshot is None or not creator.connected: raise IPCError('临时聊天连接已失效', uncertain=True)
                         creator.snapshots[child_id] = NativeSnapshot({**snapshot,
-                            'threadMetadata': child, 'title': '临时聊天', 'ephemeral': True,
+                            '_metadataOnly': False, 'threadMetadata': child, 'title': '临时聊天', 'ephemeral': True,
                             'sideConversation': True, 'forkedFromId': parent_id,
                             'supportsGoal': False, 'threadGoal': None, '_goalUnknown': False,
                             'supportsSkills': False, 'supportsMentions': False, 'latestThreadSettings': thread_settings(result),

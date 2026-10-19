@@ -192,6 +192,11 @@ class Handler(BaseHTTPRequestHandler):
                     ws.send({'type':'rejected'});return
                 if device_id in self.server.devices:
                     ws.send({'type':'rejected','error':'设备已有连接'});return
+                if 'workspace' in hello:
+                    from carryon.workspaces.connections import validate
+                    workspace = validate(hello['workspace'])
+                    if current.get('workspace') != workspace and hasattr(self.server, 'save_devices'):
+                        self.server.save_devices({**self.server.config['devices'], device_id: {**current, 'workspace': workspace}})
                 self.server.devices[device_id]=device
             self.connection.settimeout(45)
             ws.send({'type':'ready','protocol':PROTOCOL,'deviceId':device_id})

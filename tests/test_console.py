@@ -87,6 +87,41 @@ class ConsoleTests(unittest.TestCase):
         end=time.monotonic()+3
         while 'my-mac' in self.server.devices and time.monotonic()<end:time.sleep(.02)
         self.assertEqual(self.call('POST',route,{'method':'GET','path':'/api/threads'})[0],503)
+    def test_workspace_metadata_survives_disconnect_without_combining_grants(self):
+        from carryon.workspaces.connections import public_descriptor
+        self.server.registry_path = self.root / 'devices.json'
+        workspace = {'id': 'f' * 32, 'name': '一台电脑', 'backend': 'desktop-ipc'}
+        self.bridge.connection_workspace = workspace
+        self.server.config['devices']['other']['workspace'] = {**workspace, 'backend': 'codex-cli'}
+        self.server.config['devices']['other']['members']['owner'] = ['view']
+        self.login()
+        self.configure_device(self.device_config())
+        end = time.monotonic() + 4
+        while not self.connector.status()['connected'] and time.monotonic() < end: time.sleep(.02)
+        self.assertTrue(self.connector.status()['connected'])
+        devices = {row['id']: row for row in self.call('GET', '/console/session')[1]['devices']}
+        self.assertEqual(devices['my-mac']['workspace']['id'], devices['other']['workspace']['id'])
+        self.assertEqual(devices['other']['permissions'], ['view'])
+        self.assertIn('approve', devices['my-mac']['permissions'])
+        self.assertEqual(self.call('POST', '/console/devices/other/request', {'method': 'POST', 'path': f'/api/threads/{T}/messages', 'body': {'requestId': 'no-inheritance', 'prompt': 'test'}})[0], 403)
+        self.connector.stop()
+        offline = self.call('GET', '/console/session')[1]['devices']
+        self.assertEqual(next(row for row in offline if row['id'] == 'my-mac')['workspace'], devices['my-mac']['workspace'])
+        persisted = json.loads(self.server.registry_path.read_text())
+        self.assertEqual(public_descriptor(persisted['my-mac']), devices['my-mac']['workspace'])
+        self.assertEqual(self.call('DELETE', '/console/devices/my-mac')[0], 200)
+        remaining = self.call('GET', '/console/session')[1]['devices']
+        self.assertEqual([row['id'] for row in remaining], ['other'])
+        self.assertEqual(remaining[0]['workspace'], devices['other']['workspace'])
+
+    def test_unauthenticated_connector_cannot_publish_workspace(self):
+        self.bridge.connection_workspace = {'id': 'f' * 32, 'name': '伪造', 'backend': 'codex-cli'}
+        self.configure_device({**self.device_config(), 'token': 'x' * 40})
+        end = time.monotonic() + 4
+        while not self.connector.status()['error'] and time.monotonic() < end: time.sleep(.02)
+        self.assertIsNotNone(self.connector.status()['error'])
+        self.assertNotIn('workspace', self.server.config['devices']['my-mac'])
+
     def test_static_example(self):
         self.login()
         page=self.call('GET','/example.html')[1]

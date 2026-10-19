@@ -5,14 +5,15 @@ from contextlib import contextmanager
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.catalog import valid_id
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
 from carryon.errors import BridgeError
 from carryon.owner.manager import OwnerManager
 
 
 class OwnerBridge(Bridge):
     def __init__(self, socket_path, catalog, journal, *, owner_directory, **kwargs):
-        super().__init__(socket_path, catalog, journal, **kwargs)
+        super().__init__(socket_path, catalog, journal, ipc_factory=kwargs.pop('ipc_factory', DesktopIPC), **kwargs)
         self.owner_directory = owner_directory
         self.owner_service = None
         self.compose_workers = set()

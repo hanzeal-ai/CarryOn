@@ -5,9 +5,9 @@ T = fixture.T
 from carryon.sessions.mentions import discover, guard_inputs, selections
 from carryon.sessions.queue import message
 from carryon.sessions.operations import controls
-from carryon.app_server.queue import replace
+from carryon.codex_protocol.queue import replace
 from carryon.contracts import digest
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.owner.requests import input_items
 import unittest
 

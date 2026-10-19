@@ -3,7 +3,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 class PrewarmedRuntime:

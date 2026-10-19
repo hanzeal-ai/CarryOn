@@ -19,7 +19,7 @@ from test_subagents import Native, P
 
 class UnloadedHistoryTests(unittest.TestCase):
     def test_job_evidence_uses_index_for_paginated_history_and_empty_turns(self):
-        from carryon.desktop_ipc.ipc import IPCError
+        from carryon.errors import IPCError
         self.bridge.ipc.current = Mock(return_value=None)
         self.bridge.ipc.snapshot = Mock(side_effect=IPCError('no-client-found'))
         evidence = self.bridge.turn_evidence(P, 'turn')

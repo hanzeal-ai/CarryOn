@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from carryon.app_server.app_server import AppServer
-from carryon.app_server.queue import replace
+from carryon.codex_protocol.queue import replace
 from carryon.contracts import digest
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.bridge import Bridge
 from carryon.sessions.skills import discover, guard_inputs, selections
 from carryon.sessions.queue import message

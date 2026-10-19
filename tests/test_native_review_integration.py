@@ -10,7 +10,8 @@ from pathlib import Path
 from run_appserver_regression import wait_until
 from carryon.app_server.app_server import AppServer
 from carryon.app_server.app_server_bridge import AppServerBridge
-from carryon.desktop_ipc.ipc import DesktopIPC, IPCError
+from carryon.desktop_ipc.ipc import DesktopIPC
+from carryon.errors import IPCError
 from carryon.owner.integration import OwnerBridge
 from carryon.owner.manager import OwnerManager
 from carryon.sessions.catalog import Catalog

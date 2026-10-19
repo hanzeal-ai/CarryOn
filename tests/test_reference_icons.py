@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import base64
 import struct
 import tempfile
@@ -13,6 +14,12 @@ def png(width=16, height=16):
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress((b'\0' + b'\0\x80\xff\xff' * width) * height)) + chunk(b'IEND', b'')
+
+
+class Runtime(SimpleNamespace):
+    @property
+    def connection_identity(self):
+        return self.process, self.session_id
 
 
 class ReferenceIconsTests(unittest.TestCase):
@@ -82,7 +89,7 @@ class ReferenceIconsTests(unittest.TestCase):
     def test_send_inventory_never_loads_images(self):
         from carryon.sessions import skills
         from types import SimpleNamespace
-        runtime = SimpleNamespace(process=object(), session_id='fixture', connected=True,
+        runtime = Runtime(process=object(), session_id='fixture', connected=True,
                                   current=lambda tid: {'cwd': str(self.skill)},
                                   rpc=lambda method, params: {'data': [{'cwd': str(self.skill), 'skills': [self.row], 'errors': []}]})
         with patch.object(skills, 'skill_icons', side_effect=AssertionError('send must not read icons')):

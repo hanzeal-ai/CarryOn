@@ -1,12 +1,12 @@
 """Live native terminal inventory belongs to its owning process, never a short reader."""
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 def identity(runtime, tid):
     state = runtime.current(tid)
     if not runtime.connected or not state or state.get('id') != tid or state.get('_metadataOnly'):
         raise IPCError('后台终端需要实际拥有会话的原生进程')
-    return runtime.process, runtime.session_id
+    return runtime.connection_identity
 
 
 def verify(runtime, tid, expected):

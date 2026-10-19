@@ -11,7 +11,9 @@ struct WorkspaceSwitcher: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(model.devices) { device in
+                ForEach(model.workspaceGroups) { workspace in
+                    Section(workspace.title) {
+                ForEach(workspace.connections) { device in
                     Button {
                         model.switchDevice(device.id)
                         dismiss()
@@ -19,11 +21,11 @@ struct WorkspaceSwitcher: View {
                         HStack(spacing: 10) {
                             Image(systemName: "laptopcomputer")
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(device.title).foregroundStyle(Design.ink).lineLimit(1)
+                                Text(WorkspaceGroup.connectionLabel(device)).foregroundStyle(Design.ink).lineLimit(1)
                                 HStack(spacing: 6) {
                                     Text(device.value["online"].bool == true ? "在线" : device.value["online"].bool == false ? "离线" : "状态未知")
                                         .foregroundStyle(device.value["online"].bool == true ? Design.green : Design.secondary)
-                                    if device.id == model.selectedDevice { Label("当前工作区", systemImage: "checkmark").foregroundStyle(Design.secondary) }
+                                    if device.id == model.selectedDevice { Label("当前连接", systemImage: "checkmark").foregroundStyle(Design.secondary) }
                                 }.font(.caption)
                             }
                             Spacer(minLength: 0)
@@ -39,6 +41,8 @@ struct WorkspaceSwitcher: View {
                     }
                     .disabled(model.removingDevice)
                 }
+                    }
+                }
                 if model.devices.isEmpty { Text("暂无工作区").foregroundStyle(Design.secondary) }
             }
             .scrollContentBackground(.hidden).background(Design.background)
@@ -51,15 +55,15 @@ struct WorkspaceSwitcher: View {
             }
             .sheet(isPresented: $help) { WorkspaceConnectionHelp() }
             .sheet(item: $details) { WorkspaceDetails(device: $0) }
-            .alert("移除此设备？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })) {
+            .alert("移除此连接？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })) {
                 Button("取消", role: .cancel) { removal = nil }
                 Button("移除", role: .destructive) {
                     guard let device = removal else { return }
                     removal = nil
                     Task { do { try await model.removeDevice(device.id); removed = true } catch { model.report(error) } }
                 }
-            } message: { Text("移除后将撤销此设备的连接凭证，重新接入需在电脑端再次申请。已被 Codex 接收的任务可能仍在执行。") }
-            .alert("设备已移除", isPresented: $removed) { Button("好", role: .cancel) {} }
+            } message: { Text("移除后将撤销此连接的凭证，其他连接保留。重新接入需在电脑端再次申请。已被 Codex 接收的任务可能仍在执行。") }
+            .alert("连接已移除", isPresented: $removed) { Button("好", role: .cancel) {} }
         }.presentationDetents([.medium, .large])
     }
 }
@@ -72,14 +76,19 @@ struct WorkspaceConnectionHelp: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("CLI").font(.headline)
+                    Text("连接 Codex 桌面端").font(.headline)
                     Text("1. 在电脑上安装 CarryOn，并打开 Codex App。\n2. 在终端执行以下命令：")
                     WorkspaceCopyBlock(text: "carryon init", label: "复制命令", monospaced: true)
                     Text("3. 扫描电脑显示的二维码，核对账号、工作区和权限后确认绑定。")
                     Button { scanning = true } label: { Label("扫码绑定工作区", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity, minHeight: 48) }
                         .foregroundStyle(Design.onAccent).background(Design.ink, in: RoundedRectangle(cornerRadius: 13))
                     Divider()
-                    Text("桌面端").font(.headline)
+                    Text("添加 Codex CLI 连接").font(.headline)
+                    Text("在同一台电脑启动 Codex CLI 的 daemon，再执行以下命令。选择已有工作区绑定，在电脑上核对账号和权限并确认开放，无需再次扫码。")
+                    WorkspaceCopyBlock(text: "codex app-server daemon start", label: "复制命令", monospaced: true)
+                    WorkspaceCopyBlock(text: "carryon services create --backend codex-cli --name \"Codex CLI\"", label: "复制命令", monospaced: true)
+                    Divider()
+                    Text("CarryOn 桌面端").font(.headline)
                     Text("打开 CarryOn 桌面端，生成工作区绑定二维码；也可指定你的账号发起申请，在下方确认。")
                     WorkspaceBindingRequests()
                 }.padding(20)
@@ -107,7 +116,8 @@ struct WorkspaceDetails: View {
                     LabeledContent("允许远程操作", value: status["remoteControl"].bool.map { $0 ? "已授权" : "未授权" } ?? "待确认")
                     LabeledContent("远程待机", value: standby["effective"].bool.map { $0 ? "已生效" : "未生效" } ?? "待确认")
                 }
-                LabeledContent("工作区", value: device.title)
+                LabeledContent("工作区", value: device.value["workspace"]["name"].string ?? device.title)
+                LabeledContent("连接", value: WorkspaceGroup.connectionLabel(device))
                 LabeledContent("设备 ID", value: device.id)
                 LabeledContent("状态", value: device.value["online"].bool == true ? "在线" : "离线")
                 LabeledContent("主机名", value: info["hostname"].string ?? "暂不可用")

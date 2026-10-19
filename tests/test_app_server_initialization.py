@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from carryon.app_server.initialization import initialization_lock
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 class NativeInitializationTests(unittest.TestCase):

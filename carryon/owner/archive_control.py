@@ -1,5 +1,5 @@
 """Retire only an Owner whose native archive has been confirmed."""
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 def detach(bridge, tid, expected_session):

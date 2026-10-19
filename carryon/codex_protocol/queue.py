@@ -1,6 +1,6 @@
 """Native queue adaptation. The app-server owns stored submissions and their IDs."""
 from copy import deepcopy
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 def messages(runtime, tid):

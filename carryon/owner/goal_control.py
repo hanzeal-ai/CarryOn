@@ -2,7 +2,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.sessions.history_cache import NativeSnapshot
 
 

@@ -8,15 +8,21 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from carryon.sessions.creation_references import discover
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.workspaces.workspace import project_identity
+
+
+class Runtime(SimpleNamespace):
+    @property
+    def connection_identity(self):
+        return self.process, self.session_id
 
 
 class DiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.runtime = SimpleNamespace(process=object(), session_id='initial', connected=True, require_account=lambda: None)
+        self.runtime = Runtime(process=object(), session_id='initial', connected=True, require_account=lambda: None)
         self.bridge = SimpleNamespace(lock=threading.RLock(), catalog=SimpleNamespace(home=self.root, independent=True),
                                       workspace_directory=self.root, require=lambda: (self.runtime, 1), check_generation=lambda *_: None)
         self.skill = {'name': 'review', 'path': '/skill/SKILL.md', 'enabled': True}

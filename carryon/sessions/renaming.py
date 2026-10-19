@@ -3,7 +3,7 @@ from contextlib import nullcontext
 import threading
 import time
 from carryon.contracts import digest, validate_request_id
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.errors import BridgeError
 from carryon.sessions.native_metadata import record, supported
 
@@ -69,9 +69,9 @@ def dispatch(bridge, ipc, generation, job, authorize):
             context = session(bridge, tid)
         with context as (runtime, owner_guard, state, suspended, _):
             with runtime._queue_lock(tid):
-                identity = (runtime.process, runtime.session_id)
+                identity = runtime.connection_identity
                 def stable():
-                    if not runtime.connected or (runtime.process, runtime.session_id) != identity:
+                    if not runtime.connected or runtime.connection_identity != identity:
                         raise IPCError('原生连接身份已改变')
                 def guarded(write):
                     nonlocal sent

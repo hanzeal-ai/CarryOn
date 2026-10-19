@@ -3,7 +3,7 @@ import time
 import uuid
 from contextlib import nullcontext
 
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 from carryon.contracts import digest, text
 from carryon.contracts import settings as validate_settings, approval, approval_choices, validate, SCHEMAS
 from carryon.sessions.queue import transform, message as queued_message
@@ -251,15 +251,15 @@ def submit(bridge, thread_id, data, source=None, authorize=None, prepared=None, 
 
 def dispatch(bridge, ipc, generation, job, data, authorize=None, prepared=None):
     if data['action'] in ('voice-start', 'voice-stop'):
-        from carryon.app_server.realtime_voice import dispatch as voice
+        from carryon.codex_protocol.realtime_voice import dispatch as voice
         voice(bridge, ipc, generation, job, data, authorize)
         return
     if data['action'] in ('goal-set', 'goal-pause', 'goal-clear'):
-        from carryon.app_server.goals import dispatch as goal
+        from carryon.codex_protocol.goals import dispatch as goal
         goal(bridge, ipc, generation, job, data, authorize)
         return
     if data['action'] == 'review':
-        from carryon.app_server.review import dispatch as review
+        from carryon.codex_protocol.review import dispatch as review
         review(bridge, ipc, generation, job, data, authorize)
         return
     if data['action'] == 'edit' and dispatch_native_edit(bridge, ipc, generation, job, data, authorize):
@@ -368,7 +368,7 @@ def dispatch_native_edit(bridge, ipc, generation, job, data, authorize):
                 nonlocal phase, attempted, reverted
                 phase, attempted, reverted = stage, False, True
                 bridge.journal.update(job['id'], editPhase=stage, **evidence)
-            from carryon.app_server.editing import edit_last
+            from carryon.codex_protocol.editing import edit_last
             result = edit_last(runtime, tid, data['turnId'], text(data.get('prompt')), client_id, before_write, progress)
             bridge.journal.update(job['id'], state='completed', editPhase='completed', result=result,
                 turnId=result['turn']['id'], evidence='native-revert-and-start')

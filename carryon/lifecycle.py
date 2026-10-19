@@ -2,7 +2,7 @@
 import threading
 
 from carryon.errors import BridgeError
-from carryon.desktop_ipc.ipc import IPCError
+from carryon.errors import IPCError
 
 
 class BridgeLifecycle:
@@ -31,7 +31,8 @@ class BridgeLifecycle:
 
     def connect(self):
         try:
-            if not self.bridge.status()['enabled']:
+            state = self.bridge.status()
+            if not state['enabled'] or state.get('restorePending'):
                 reconnect = getattr(self.bridge, "reconnect", None)
                 if reconnect: reconnect()
                 else:
