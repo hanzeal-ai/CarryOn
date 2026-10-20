@@ -97,10 +97,15 @@ const assert=require('node:assert/strict');
  assert.deepEqual(writes.at(-1).body.skills,[]);
 
  const settingsPanel=page.locator('.mobile-session-settings');
+ async function openSessionActions(){
+  const menu=page.locator('.conversation-more'),actions=page.locator('.session-actions');
+  if(!await menu.evaluate(node=>node.open))await menu.locator(':scope > summary').click();
+  if(!await actions.evaluate(node=>node.open))await actions.locator(':scope > summary').click();
+ }
  const advancedSettings=JSON.parse(await settingsPanel.getByLabel('高级设置 JSON',{exact:true}).inputValue());
  assert(!('activePermissionProfile' in advancedSettings));assert.deepEqual(advancedSettings.sandboxPolicy,{type:'readOnly'});
  if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'高级会话设置',exact:true}).click();}
- else {await page.locator('.session-actions>summary').click();await settingsPanel.locator(':scope>summary').click();}
+ else {await openSessionActions();await settingsPanel.locator(':scope>summary').click();}
  await page.waitForFunction(()=>!document.querySelector('[aria-label="模型"]').disabled);
  await settingsPanel.getByLabel('模型',{exact:true}).selectOption('fixture-model');
  await settingsPanel.getByLabel('思考强度',{exact:true}).selectOption('high');
@@ -170,7 +175,7 @@ const assert=require('node:assert/strict');
  await page.waitForTimeout(50);
  assert.equal(writes.at(-1).body.action,'interrupt');assert.equal(writes.at(-1).body.expectedTurnId,'turn');
  if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'队列管理',exact:true}).click();}
- else {await page.locator('.session-actions>summary').click();await page.locator('.mobile-queue>summary').click();}
+ else {await openSessionActions();await page.locator('.mobile-queue>summary').click();}
  const queue=page.locator('.mobile-queue');
  await queue.getByLabel('第 1 条排队任务',{exact:true}).fill('changed');
  for(const [label,action]of [['保存内容','queue-edit'],['下移','queue-reorder'],['恢复执行','queue-resume']]){
@@ -210,7 +215,7 @@ const assert=require('node:assert/strict');
    await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:reviewHistory},()=>true);
  });
  if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'审查代码',exact:true}).click();}
- else {await page.locator('.session-actions>summary').click();await page.locator('.mobile-review>summary').click();}
+ else {await openSessionActions();await page.locator('.mobile-review>summary').click();}
  const reviewPanel=page.locator('.mobile-review');await reviewPanel.getByLabel('审查范围',{exact:true}).selectOption('baseBranch');
  assert(await reviewPanel.getByRole('button',{name:'开始审查',exact:true}).isDisabled());
  await reviewPanel.getByLabel('分支名称',{exact:true}).fill('main');failOperation='uncertain';
@@ -227,7 +232,7 @@ const assert=require('node:assert/strict');
    await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:goalHistory},()=>true);
  });
  if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'会话目标',exact:true}).click();}
- else {await page.locator('.session-actions>summary').click();await page.locator('.mobile-goal>summary').click();}
+ else {await openSessionActions();await page.locator('.mobile-goal>summary').click();}
  const goalPanel=page.locator('.mobile-goal');assert(await goalPanel.getByRole('button',{name:'启动目标',exact:true}).isDisabled());
  await goalPanel.getByLabel('目标内容',{exact:true}).fill('Complete isolated fixture');
  await goalPanel.getByLabel('Token 预算（可选）',{exact:true}).fill('1.5');assert(await goalPanel.getByRole('button',{name:'启动目标',exact:true}).isDisabled());
@@ -271,7 +276,7 @@ const assert=require('node:assert/strict');
   await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:forkHistory},()=>true);
  });
  if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'分叉会话',exact:true}).click();}
- else {await page.locator('.session-actions>summary').click();await page.locator('.mobile-fork>summary').click();}
+ else {await openSessionActions();await page.locator('.mobile-fork>summary').click();}
  const forkPanel=page.locator('.mobile-fork');await forkPanel.getByLabel('分叉保留到',{exact:true}).selectOption('turn1');
  await page.evaluate(async()=>{forkHistory={...forkHistory,historyRevision:'fork-more',timeline:[{id:'u0',turnId:'turn0',type:'userMessage',text:'older turn'},...forkHistory.timeline]};await receiveUpdate({status:{enabled:true,remoteControl:true},subscription,threadId:selected,history:forkHistory},()=>true);});
  assert.equal(await forkPanel.getByLabel('分叉保留到',{exact:true}).inputValue(),'turn1');assert.equal(await forkPanel.locator('option[value=turn0]').count(),1);

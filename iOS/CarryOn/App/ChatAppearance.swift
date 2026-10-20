@@ -73,6 +73,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var disabled = false
     var draftEditable = true
     var sendAllowed = true
+    var sendingReady = true
     var commandInputAllowed = false
     var stopAllowed = true
     var hasImages = false
@@ -86,7 +87,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var resume: (() -> Void)?
     @ViewBuilder var accessories: Accessories
     private var action: ComposerAction { submitting ? .pause : .resolve(text: sendAllowed ? text : "", hasImages: sendAllowed && hasImages, running: stopping, interrupted: resuming) }
-    private var actionDisabled: Bool { disabled || submitting || action == .unavailable || (action == .pause ? !stopAllowed : !sendAllowed) }
+    private var actionDisabled: Bool { disabled || submitting || action == .unavailable || (action == .pause ? !stopAllowed : (!sendAllowed || !sendingReady)) }
     private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : sendLabel ?? (stopping ? "补充到当前任务" : "发送") }
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

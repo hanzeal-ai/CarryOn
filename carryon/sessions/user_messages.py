@@ -16,6 +16,10 @@ def _unwrap_attachments(text):
     if not found:
         return text, []
     request = request.lstrip()
+    # The existing send validators trim whitespace; an attachment-only message
+    # therefore keeps the complete marker but loses its final newline.
+    if request == '## My request:':
+        request += '\n'
     if not request.startswith('## My request:\n'):
         return text, []
     paths = []

@@ -8,13 +8,13 @@ import sys
 import time
 
 if len(sys.argv) not in (2, 3):
-    raise SystemExit("Usage: python3 tests/run_ios_navigation_regression.py <booted-simulator-id> [navigation|alignment|tabs|statuses|activity|parity|home|fork|composer|visual|creationrefs|conversationvisual|timeline|archives|rename|search|sections|terminals|skillmanagement|plugins|projectfiles|timelineperformance|timelineboundary|liststates]")
+    raise SystemExit("Usage: python3 tests/run_ios_navigation_regression.py <booted-simulator-id> [navigation|alignment|tabs|statuses|activity|parity|home|fork|composer|visual|creationrefs|conversationvisual|timeline|archives|rename|search|sections|terminals|skillmanagement|plugins|projectfiles|timelineperformance|timelineboundary|liststates|uploads]")
 repo = Path(__file__).resolve().parents[1]
 build_configuration = os.environ.get("CARRYON_IOS_CONFIGURATION", "Debug")
 if build_configuration not in ("Debug", "Release"):
     raise SystemExit("CARRYON_IOS_CONFIGURATION must be Debug or Release")
 mode = sys.argv[2] if len(sys.argv) == 3 else "navigation"
-if mode not in ("navigation", "alignment", "tabs", "statuses", "activity", "parity", "home", "fork", "composer", "visual", "creationrefs", "conversationvisual", "timeline", "archives", "rename", "search", "sections", "terminals", "skillmanagement", "plugins", "projectfiles", "timelineperformance", "timelineboundary", "liststates"): raise SystemExit("Unknown regression")
+if mode not in ("navigation", "alignment", "tabs", "statuses", "activity", "parity", "home", "fork", "composer", "visual", "creationrefs", "conversationvisual", "timeline", "archives", "rename", "search", "sections", "terminals", "skillmanagement", "plugins", "projectfiles", "timelineperformance", "timelineboundary", "liststates", "uploads"): raise SystemExit("Unknown regression")
 work = repo / (".runtime/" + mode + "-regression")
 source = work / "source"
 source.mkdir(parents=True, exist_ok=True)
@@ -22,8 +22,18 @@ for directory in ("CarryOn", "CarryOn.xcodeproj", "Tests"):
     if (source / directory).exists(): shutil.rmtree(source / directory)
     shutil.copytree(repo / "iOS" / directory, source / directory)
 shutil.copy2(repo / "iOS/Package.swift", source / "Package.swift")
-fixtures = {"navigation": "ios_navigation_regression.swift", "alignment": "ios_codex_alignment.swift", "tabs": "ios_tabs_regression.swift", "statuses": "ios_list_status_regression.swift", "activity": "ios_activity_regression.swift", "parity": "ios_parity_regression.swift", "home": "ios_home_regression.swift", "fork": "ios_fork_regression.swift", "composer": "ios_composer_regression.swift", "visual": "ios_visual_regression.swift", "creationrefs": "ios_creationrefs_regression.swift", "conversationvisual": "ios_conversationvisual_regression.swift", "timeline": "ios_timeline_regression.swift", "archives": "ios_archives_regression.swift", "rename": "ios_rename_regression.swift", "search": "ios_search_regression.swift", "sections": "ios_sections_regression.swift", "terminals": "ios_terminals_regression.swift", "skillmanagement": "ios_skillmanagement_regression.swift", "plugins": "ios_plugins_regression.swift", "projectfiles": "ios_projectfiles_regression.swift", "timelineperformance": "ios_timeline_regression.swift", "timelineboundary": "ios_timeline_regression.swift", "liststates": "ios_conversation_list_states.swift"}
+fixtures = {"navigation": "ios_navigation_regression.swift", "alignment": "ios_codex_alignment.swift", "tabs": "ios_tabs_regression.swift", "statuses": "ios_list_status_regression.swift", "activity": "ios_activity_regression.swift", "parity": "ios_parity_regression.swift", "home": "ios_home_regression.swift", "fork": "ios_fork_regression.swift", "composer": "ios_composer_regression.swift", "visual": "ios_visual_regression.swift", "creationrefs": "ios_creationrefs_regression.swift", "conversationvisual": "ios_conversationvisual_regression.swift", "timeline": "ios_timeline_regression.swift", "archives": "ios_archives_regression.swift", "rename": "ios_rename_regression.swift", "search": "ios_search_regression.swift", "sections": "ios_sections_regression.swift", "terminals": "ios_terminals_regression.swift", "skillmanagement": "ios_skillmanagement_regression.swift", "plugins": "ios_plugins_regression.swift", "projectfiles": "ios_projectfiles_regression.swift", "timelineperformance": "ios_timeline_regression.swift", "timelineboundary": "ios_timeline_regression.swift", "liststates": "ios_conversation_list_states.swift", "uploads": "ios_uploads_regression.swift"}
 shutil.copy2(repo / "tests/fixtures" / fixtures[mode], source / "CarryOn/App/CarryOnApp.swift")
+if mode == "uploads":
+    for filename, event, anchor, key in (
+        ("ConversationView.swift", "fixture.uploads.conversation", "        conversationPresentation\n", "uploadKey"),
+        ("ConversationActions.swift", "fixture.uploads.creation", "            .carryOnChatAppearance()\n", "draftKey"),
+    ):
+        view = source / "CarryOn/App" / filename
+        original = view.read_text()
+        if anchor not in original: raise SystemExit("Uploads fixture injection point is missing")
+        hook = '        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("' + event + '"))) { note in if let kind = (note.object as? String).flatMap(UploadKind.init(rawValue:)) { uploadPicker.open(kind, model: model, key: ' + key + ', target: uploadTarget) } else { uploadPicker.showing = false } }\n'
+        view.write_text(original.replace(anchor, anchor + hook, 1))
 if mode == "liststates":
     import runpy
     runpy.run_path(str(repo / "tests/fixtures/ios_conversation_list_states.py"), init_globals={"source": source})
@@ -275,9 +285,10 @@ container = Path(subprocess.check_output(["xcrun", "simctl", "get_app_container"
 result = container / ("Documents/" + mode + "-result.json")
 # A previous test result must not satisfy this run.
 previous = result.stat().st_mtime_ns if result.exists() else None
-screens = ("parity-new-single", "parity-new-multiline", "parity-new-image") if mode == "parity" else ("tabs-top",) if mode == "tabs" else ("official-composer-keyboard",) if mode == "conversationvisual" else ()
+screens = ("parity-new-single", "parity-new-multiline", "parity-new-image") if mode == "parity" else ("uploads-menu", "uploads-picker") if mode == "uploads" else ("tabs-top",) if mode == "tabs" else ("official-composer-keyboard",) if mode == "conversationvisual" else ()
 for name in screens:
     (container / ("Documents/" + name + ".capture")).unlink(missing_ok=True)
+    (container / ("Documents/" + name + ".captured")).unlink(missing_ok=True)
 captured = set()
 launch_started = time.time_ns()
 subprocess.run(["xcrun", "simctl", "launch", "--terminate-running-process", f"--stdout={work / 'simulator.log'}", f"--stderr={work / 'simulator-errors.log'}", device, bundle], check=True)
@@ -287,6 +298,7 @@ for _ in range(450 if mode == "liststates" else 300):
         marker = container / ("Documents/" + name + ".capture")
         if name not in captured and marker.exists():
             subprocess.run(["xcrun", "simctl", "io", device, "screenshot", str(work / (name + ".png"))], check=True, stdout=subprocess.DEVNULL)
+            (container / ("Documents/" + name + ".captured")).touch()
             captured.add(name)
     if result.exists() and result.stat().st_mtime_ns != previous and (container / ("Documents/" + mode + ".png")).exists() and (container / ("Documents/" + mode + ".png")).stat().st_mtime_ns >= launch_started:
         data = json.loads(result.read_text())

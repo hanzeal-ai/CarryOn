@@ -17,7 +17,9 @@ def required_capabilities(method, target, body=None):
     path = urlsplit(target).path
     if path.endswith('/voice') or path.endswith('/voice/audio'): return ('send',)
     if method == 'GET':
+        if path.startswith('/api/uploads/'): return ('send', 'files')
         return ('files',) if '/images/' in path or '/artifacts/' in path or path.endswith('/files/search') else ('view',)
+    if path == '/api/uploads': return ('send', 'files')
     if path.endswith('/streams') or '/streams/' in path or '/notifications/' in path:
         return ('view',)
     if path == '/api/usage/reset': return ('resetQuota',)
@@ -27,18 +29,19 @@ def required_capabilities(method, target, body=None):
     if path == '/api/sections' or path.startswith('/api/sections/'): return ('edit',)
     if path.endswith('/threads'):
         settings = (body or {}).get('settings')
-        return ('create', 'edit') if isinstance(settings, dict) and set(settings) - {'model', 'effort'} else ('create',)
+        needed = ('create', 'edit') if isinstance(settings, dict) and set(settings) - {'model', 'effort'} else ('create',)
+        return needed + (('send', 'files') if (body or {}).get('uploads') else ())
     if path.endswith('/fork') or path.endswith('/side-chats'):
         return ('create',)
     if path.startswith('/api/side-chats/') and path.endswith('/close'): return ('stop',)
     if path.endswith(('/archive', '/unarchive', '/rename', '/section')): return ('edit',)
     if path.endswith('/session'): return ('send',)
     if path.endswith('/messages') or path.endswith('/compose'):
-        return ('send', 'files') if (body or {}).get('files') else ('send',)
+        return ('send', 'files') if (body or {}).get('files') or (body or {}).get('uploads') else ('send',)
     if path.endswith('/operations'):
         action = (body or {}).get('action')
         if action in ('interrupt', 'goal-pause', 'goal-clear', 'voice-stop'): return ('stop',)
-        if action in ('steer', 'resume', 'queue-add', 'queue-resume', 'review', 'goal-set', 'voice-start'): return ('send', 'files') if (body or {}).get('files') else ('send',)
+        if action in ('steer', 'resume', 'queue-add', 'queue-resume', 'review', 'goal-set', 'voice-start'): return ('send', 'files') if (body or {}).get('files') or (body or {}).get('uploads') else ('send',)
         if action in ('edit', 'compact', 'settings', 'queue-edit', 'queue-delete', 'queue-reorder', 'clear-queue'): return ('edit',)
         if action in ('command-approval', 'file-approval', 'permissions-approval', 'user-input', 'mcp-response'): return ('approve',)
     if path.endswith('/acknowledge'): return ('send',)

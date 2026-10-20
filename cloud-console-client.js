@@ -30,7 +30,7 @@ class CloudConsoleClient extends CarryOnClient {
   async initialize() {
     try {
       const session=await this.consoleRequest('session');
-      this.token='session';this.devices=session.devices;
+      this.token='session';this.devices=session.devices;this.account=session.account;
       const picker=document.getElementById('console-device');
       picker.replaceChildren(...session.devices.map(d=>new Option((d.name||d.id)+(d.online?' · 在线':' · 离线'),d.id)));
       if(!session.devices.some(d=>d.id===this.device))this.device=session.devices[0]?.id||'';

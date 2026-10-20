@@ -39,7 +39,18 @@ def selections(value):
 def project(prompt, files):
     if not files:
         return prompt
-    return '\n' + HEADER + '\n' + ''.join('\n## ' + item['name'] + ': ' + item['path'] + '\n' for item in files) + '\n' + SEPARATOR + '\n\n' + REQUEST_HEADER + prompt
+    from carryon.sessions.user_messages import _unwrap_attachments
+    references = list(files)
+    # Uploaded references have already been resolved by the HTTP route. Preserve
+    # one native display envelope when project references are added at delivery.
+    while True:
+        request, paths = _unwrap_attachments(prompt)
+        if request == prompt:
+            break
+        references.extend({'name': Path(path).name, 'path': path} for path in paths)
+        prompt = request
+    unique = {item['path']: item for item in references}
+    return '\n' + HEADER + '\n' + ''.join('\n## ' + item['name'] + ': ' + item['path'] + '\n' for item in unique.values()) + '\n' + SEPARATOR + '\n\n' + REQUEST_HEADER + prompt
 
 
 def project_root(cwd):

@@ -9,7 +9,7 @@ const assert=require('node:assert/strict');
  await page.addInitScript(()=>{window.CARRYON_CLOUD=true;});
  await page.route('**/console/**',async route=>{
   const req=route.request(),u=new URL(req.url());let data={},status=200;
-  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true},{id:'other',name:'工作室 Mac',online:false}]};}
+  if(u.pathname.endsWith('/session')){if(!authenticated){status=401;data={error:'请先登录云端控制台'};}else data={devices:[{id:'mac',name:'我的 MacBook',online:true,permissions:['view','send','stop']},{id:'other',name:'工作室 Mac',online:false}]};}
   else if(u.pathname.endsWith('/login'))authenticated=true;
   else if(u.pathname.endsWith('/logout'))authenticated=false;
   else if(u.pathname.endsWith('/link/pending'))data={requests:[]};

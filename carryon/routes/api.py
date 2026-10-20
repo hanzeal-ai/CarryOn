@@ -25,9 +25,11 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
             raise BridgeError('云端不能管理本机授权或服务生命周期', 403)
         if not control and path.endswith('/voice'):
             raise BridgeError('本机未授权云端访问语音', 403)
+        if not control and path.startswith('/api/uploads/'):
+            raise BridgeError('本机仅授权云端读取', 403)
         if method != 'GET' and not control:
             raise BridgeError('本机仅授权云端读取', 403)
-    if not re.fullmatch(r'/api/(status|models|search|creation/references|usage|usage/reset|bridge|coordination|threads|sections|sections/[^/]+|sections/[^/]+/threads|archived|side-chats|jobs|threads/[^/]+/(subagents|history|search|search-anchor|queue|terminals|plugins|files/search|skills/config|skills|mentions|goal|voice|voice/audio|operations|messages|compose|session|fork|archive|unarchive|rename|section|side-chats|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|close|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
+    if not re.fullmatch(r'/api/(status|models|search|creation/references|uploads|uploads/[0-9a-f]{32}|usage|usage/reset|bridge|coordination|threads|sections|sections/[^/]+|sections/[^/]+/threads|archived|side-chats|jobs|threads/[^/]+/(subagents|history|search|search-anchor|queue|terminals|plugins|files/search|skills/config|skills|mentions|goal|voice|voice/audio|operations|messages|compose|session|fork|archive|unarchive|rename|section|side-chats|(?:images|artifacts)/[0-9a-f]{64})|side-chats/[^/]+/(history|compose|operations|close|(?:images|artifacts)/[0-9a-f]{64})|jobs/[^/]+(/acknowledge)?)', path):
         return 404, {'error':'接口不存在'}
     result = None
     def respond(status, body):
@@ -43,6 +45,19 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
                 else bridge.enable() if data["enabled"] else bridge.disable())
         return result
     bridge.require()
+    if path == '/api/uploads' and method == 'POST':
+        from carryon.uploads import Uploads
+        uploads = Uploads(bridge, source, authorize)
+        action = data.get('action')
+        if action not in ('begin', 'chunk', 'complete'):
+            raise ValueError('上传操作无效')
+        return 200, getattr(uploads, action)(data)
+    if path.startswith('/api/uploads/') and method == 'GET':
+        from carryon.uploads import Uploads
+        return 200, Uploads(bridge, source, authorize).read(path.split('/')[3])
+    if method == 'POST' and 'uploads' in data:
+        from carryon.uploads import project_request
+        data = project_request(bridge, path, data, source, authorize)
     if method == 'GET' and path == '/api/coordination':
         ipc, _ = bridge.require()
         with ipc.lock:

@@ -15,6 +15,19 @@ import Testing
     #expect(ConversationPresentation.referencedArtifactIDs(item) == ["image", "code"])
 }
 
+@Test func directoryAndUnavailableUploadPreviewsRemainStatic() {
+    let directory: JSONValue = .object(["id": .string("directory"), "name": .string("资料"), "path": .string("/upload/资料"), "kind": .string("directory")])
+    let large: JSONValue = .object(["id": .string("large"), "name": .string("archive.zip"), "path": .string("/upload/archive.zip"), "previewAvailable": .bool(false)])
+    let small: JSONValue = .object(["id": .string("small"), "name": .string("notes.txt"), "path": .string("/upload/notes.txt"), "previewAvailable": .bool(true)])
+    #expect(!ConversationPresentation.artifactCanPreview(directory))
+    #expect(!ConversationPresentation.artifactCanPreview(large))
+    #expect(ConversationPresentation.artifactCanPreview(small))
+    #expect(ConversationPresentation.artifactCanPreview(.object(["kind": .string("image")])))
+    let item: JSONValue = .object(["text": .string("[目录](/upload/资料) [大文件](/upload/archive.zip) [笔记](/upload/notes.txt)"), "artifacts": .array([directory, large, small])])
+    #expect(ConversationPresentation.attachmentDisplayText(item) == "资料 archive.zip [notes.txt](carryon-artifact:small)")
+    #expect(ConversationPresentation.referencedArtifactIDs(item) == ["small"])
+}
+
 @Test func activityShowsContentAndDoesNotExpandEmptyLifecycleMetadata() {
     let command: JSONValue = .object(["type": .string("commandExecution"), "title": .string("执行命令"), "text": .string("swift test"), "data": .object(["command": .string("swift test")])])
     #expect(ConversationPresentation.activityText(command) == "swift test")

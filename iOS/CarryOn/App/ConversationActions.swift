@@ -31,6 +31,10 @@ struct NewConversationView: View {
         return Binding(get: { model.draftStore.settings[key] ?? .null }, set: { model.draftStore.settings[key] = $0; model.draftStore.save() })
     }
     @State private var photos: [PhotosPickerItem] = []
+    @State private var uploadPicker = UploadPickerState()
+    private var uploads: [ConversationUpload] { model.draftStore.uploads[draftKey] ?? [] }
+    private var uploadTarget: UploadTarget { .creation(directCreation ? nil : project) }
+    private var uploadsReady: Bool { model.uploadsReady(key: draftKey, target: uploadTarget) }
     @State private var loadingPhotos = false
     private var draftKey: String { model.scope + "\nnew" }
     private var images: [String] {
@@ -73,10 +77,11 @@ struct NewConversationView: View {
     var body: some View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
-                CarryOnChatComposer(text: draftBinding, skills: referenceBinding, selection: selectionBinding, disabled: !model.canWrite(.create) || !creationSettingsAllowed || (!directCreation && !projects.contains(where: { $0.id == project })) || loading || loadingPhotos,
-                                    draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty, submitting: loading, placeholder: "询问 CarryOn",
+                CarryOnChatComposer(text: draftBinding, skills: referenceBinding, selection: selectionBinding, disabled: !model.canWrite(.create) || !creationSettingsAllowed || (!directCreation && !projects.contains(where: { $0.id == project })) || loading || loadingPhotos || !uploadsReady,
+                                    draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty || !uploads.isEmpty, submitting: loading, placeholder: "询问 CarryOn",
                                     send: { Task { await create() } }) {
                     Menu {
+                        UploadMenuItems(picker: uploadPicker, key: draftKey, target: uploadTarget, disabled: loading || (!directCreation && !projects.contains(where: { $0.id == project })))
                         PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) { Label("添加图片", systemImage: "photo") }.disabled(images.count >= 3)
                         Button { choosingSkills = true } label: { Label("技能", systemImage: "bolt") }.disabled(!referencesAvailable)
                         Button { choosingMentions = true } label: { Label("应用与插件", systemImage: "at") }.disabled(!referencesAvailable)
@@ -118,6 +123,7 @@ struct NewConversationView: View {
                                 .font(.caption).foregroundStyle(Design.secondary)
                         }.disabled(creationModels == nil && modelCatalogFailure == nil)
                     }
+                    UploadDraftRows(key: draftKey, target: uploadTarget, disabled: loading)
                     if loadingPhotos { ProgressView("正在处理图片…") }
                     if !images.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -135,6 +141,7 @@ struct NewConversationView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24)
             }
             .carryOnChatAppearance()
+            .background(ConversationUploadPicker(state: uploadPicker))
             .disabled(loading)
             .navigationTitle("新建会话").navigationBarTitleDisplayMode(.inline)
                 .onAppear { presentationActive = true }.onDisappear { presentationActive = false }
@@ -204,21 +211,24 @@ struct NewConversationView: View {
         } catch { if scope == model.scope && loadVersion == version && !Task.isCancelled { failure = error.localizedDescription } }
     }
     private func create() async {
-        guard !loading, !loadingPhotos, model.canWrite(.create), creationSettingsAllowed, directCreation || projects.contains(where: { $0.id == project }) else { return }
+        guard !loading, !loadingPhotos, uploadsReady, model.canWrite(.create), creationSettingsAllowed, directCreation || projects.contains(where: { $0.id == project }) else { return }
         guard references.isEmpty || referencesAvailable else { failure = "当前工作区暂不支持引用，请恢复连接或移除引用后重试"; return }
+        guard uploads.isEmpty || (model.status["supportsUploads"].bool == true && model.allows(.send) && model.allows(.files)) else { failure = "当前工作区无法发送上传附件，请恢复权限或移除附件"; return }
         loading = true; defer { loading = false }
         let capturedScope = model.scope
         var createdID: String?
-        let draftKey = self.draftKey, sent = text, sentImages = images, sentReferences = references
+        let draftKey = self.draftKey, sent = text, sentImages = images, sentReferences = references, sentUploads = uploads
         var fields: [String: JSONValue] = ["prompt": .string(sent.replacingOccurrences(of: ComposerDocument.marker, with: "")),
             "skills": .array(sentReferences.filter { !$0.isMention }.map(\.value)), "mentions": .array(sentReferences.filter(\.isMention).map(\.value))]
         if creationSettings != .null { fields["settings"] = creationSettings }
         if !sentImages.isEmpty { fields["images"] = .array(sentImages.map(JSONValue.string)) }
+        if !sentUploads.isEmpty { fields["uploads"] = .array(sentUploads.compactMap(\.uploadID).map(JSONValue.string)) }
         if !directCreation { fields["projectId"] = .string(project) }
-        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields), onCompletion: { job in createdID = job["createdThreadId"].string }) {
+        if await model.write(path: "/api/threads", target: "new:" + project, body: .object(fields), authoredDraft: sentUploads.isEmpty ? nil : ConversationDraft(text: sent, images: sentImages, skills: sentReferences, uploads: sentUploads), authoredDraftKey: draftKey, onCompletion: { job in createdID = job["createdThreadId"].string }) {
             guard capturedScope == model.scope, presentationActive else { return }
             if model.draftStore.texts[draftKey] == sent && (model.draftStore.skills[draftKey] ?? []) == sentReferences { model.draftStore.texts[draftKey] = ""; model.draftStore.skills[draftKey] = []; model.composerSelections[draftKey] = 0; model.draftStore.save() }
             if model.draftStore.images[draftKey] == sentImages { model.draftStore.images[draftKey] = []; model.draftStore.save() }
+            if !sentUploads.isEmpty, model.draftStore.texts[draftKey]?.isEmpty != false, model.draftStore.skills[draftKey]?.isEmpty != false { model.composerSelections[draftKey] = 0 }
             dismiss()
             let title = ComposerDocument(text: sent, skills: sentReferences).displayText
             if let createdID, let record = try? Record(.object(["id": .string(createdID), "title": .string(title.isEmpty ? "新建会话" : title)])) { model.open(record) }

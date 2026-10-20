@@ -70,6 +70,10 @@ public enum ConversationPresentation {
         }
     }
 
+    public static func artifactCanPreview(_ ref: JSONValue) -> Bool {
+        ref["kind"].text != "directory" && ref["previewAvailable"].bool != false
+    }
+
     public static func attachmentDisplayText(_ item: JSONValue) -> String {
         let text = item["text"].text
         guard let regex = try? NSRegularExpression(pattern: #"!?\[([^\]\n]*)\]\((<[^>\n]+>|[^\s)]+)(?:\s+"[^"\n]*")?\)"#) else { return text }
@@ -80,7 +84,15 @@ public enum ConversationPresentation {
             let path = (target.removingPercentEncoding ?? target).replacingOccurrences(of: #":\d+(?::\d+)?$"#, with: "", options: .regularExpression)
             if let ref = item["artifacts"].array.first(where: { $0["path"].text == path }) {
                 let name = ref["name"].text.isEmpty ? String(text[labelRange]) : ref["name"].text
-                output.replaceSubrange(full, with: "[" + name.replacingOccurrences(of: "]", with: "\\]") + "](carryon-artifact:" + ref["id"].text + ")")
+                if artifactCanPreview(ref) {
+                    output.replaceSubrange(full, with: "[" + name.replacingOccurrences(of: "]", with: "\\]") + "](carryon-artifact:" + ref["id"].text + ")")
+                } else {
+                    let plain = name.reduce(into: "") { result, character in
+                        if "\\[]()*_`<>".contains(character) { result.append("\\") }
+                        result.append(character)
+                    }
+                    output.replaceSubrange(full, with: plain)
+                }
             }
         }
         return output

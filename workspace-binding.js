@@ -16,7 +16,7 @@ window.WorkspaceBinding=(()=>{
     content.replaceChildren(node('p','','正在读取工作区…'));actions.replaceChildren(close);
     try{
       const code=parse(raw),details=await client.consoleRequest('binding/inspect',code);if(!current())return;
-      const labels={view:'查看会话',create:'新建会话',send:'发送消息',stop:'停止任务',edit:'编辑会话与设置',files:'查看和下载文件',approve:'处理审批',resetQuota:'使用额度重置卡'};
+      const labels={view:'查看会话',create:'新建会话',send:'发送消息',stop:'停止任务',edit:'编辑会话与设置',files:'查看、下载与上传文件',approve:'处理审批',resetQuota:'使用额度重置卡'};
       content.replaceChildren(node('h3','',details.name),node('p','','当前账号：'+(details.account?.username||'')),node('p','',(details.permissions||[]).map(p=>labels[p]||p).join('、')));
       const accept=button('确认绑定',async()=>{
         if(!current())return;
@@ -43,7 +43,7 @@ window.WorkspaceBinding=(()=>{
       while(gen===generation){const codes=await detector.detect(video);if(gen!==generation)return;if(codes.length){await inspect(codes[0].rawValue);return;}await new Promise(resolve=>setTimeout(resolve,250));}
     }catch(e){if(gen===generation){stop();content.replaceChildren(node('p','error',e.name==='NotAllowedError'?'无法使用相机，请用系统相机打开二维码链接，或粘贴链接。':e.message));actions.replaceChildren(button('粘贴链接',open),close);}}
   }
-  $('console-requests').before(button('扫码或粘贴链接绑定',open));
+  $('account-menu').querySelector('.account-panel').prepend(button('连接工作区',open));
   function offerPending(){if(pending&&client.token){const raw=pending;pending=null;open();inspect(raw);}}
   return {open,offerPending};
 })();

@@ -29,9 +29,11 @@ public struct ConversationDraft: Codable, Equatable, Sendable {
     public var skills: [ComposerReference]
     public var comments: [ReviewComment]
     public var files: [ProjectFileReference]?
-    public init(text: String = "", images: [String] = [], skills: [ComposerReference] = [], comments: [ReviewComment] = [], files: [ProjectFileReference] = []) {
+    public var uploads: [ConversationUpload]?
+    public init(text: String = "", images: [String] = [], skills: [ComposerReference] = [], comments: [ReviewComment] = [], files: [ProjectFileReference] = [], uploads: [ConversationUpload] = []) {
         self.text = text; self.images = images; self.skills = skills; self.comments = comments
         self.files = files.isEmpty ? nil : files
+        self.uploads = uploads.isEmpty ? nil : uploads
     }
     public var prompt: String {
         ([text] + comments.map(\.prompt)).filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -42,6 +44,8 @@ public struct ConversationDraft: Codable, Equatable, Sendable {
         if images == sent.images { images = [] }
         if skills == sent.skills { skills = [] }
         if files == sent.files { files = nil }
+        uploads?.removeAll { current in sent.uploads?.contains(current) == true }
+        if uploads?.isEmpty == true { uploads = nil }
         comments.removeAll { current in sent.comments.contains(current) }
     }
 }
@@ -59,7 +63,9 @@ public struct DraftSubmission: Codable, Equatable, Sendable {
     public let scope: String
     public let threadID: String
     public let draft: ConversationDraft
-    public init(scope: String, threadID: String, draft: ConversationDraft) {
-        self.scope = scope; self.threadID = threadID; self.draft = draft
+    public let draftKey: String?
+    public let creation: Bool?
+    public init(scope: String, threadID: String, draft: ConversationDraft, draftKey: String? = nil, creation: Bool = false) {
+        self.scope = scope; self.threadID = threadID; self.draft = draft; self.draftKey = draftKey; self.creation = creation ? true : nil
     }
 }

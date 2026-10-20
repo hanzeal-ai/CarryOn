@@ -1,6 +1,16 @@
 /* Desktop layout preference; no conversation or execution state lives here. */
 (() => {
   const aside=document.querySelector('main > aside');
+  const searchToggle=document.getElementById('toggle-search'),searchRegion=document.getElementById('sidebar-search'),search=document.getElementById('search'),filter=document.getElementById('project-filter');
+  searchToggle.onclick=()=>{
+    searchRegion.hidden=!searchRegion.hidden;
+    searchToggle.setAttribute('aria-expanded',String(!searchRegion.hidden));
+    if(!searchRegion.hidden)search.focus();
+    else if(search.value||filter.value!=='all'){search.value='';filter.value='all';search.dispatchEvent(new Event('input'));}
+  };
+  mobileLayout.addEventListener('change',()=>{
+    if(!mobileLayout.matches&&(search.value||filter.value!=='all')){searchRegion.hidden=false;searchToggle.setAttribute('aria-expanded','true');}
+  });
   const creation=document.getElementById('create-dialog');
   const creationMenus=[document.getElementById('new-model-details'),document.getElementById('new-configuration-details'),document.getElementById('new-attachment-details')];
   document.getElementById('new-attachment-options').addEventListener('click',event=>{if(event.target.closest('button'))document.getElementById('new-attachment-details').open=false;});
@@ -21,11 +31,18 @@
     const panel=more.querySelector(':scope > div');
     more.classList.add('conversation-more');
     panel.classList.add('conversation-more-panel');
-    for(const detail of [...actions.querySelectorAll(':scope > .display-menu,:scope > .session-info')])if(detail!==more)panel.append(detail);
+    for(const id of ['view-changes','open-side'])panel.append(document.getElementById(id));
+    for(const detail of [...actions.querySelectorAll(':scope > .session-actions,:scope > .session-info')])panel.append(detail);
+    panel.append(document.querySelector('.jobs-panel'));
     actions.append(more);
     document.addEventListener('pointerdown',event=>{if(more.open&&!more.contains(event.target))more.open=false;});
-    more.addEventListener('click',event=>{if(event.target.closest('button')){more.open=false;if(!document.querySelector('dialog:modal'))more.querySelector('summary').focus();}});
+    more.addEventListener('click',event=>{if(event.target.closest('button')?.parentElement===panel){more.open=false;if(!document.querySelector('dialog:modal'))more.querySelector('summary').focus();}});
     more.addEventListener('keydown',event=>{if(event.key==='Escape'&&more.open){more.open=false;more.querySelector('summary').focus();event.preventDefault();}});
+    const source=document.getElementById('history-source');
+    const syncSource=()=>{source.hidden=!source.textContent||['已同步原生记录','已同步本地记录'].includes(source.textContent);};
+    new MutationObserver(syncSource).observe(source,{childList:true,subtree:true});
+    mobileLayout.addEventListener('change',()=>requestAnimationFrame(syncSource));
+    syncSource();
   }
   const handle=document.createElement('div');handle.className='sidebar-resize';handle.tabIndex=0;
   handle.setAttribute('role','separator');handle.setAttribute('aria-label','调整侧栏宽度');handle.setAttribute('aria-orientation','vertical');

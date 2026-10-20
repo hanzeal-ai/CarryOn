@@ -53,6 +53,7 @@ struct MessageMarkdown: View {
             .onDisappear { generation = UUID() }
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "carryon-artifact", let ref = artifacts.first(where: { url.absoluteString == "carryon-artifact:" + $0["id"].text }) {
+                    guard ConversationPresentation.artifactCanPreview(ref) else { return .discarded }
                     selectedArtifact = ref; previewID = UUID(); return .handled
                 }
                 if url.scheme == "carryon-thread", let id = createdIDs.first(where: { url.absoluteString == "carryon-thread:" + $0 }) {

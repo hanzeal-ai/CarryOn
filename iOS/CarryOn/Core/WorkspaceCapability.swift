@@ -21,6 +21,7 @@ public enum WorkspaceCapability: String, CaseIterable, Sendable {
 
     public static func request(path: String, body: JSONValue? = nil) -> Set<Self>? {
         let path = String(path.prefix { $0 != "?" && $0 != "#" })
+        if path == "/api/uploads" || path.hasPrefix("/api/uploads/") { return [.send, .files] }
         if path.hasSuffix("/voice") || path.hasSuffix("/voice/audio") { return [.send] }
         guard let body else { return path.contains("/images/") || path.contains("/artifacts/") || path.hasSuffix("/files/search") ? [.files] : [.view] }
         if path.hasSuffix("/streams") || path.contains("/streams/") || path.contains("/notifications/") { return [.view] }
@@ -34,12 +35,14 @@ public enum WorkspaceCapability: String, CaseIterable, Sendable {
         if path.hasSuffix("/session") { return [.send] }
         if path.hasSuffix("/threads") {
             let fields = Set(body["settings"].object?.keys.map { $0 } ?? [])
-            return fields.subtracting(["model", "effort"]).isEmpty ? [.create] : [.create, .edit]
+            var needed: Set<Self> = fields.subtracting(["model", "effort"]).isEmpty ? [.create] : [.create, .edit]
+            if !body["uploads"].array.isEmpty { needed.formUnion([.send, .files]) }
+            return needed
         }
         if path.hasSuffix("/fork") || path.hasSuffix("/side-chats") { return [.create] }
-        if path.hasSuffix("/messages") || path.hasSuffix("/compose") { return body["files"].array.isEmpty ? [.send] : [.send, .files] }
+        if path.hasSuffix("/messages") || path.hasSuffix("/compose") { return (body["files"].array.isEmpty && body["uploads"].array.isEmpty) ? [.send] : [.send, .files] }
         if path.hasSuffix("/acknowledge") { return [.send] }
-        if path.hasSuffix("/operations"), let capability = operation(body["action"].text) { return body["files"].array.isEmpty ? [capability] : [capability, .files] }
+        if path.hasSuffix("/operations"), let capability = operation(body["action"].text) { return (body["files"].array.isEmpty && body["uploads"].array.isEmpty) ? [capability] : [capability, .files] }
         return nil
     }
 }

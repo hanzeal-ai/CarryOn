@@ -5,7 +5,7 @@ private let draftDeliveryKinds: Set<String> = ["compose", "message", "operation:
 
 // AppModel owns state; this boundary owns request identity and delivery reconciliation.
 extension AppModel {
-    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false, authoredDraft: ConversationDraft? = nil, onCompletion: ((JSONValue) -> Void)? = nil) async -> Bool {
+    @discardableResult func write(path: String, target: String, body: JSONValue, draftSubmission: Bool = false, authoredDraft: ConversationDraft? = nil, authoredDraftKey: String? = nil, onCompletion: ((JSONValue) -> Void)? = nil) async -> Bool {
         guard allowsRequest(path, body: body) else { error = "工作区未授权此操作"; return false }
         guard canWrite else { error = "当前连接不可写，请检查本机授权与连接状态"; return false }
         // Persisted section membership does not load or execute the conversation.
@@ -17,13 +17,13 @@ extension AppModel {
             let id = try pending.requestID(scope: capturedScope, target: target, path: path, body: body)
             requestID = id
             if let authoredDraft {
-                if draftStore.submissions[id] == nil { draftStore.submissions[id] = DraftSubmission(scope: capturedScope, threadID: target, draft: authoredDraft) }
+                if draftStore.submissions[id] == nil { draftStore.submissions[id] = DraftSubmission(scope: capturedScope, threadID: target, draft: authoredDraft, draftKey: authoredDraftKey, creation: path == "/api/threads") }
                 draftStore.save()
             }
             let composing = path.hasSuffix("/compose")
             if composing {
                 outgoing[id] = .object(["id": .string(id), "threadId": .string(target), "scope": .string(capturedScope),
-                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "skills": body["skills"], "mentions": body["mentions"], "files": body["files"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
+                    "draftSubmission": .bool(draftSubmission), "prompt": body["prompt"], "skills": body["skills"], "mentions": body["mentions"], "files": body["files"], "uploads": body["uploads"], "created": .number((Date().timeIntervalSince1970 * 1000).rounded()), "state": .string("sending")])
                 historyRevision += 1
             }
             var result: JSONValue
@@ -50,7 +50,7 @@ extension AppModel {
                 if composing, version == epoch { mergeOutgoing(.object(["id": .string(id), "state": .string("uncertain")])) }
                 throw error
             }
-            if authoredDraft != nil, result["id"].text != id || result["threadId"].text != target {
+            if authoredDraft != nil, result["id"].text != id || (path == "/api/threads" ? result["kind"].text != "create" : result["threadId"].text != target) {
                 throw APIError("发送凭证身份不匹配，草稿与原请求已保留，请核对请求记录")
             }
             if composing, version == epoch { mergeOutgoing(result.setting("id", .string(id))); reconcileOutgoing() }

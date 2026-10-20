@@ -89,8 +89,10 @@ const assert=require('node:assert/strict');
  const created=writes.find(w=>w.path==='/api/threads').body;assert.equal(created.projectId,'p2');assert.equal(created.prompt,'project creation fixture');assert.deepEqual(created.skills,[{name:'review',path:'/skills/review/SKILL.md'}]);assert.deepEqual(created.mentions,[{name:'Fixture App',path:'app://fixture'}]);assert(created.images[0].startsWith('data:image/jpeg;base64,'));assert.deepEqual(created.settings,{model:'fixture-model',effort:'high'});
  assert(reads.some(path=>path.includes('/projects?')&&path.includes('availableOnly=true')));
  if(width===390){await page.getByRole('button',{name:'返回会话',exact:true}).click();await page.getByRole('button',{name:'我的',exact:true}).click();}
+ else await page.locator('#account-menu > summary').click();
  await page.screenshot({path:'.runtime/web-parity-settings-'+width+'.png'});
  await page.locator('#show-inactive').check();
+ if(width!==390)await page.locator('#account-menu > summary').click();
  await page.waitForFunction(()=>showInactive&&listLoadState.phase==='idle');
  assert(reads.some(path=>path.includes('availableOnly=false')));
  allThreads=Array.from({length:130},(_,i)=>({id:'page-'+i,title:'分页会话 '+i,cwd:'/workspace/CarryOn',status:{state:'idle'}}));
@@ -104,6 +106,7 @@ const assert=require('node:assert/strict');
  await page.waitForFunction(()=>listViewport().scrollTop>0);
  assert(Math.abs(await page.evaluate(()=>listViewport().scrollTop)-listPosition)<2);
  await page.evaluate(()=>loadThreads());assert.equal(await page.evaluate(()=>threads.length),130,'refresh preserves loaded pagination window');
+ if(width!==390)await page.locator('#toggle-search').click();
  await page.locator('#project-filter').selectOption('unread');
  await page.waitForFunction(()=>listLoadState.phase==='idle');
  assert(reads.some(path=>path.includes('/workspace/threads?')&&path.includes('filter=unread')));
@@ -137,7 +140,7 @@ const assert=require('node:assert/strict');
 
  await page.screenshot({path:'.runtime/web-parity-code-highlight-'+width+'.png'});
  await page.evaluate(async()=>{await receiveUpdate({status:{enabled:true,remoteControl:true,supportsCreationReferences:true},subscription,threadId:selected,history:{...parityHistory,historyRevision:'changes',timeline:[{id:'f',type:'fileChange',data:{changes:[{path:'src/test.js',diff:'@@ -1 +1 @@\n-old\n+new '+('long diff line '.repeat(30))}]}},{id:'d',type:'turnDiff',data:{diff:'whole diff'}}]}},()=>true);});
- if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'查看改动',exact:true}).click();}else await page.locator('#view-changes').click();
+ if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'查看改动',exact:true}).click();}else {await page.locator('.conversation-more > summary').click();await page.locator('#view-changes').click();}
  await page.locator('#changes-content summary').first().click();await page.locator('#changes-content summary').last().click();
 assert((await page.locator('#changes-content').textContent()).includes('src/test.js'));
  await page.locator('#changes-content .diff-text').filter({hasText:'whole diff'}).waitFor();
@@ -191,7 +194,7 @@ assert((await page.locator('#changes-content').textContent()).includes('src/test
  await overview.locator('.diff-comment-card').filter({hasText:'B'}).getByRole('button',{name:'删除',exact:true}).click();
  assert.equal(await overview.getByRole('textbox',{name:'编辑评论',exact:true}).inputValue(),'总览未保存 A');
  await overview.getByRole('button',{name:'保存',exact:true}).click();await page.locator('#review-comments-close').click();
- if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'查看改动',exact:true}).click();}else await page.locator('#view-changes').click();await page.locator('#changes-content details summary').first().click();
+ if(width===390){await page.getByRole('button',{name:'会话工具',exact:true}).click();await page.getByRole('button',{name:'查看改动',exact:true}).click();}else {await page.locator('.conversation-more > summary').click();await page.locator('#view-changes').click();}await page.locator('#changes-content details summary').first().click();
 
  await page.locator('.diff-comment-card').getByRole('button',{name:'删除',exact:true}).click();
  assert.equal(await page.evaluate(()=>reviewComments.length),0);

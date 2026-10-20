@@ -114,7 +114,7 @@ class CarryOnClient {
     sessionStorage.setItem(storageKey, JSON.stringify([...pending]));
     const scope=this.epoch;
     const composing=path.endsWith('/compose');
-    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,skills:body.skills,mentions:body.mentions,files:body.files,state:'sending',begin:true});
+    if(composing)this.onSubmission({id:requestId,threadId:path.split('/')[2],prompt:body.prompt,skills:body.skills,mentions:body.mentions,files:body.files,uploads:body.uploads,state:'sending',begin:true});
     let job, admitted=false;
     try {
       job = await this.request(path, {...body, requestId});
@@ -188,18 +188,18 @@ class CarryOnClient {
     return job;
   }
 
-  async submit(kind, target, prompt, images=[], isCurrent=()=>true, skills=[], mentions=[], files=[]) {
+  async submit(kind, target, prompt, images=[], isCurrent=()=>true, skills=[], mentions=[], files=[], uploads=[]) {
     images=[...images];
-    skills=JSON.parse(JSON.stringify(skills));mentions=JSON.parse(JSON.stringify(mentions));files=JSON.parse(JSON.stringify(files));
+    skills=JSON.parse(JSON.stringify(skills));mentions=JSON.parse(JSON.stringify(mentions));files=JSON.parse(JSON.stringify(files));uploads=[...uploads];
     const epoch=this.epoch;
     let key=kind+':'+target+':'+prompt;
-    if(images.length||skills.length||mentions.length||files.length){
-      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images,skills,mentions,files])));
+    if(images.length||skills.length||mentions.length||files.length||uploads.length){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([prompt,images,skills,mentions,files,...(uploads.length?[uploads]:[])])));
       key=kind+':'+target+':images:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
     }
     if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变，请重新发送');
     return this.requestJob('/threads/' + target + (kind==='compose'?'/compose':'/messages'),
-      {prompt,...(images.length?{images}:{}),...(skills.length?{skills}:{}),...(mentions.length?{mentions}:{}),...(files.length?{files}:{})}, key, this.pending, 'carryon-pending');
+      {prompt,...(images.length?{images}:{}),...(skills.length?{skills}:{}),...(mentions.length?{mentions}:{}),...(files.length?{files}:{}),...(uploads.length?{uploads}:{})}, key, this.pending, 'carryon-pending');
   }
 
   skills(target){return this.request('/threads/'+encodeURIComponent(target)+'/skills');}
@@ -209,15 +209,15 @@ class CarryOnClient {
 
   review(target,reviewTarget,isCurrent=()=>true){return this.operation(target,'review',{target:reviewTarget},isCurrent);}
 
-  async createInProject(projectId,prompt,isCurrent=()=>true,images=[],settings=null,skills=[],mentions=[]){
-    images=[...images];settings=settings===null?null:JSON.parse(JSON.stringify(settings));
+  async createInProject(projectId,prompt,isCurrent=()=>true,images=[],settings=null,skills=[],mentions=[],uploads=[]){
+    images=[...images];uploads=[...uploads];settings=settings===null?null:JSON.parse(JSON.stringify(settings));
     skills=skills.map(({name,path})=>({name,path}));mentions=mentions.map(({name,path})=>({name,path}));
     const epoch=this.epoch;
-    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([projectId,prompt,images,settings,skills,mentions])));
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([projectId,prompt,images,settings,skills,mentions,...(uploads.length?[uploads]:[])])));
     if(epoch!==this.epoch)throw Error('配对已改变，请重新读取状态');
     if(!isCurrent())throw Error('工作区或项目已改变');
     const key='project:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
-    return this.requestJob('/threads',{projectId,prompt,images,settings,skills,mentions},key,this.pending,'carryon-pending');
+    return this.requestJob('/threads',{projectId,prompt,images,settings,skills,mentions,...(uploads.length?{uploads:[...uploads]}:{})},key,this.pending,'carryon-pending');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {

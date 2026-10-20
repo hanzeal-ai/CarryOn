@@ -115,8 +115,11 @@ class Bridge:
 
     def status(self):
         import socket
+        from carryon.uploads import LIMITS
         with self.lock:
             return {"enabled": self.enabled and bool(self.ipc and self.ipc.connected),
+                    "supportsUploads": hasattr(self, "workspace_directory"),
+                    "uploadLimits": dict(LIMITS),
                     "workspaceSession": self.workspace_session,
                     "connectionWorkspace": getattr(self, "connection_workspace", None),
                     "protocol": getattr(self.ipc_factory, 'protocol', 'codex-desktop-ipc'),

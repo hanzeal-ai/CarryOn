@@ -33,8 +33,10 @@ public struct DraftSnapshot: Codable, Sendable {
     public var submissions: [String: DraftSubmission]?
     public var files: [String: [ProjectFileReference]]?
     public var comments: [String: [ReviewComment]]?
-    public init(texts: [String: String] = [:], images: [String: [String]] = [:], skills: [String: [ComposerReference]] = [:], settings: [String: JSONValue] = [:], comments: [String: [ReviewComment]] = [:], submissions: [String: DraftSubmission] = [:], files: [String: [ProjectFileReference]] = [:]) {
+    public var uploads: [String: [ConversationUpload]]?
+    public init(texts: [String: String] = [:], images: [String: [String]] = [:], skills: [String: [ComposerReference]] = [:], settings: [String: JSONValue] = [:], comments: [String: [ReviewComment]] = [:], submissions: [String: DraftSubmission] = [:], files: [String: [ProjectFileReference]] = [:], uploads: [String: [ConversationUpload]] = [:]) {
         self.files = files.isEmpty ? nil : files.filter { !$0.value.isEmpty }
+        self.uploads = uploads.isEmpty ? nil : uploads.filter { !$0.value.isEmpty }
         self.settings = settings.isEmpty ? nil : settings.filter { $0.value != .null }
         self.texts = texts.filter { !$0.value.isEmpty }
         self.images = images.filter { !$0.value.isEmpty }
@@ -68,6 +70,7 @@ public final class DraftStore {
     public var settings: [String: JSONValue] = [:] { didSet { scheduleSave() } }
     public var submissions: [String: DraftSubmission] = [:] { didSet { scheduleSave() } }
     public var files: [String: [ProjectFileReference]] = [:] { didSet { scheduleSave() } }
+    public var uploads: [String: [ConversationUpload]] = [:] { didSet { scheduleSave() } }
     public var comments: [String: [ReviewComment]] = [:] { didSet { scheduleSave() } }
     private let file: URL
     private var activeFile: URL?
@@ -119,12 +122,13 @@ public final class DraftStore {
                 settings = pending.complete ? (pending.snapshot.settings ?? [:]) : (saved.settings ?? [:]).merging(pending.snapshot.settings ?? [:]) { _, new in new }
                 skills = pending.complete ? (pending.snapshot.skills ?? [:]) : (saved.skills ?? [:]).merging(pending.snapshot.skills ?? [:]) { _, new in new }
                 submissions = pending.complete ? (pending.snapshot.submissions ?? [:]) : (saved.submissions ?? [:]).merging(pending.snapshot.submissions ?? [:]) { _, new in new }
+                uploads = pending.complete ? (pending.snapshot.uploads ?? [:]) : (saved.uploads ?? [:]).merging(pending.snapshot.uploads ?? [:]) { _, new in new }
                 files = pending.complete ? (pending.snapshot.files ?? [:]) : (saved.files ?? [:]).merging(pending.snapshot.files ?? [:]) { _, new in new }
                 comments = pending.complete ? (pending.snapshot.comments ?? [:]) : (saved.comments ?? [:]).merging(pending.snapshot.comments ?? [:]) { _, new in new }
             } else {
                 texts = saved.texts; images = saved.images; skills = saved.skills ?? [:]; settings = saved.settings ?? [:]
                 submissions = saved.submissions ?? [:]
-                files = saved.files ?? [:]
+                files = saved.files ?? [:]; uploads = saved.uploads ?? [:]
                 comments = saved.comments ?? [:]
             }
             loaded = true
@@ -137,7 +141,7 @@ public final class DraftStore {
             skills = unsaved[file]?.snapshot.skills ?? [:]
             settings = unsaved[file]?.snapshot.settings ?? [:]
             submissions = unsaved[file]?.snapshot.submissions ?? [:]
-            files = unsaved[file]?.snapshot.files ?? [:]
+            files = unsaved[file]?.snapshot.files ?? [:]; uploads = unsaved[file]?.snapshot.uploads ?? [:]
             comments = unsaved[file]?.snapshot.comments ?? [:]
             report("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存", "读取草稿")
         }
@@ -146,14 +150,18 @@ public final class DraftStore {
     @discardableResult public func reconcileSubmission(scope: String, job: JSONValue) -> Bool {
         let id = job["id"].text
         guard let submission = submissions[id], submission.scope == scope,
-              submission.threadID == job["threadId"].text else { return false }
+              (submission.creation == true ? job["kind"].text == "create" : submission.threadID == job["threadId"].text) else { return false }
         let state = job["state"].text
         guard ["accepted", "completed", "inProgress", "failed", "interrupted", "acknowledged"].contains(state) else { return false }
         if ["accepted", "completed", "inProgress"].contains(state) {
-            let key = submission.scope + "\n" + submission.threadID
-            var current = ConversationDraft(text: texts[key] ?? "", images: images[key] ?? [], skills: skills[key] ?? [], comments: comments[key] ?? [], files: files[key] ?? [])
+            guard submission.creation != true || job["createdThreadId"].string?.isEmpty == false else { return false }
+            let key = submission.draftKey ?? (submission.scope + "\n" + submission.threadID)
+            var current = ConversationDraft(text: texts[key] ?? "", images: images[key] ?? [], skills: skills[key] ?? [], comments: comments[key] ?? [], files: files[key] ?? [], uploads: uploads[key] ?? [])
+            let previousUploads = current.uploads ?? []
             current.didSubmit(submission.draft)
-            texts[key] = current.text; images[key] = current.images; skills[key] = current.skills; comments[key] = current.comments; files[key] = current.files ?? []
+            let discarded = previousUploads.filter { !(current.uploads ?? []).contains($0) }
+            Task.detached(priority: .utility) { discarded.forEach(UploadStaging.remove) }
+            texts[key] = current.text; images[key] = current.images; skills[key] = current.skills; comments[key] = current.comments; files[key] = current.files ?? []; uploads[key] = current.uploads ?? []
         }
         submissions.removeValue(forKey: id); save()
         return true
@@ -173,14 +181,14 @@ public final class DraftStore {
         guard let activeFile else { return }
         var snapshot = DraftSnapshot()
         snapshot.texts = texts; snapshot.images = images; snapshot.skills = skills; snapshot.settings = settings
-        snapshot.comments = comments; snapshot.submissions = submissions; snapshot.files = files
+        snapshot.comments = comments; snapshot.submissions = submissions; snapshot.files = files; snapshot.uploads = uploads
         guard loaded else {
-            if !texts.isEmpty || !images.isEmpty || !skills.isEmpty || !settings.isEmpty || !comments.isEmpty || !submissions.isEmpty || !files.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
+            if !texts.isEmpty || !images.isEmpty || !skills.isEmpty || !settings.isEmpty || !comments.isEmpty || !submissions.isEmpty || !files.isEmpty || !uploads.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
             return
         }
         guard dirty else { return }
         dirty = false
-        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images, skills: skills, settings: settings, comments: comments, submissions: submissions, files: files), complete: true)
+        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images, skills: skills, settings: settings, comments: comments, submissions: submissions, files: files, uploads: uploads), complete: true)
         unsaved[activeFile] = save; queued[activeFile] = save
         guard writer == nil else { return }
         writer = Task {
@@ -203,6 +211,6 @@ public final class DraftStore {
     public func reset() {
         save(); loaded = false; dirty = false; activeFile = nil; generation = UUID()
         texts = [:]; images = [:]; skills = [:]; settings = [:]
-        comments = [:]; submissions = [:]; files = [:]
+        comments = [:]; submissions = [:]; files = [:]; uploads = [:]
     }
 }

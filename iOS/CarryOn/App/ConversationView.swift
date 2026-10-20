@@ -46,6 +46,10 @@ struct ConversationView: View {
     @State private var visibleCount = 120
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
+    @State private var uploadPicker = UploadPickerState()
+    private var uploadKey: String { model.scope + "\n" + thread.id }
+    private var uploadTarget: UploadTarget { .thread(thread.id) }
+    private var uploadsReady: Bool { model.editingMessage != .null || model.uploadsReady(key: uploadKey, target: uploadTarget) }
     private var images: [String] {
         get { model.draftImages }
         nonmutating set { model.draftImages = newValue }
@@ -364,6 +368,7 @@ struct ConversationView: View {
     }
     var body: some View {
         conversationPresentation
+        .background(ConversationUploadPicker(state: uploadPicker))
         .onChange(of: model.historyRevision, initial: true) { _, _ in
             if model.history["thread"]["id"].text == thread.id { readingState?.historyLimit = model.historyLimit }
             refreshMessages()
@@ -575,7 +580,7 @@ struct ConversationView: View {
         }.accessibilityLabel("对话消息导航")
     }
     private var composerCommandAllowed: Bool {
-        guard model.draftComments.isEmpty, model.draftFiles.isEmpty, let command = ComposerCommand(ComposerDocument(text: model.draft, skills: model.draftSkills).wireText),
+        guard model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty, let command = ComposerCommand(ComposerDocument(text: model.draft, skills: model.draftSkills).wireText),
               ConversationCommands.available(command.name, model: model, target: actionTarget) else { return false }
         return !["plan", "side"].contains(command.name) || command.argument.isEmpty || model.canWrite(.send)
     }
@@ -590,14 +595,15 @@ struct ConversationView: View {
         CarryOnChatComposer(text: $model.draft, skills: $model.draftSkills, selection: $model.draftSelection,
             disabled: !(model.canCompose || composerCommandAllowed || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting && !model.writing,
-            sendAllowed: composerCommandAllowed || (model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable), commandInputAllowed: commandInputAllowed, stopAllowed: model.canInteract(.stop),
-            hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftFiles.isEmpty, stopping: model.state == "running", submitting: submitting,
+            sendAllowed: composerCommandAllowed || (model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable), sendingReady: uploadsReady, commandInputAllowed: commandInputAllowed, stopAllowed: model.canInteract(.stop),
+            hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftFiles.isEmpty || !model.draftUploads.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             sendLabel: model.state == "running" ? (queueFollowUp ? "排队发送" : "补充到当前任务") : nil,
             send: submitMessage,
             stop: interruptTurn,
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
                 Menu {
+                    UploadMenuItems(picker: uploadPicker, key: uploadKey, target: uploadTarget, disabled: submitting || model.editingMessage != .null)
                     PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
                         Label("照片", systemImage: "photo")
                     }.disabled(images.count >= 3)
@@ -701,7 +707,7 @@ struct ConversationView: View {
     }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let query = ComposerCommand.query(model.draft), model.draftSkills.isEmpty, images.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty {
+            if let query = ComposerCommand.query(model.draft), model.draftSkills.isEmpty, images.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty {
                 let matches = ComposerCommand.names.filter { $0.hasPrefix(query) && ConversationCommands.available($0, model: model, target: actionTarget) }
                 if !matches.isEmpty {
                     ScrollView {
@@ -726,6 +732,7 @@ struct ConversationView: View {
                 ConversationActionBar(target: actionTarget)
             }
 
+            UploadDraftRows(key: uploadKey, target: uploadTarget, disabled: submitting || model.conversationReadOnly)
             if !model.draftFiles.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -780,10 +787,10 @@ struct ConversationView: View {
         }
     }
     private func send() async {
-        guard !submitting, model.canWrite, !loadingImages else { return }
+        guard !submitting, model.canWrite, !loadingImages, uploadsReady else { return }
         let command = ComposerDocument(text: model.draft, skills: model.draftSkills).wireText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = ComposerCommand(command) {
-            guard images.isEmpty, model.draftSkills.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty else { model.report(APIError("此命令不接受图片、引用或评论，请先处理附件")); return }
+            guard images.isEmpty, model.draftSkills.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty else { model.report(APIError("此命令不接受图片、引用或评论，请先处理附件")); return }
             let source = model.draft, scope = model.scope, target = actionTarget
             submitting = true
             let effect = await ConversationCommands.execute(parsed, model: model, target: target)
@@ -1104,12 +1111,14 @@ struct ArtifactView: View {
     @State private var localFile: URL?
     @State private var failure: String?
     @State private var loading = false
+    private var canPreview: Bool { ConversationPresentation.artifactCanPreview(ref) }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.allows(.files) { Label("无文件查看权限", systemImage: "lock").font(.caption) }
-            if model.allows(.files), !openOnLoad, ref["kind"].text != "image" { Button(ref["name"].text) { Task { await openFile() } }
+            if !canPreview { Label(ref["name"].text, systemImage: ref["kind"].text == "directory" ? "folder" : "doc").font(.caption) }
+            if canPreview, model.allows(.files), !openOnLoad, ref["kind"].text != "image" { Button(ref["name"].text) { Task { await openFile() } }
                 .font(.caption).bold().foregroundStyle(Design.link).disabled(loading || !model.allows(.files)).accessibilityHint("预览文件") }
-            if model.allows(.files), !openOnLoad, let image {
+            if canPreview, model.allows(.files), !openOnLoad, let image {
                 Button { model.previewImage = image } label: {
                     if inlineImage {
                         let scale = min(1, min(160 / max(image.size.width, 1), 180 / max(image.size.height, 1)))
@@ -1123,13 +1132,13 @@ struct ArtifactView: View {
             if loading { ProgressView() }
             if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
             HStack {
-                if model.allows(.files), ref["kind"].text != "image", let localFile { ShareLink(item: localFile) { Label("分享文件", systemImage: "square.and.arrow.up") } }
+                if canPreview, model.allows(.files), ref["kind"].text != "image", let localFile { ShareLink(item: localFile) { Label("分享文件", systemImage: "square.and.arrow.up") } }
             }.font(.caption)
         }
-        .frame(width: ref["kind"].text == "image" && !inlineImage ? 88 : nil, height: ref["kind"].text == "image" && !inlineImage ? 88 : nil)
+        .frame(width: canPreview && ref["kind"].text == "image" && !inlineImage ? 88 : nil, height: canPreview && ref["kind"].text == "image" && !inlineImage ? 88 : nil)
         .frame(maxWidth: inlineImage ? .infinity : nil, alignment: .leading)
-        .task(id: ref.stableID + String(model.allows(.files))) {
-            guard model.allows(.files) else {
+        .task(id: ref.stableID + String(model.allows(.files)) + String(canPreview)) {
+            guard canPreview, model.allows(.files) else {
                 image = nil; preview = nil; codeDocument = nil; model.previewImage = nil
                 if let localFile { try? FileManager.default.removeItem(at: localFile.deletingLastPathComponent()) }
                 localFile = nil
@@ -1149,9 +1158,9 @@ struct ArtifactView: View {
         .onDisappear { if let localFile { try? FileManager.default.removeItem(at: localFile.deletingLastPathComponent()) }; localFile = nil }
     }
     private func openFile() async {
-        guard model.allows(.files) else { return }
+        guard canPreview, model.allows(.files) else { return }
         await load()
-        guard model.allows(.files), let localFile else { return }
+        guard canPreview, model.allows(.files), let localFile else { return }
         do {
             let data = try Data(contentsOf: localFile)
             if let document = CodeDocument(name: localFile.lastPathComponent, data: data) { codeDocument = document }
@@ -1159,7 +1168,7 @@ struct ArtifactView: View {
         } catch { failure = error.localizedDescription }
     }
     private func load() async {
-        guard model.allows(.files), localFile == nil, !loading else { return }
+        guard canPreview, model.allows(.files), localFile == nil, !loading else { return }
         loading = true; defer { loading = false }
         do {
             let encoded: String, name: String
@@ -1190,7 +1199,7 @@ struct ArtifactView: View {
                     }
                 }
             }.value
-            guard !Task.isCancelled, model.allows(.files) else {
+            guard !Task.isCancelled, canPreview, model.allows(.files) else {
                 try? FileManager.default.removeItem(at: loaded.0.deletingLastPathComponent())
                 return
             }

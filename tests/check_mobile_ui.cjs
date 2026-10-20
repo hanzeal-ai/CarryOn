@@ -127,10 +127,14 @@ const assert=require('node:assert/strict');
  assert(!(await local.locator('.cloud-settings').isVisible()));assert(!(await local.locator('#bridge').isVisible()));assert.equal(await local.locator('.workspace-settings').getByText('本机设置',{exact:true}).count(),0);
  await local.screenshot({path:'.runtime/mobile-local-settings.png'});
  await local.setViewportSize({width:1440,height:1000});
- // Local service management lives in CLI/desktop; the Web header retains its status.
- await local.locator('body>header #bridge').waitFor({state:'visible'});
- assert(await local.locator('body>header #bridge').isVisible());
- await local.setViewportSize({width:390,height:844});await local.locator('#bridge').waitFor({state:'hidden'});
+ // Local connection failures remain visible even without the permanent management hint.
+ await local.locator('body>header #account-menu').waitFor({state:'visible'});
+ assert.equal(await local.locator('#bridge').count(),0);
+ await local.evaluate(()=>applyStatus({enabled:false}));
+ assert(await local.locator('body>header #status').isVisible());
+ assert.equal(await local.locator('#status').textContent(),'等待连接');
+ await local.setViewportSize({width:390,height:844});await local.locator('body>header #status').waitFor({state:'hidden'});
+ assert(await local.locator('.workspace-status').isVisible());
  await local.close();
  assert.deepEqual(errors,[]);console.log('Checked responsive geometry:',visualChecks.length);console.log('PASS design components: navigation, full screen create and inline edit, chat, popover, settings, requests, draft/read gates, desktop restoration, queue management, message clipboard, local status placement and narrow/short viewports. API responses mocked.');await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

@@ -23,3 +23,5 @@ carryon-composer > [contenteditable]{min-height:1.5em;outline:none;}
 .project-files-picker button{min-height:44px;min-width:44px}
 .project-files-picker .skill-option{overflow-wrap:anywhere}
 #file-references button{min-height:44px}
+
+.upload-previews{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;min-width:0}.upload-previews[hidden]{display:none}.upload-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;border:1px solid color-mix(in srgb,currentColor 14%,transparent);border-radius:10px;padding:5px 8px;font-size:13px;background:color-mix(in srgb,currentColor 4%,transparent)}.upload-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.upload-chip button{flex:none;background:transparent;color:inherit;border:0;min-height:28px;min-width:28px;padding:2px 4px;font-size:13px}.upload-chip[data-state=error]{color:#b34d3e}

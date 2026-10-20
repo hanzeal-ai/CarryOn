@@ -12,6 +12,22 @@ from carryon.sessions.user_messages import unwrap_user_message
 
 LINK = re.compile(r'!?\[[^\]\n]*\]\((<[^>\n]+>|[^\s)]+)(?:\s+"[^"\n]*")?\)')
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
+MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def path_reference(path):
+    location = Path(path)
+    result = {'id': image_id(path), 'path': path, 'name': location.name,
+              'kind': 'image' if location.suffix.lower() in IMAGE_SUFFIXES else 'file'}
+    try:
+        info = location.lstat()
+    except (OSError, ValueError):
+        return result
+    if stat.S_ISDIR(info.st_mode):
+        result.update(kind='directory', previewAvailable=False)
+    elif not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ARTIFACT_BYTES:
+        result['previewAvailable'] = False
+    return result
 
 
 def references(kind, data, *, user_paths=None):
@@ -46,8 +62,7 @@ def references(kind, data, *, user_paths=None):
             paths.append(result)
         elif result.startswith('data:image/'):
             inline.append({'id': image_id(result), 'url': result, 'kind': 'image', 'name': '生成图片'})
-    return inline + [{'id': image_id(path), 'path': path, 'name': Path(path).name,
-             'kind': 'image' if Path(path).suffix.lower() in IMAGE_SUFFIXES else 'file'}
+    return inline + [path_reference(path)
             for path in dict.fromkeys(paths) if Path(path).is_absolute()]
 
 
@@ -61,10 +76,10 @@ def read_artifact(history, identifier):
         fd = os.open(ref['path'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as handle:
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > 8 * 1024 * 1024:
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ARTIFACT_BYTES:
                 raise ValueError('附件超过 8 MB 或不是普通文件')
-            data = handle.read(8 * 1024 * 1024 + 1)
-        if len(data) > 8 * 1024 * 1024:
+            data = handle.read(MAX_ARTIFACT_BYTES + 1)
+        if len(data) > MAX_ARTIFACT_BYTES:
             raise ValueError('附件超过 8 MB')
     except OSError:
         raise BridgeError('附件已移动、删除或无法读取', 404) from None

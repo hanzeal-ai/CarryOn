@@ -198,6 +198,14 @@ import CarryOnCore
         get { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
         set { draftStore.skills[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
+    var draftUploads: [ConversationUpload] {
+        get { draftStore.uploads[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.uploads[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
+    var importingUploadKeys: Set<String> = []
+    var uploadingIDs: Set<String> = []
+    var uploadProgress: [String: Int] = [:]
+    @ObservationIgnored var uploadTasks: [String: Task<Void, Never>] = [:]
     var draftFiles: [ProjectFileReference] {
         get { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
         set { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }

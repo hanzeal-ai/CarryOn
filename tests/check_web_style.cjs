@@ -40,6 +40,20 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  const prefix='.runtime/web-style/'+width+'-'+colorScheme;
  await page.screenshot({path:prefix+'-projects.png'});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no page overflow');
+ if(width>=761){
+  assert(!(await page.locator('#composer').isVisible()),'an unselected conversation has no inactive composer');
+  assert(!(await page.locator('#search').isVisible()),'search opens on demand');
+  await page.locator('#toggle-search').click();
+  await page.locator('#search').fill('CarryOn');
+  await page.setViewportSize({width:390,height:900});
+  await page.waitForFunction(()=>document.querySelector('#mobile-shell #search'));
+  assert.equal(await page.locator('#search').inputValue(),'CarryOn','resizing preserves the current search');
+  await page.setViewportSize({width,height:900});
+  await page.waitForFunction(()=>document.querySelector('#sidebar-search #search'));
+  assert(await page.locator('#search').isVisible(),'active search remains visible after returning to desktop');
+  await page.locator('#toggle-search').click();
+  assert.equal(await page.locator('#search').inputValue(),'','closing search restores the unfiltered list');
+ }
  if(width<761){
   await page.getByRole('button',{name:'我的',exact:true}).click();
   await page.screenshot({path:prefix+'-settings.png'});
@@ -66,8 +80,9 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  if(width>=761){
   const more=page.locator('.conversation-more');
   await more.locator(':scope>summary').click();
-  await page.locator('#expand-events').focus();await page.locator('#expand-events').press('Enter');
+  await page.locator('#open-side').focus();await page.locator('#open-side').press('Enter');
   assert(await more.evaluate(node=>!node.open&&document.activeElement===node.querySelector('summary')),'keyboard action closes menu and returns focus');
+  await page.locator('#close-side').click();
   await more.locator(':scope>summary').click();await more.locator('.session-info>summary').click();
   assert(await page.locator('#conversation-info').isVisible(),'session information remains reachable');
   if(width===1440)await page.screenshot({path:prefix+'-conversation-menu.png'});

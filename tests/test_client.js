@@ -5,6 +5,18 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const {webcrypto} = require('node:crypto');
 
+test('upload IDs are snapshotted and participate in compose and creation request identity',async()=>{
+  const f=fixture();f.respond(async()=>{throw Error('lost');});
+  for(const create of [false,true]){
+    const send=ids=>create?f.client.createInProject('project','',()=>true,[],null,[],[],ids):f.client.submit('compose','thread','',[],()=>true,[],[],[],ids);
+    const ids=['original'],first=send(ids);ids[0]='changed';
+    await assert.rejects(first,/lost/);assert.deepEqual(f.requests.at(-1).body.uploads,['original']);
+    const id=f.requests.at(-1).body.requestId;
+    await assert.rejects(send(['original']),/lost/);assert.equal(f.requests.at(-1).body.requestId,id);
+    await assert.rejects(send(['different']),/lost/);assert.notEqual(f.requests.at(-1).body.requestId,id);
+  }
+});
+
 test('section move retains original content through reload and never replays an unknown write',async()=>{
  const first=fixture();first.respond(async()=>{throw Error('lost');});
  await assert.rejects(first.client.moveThreadSection('thread','pinned'),/lost/);

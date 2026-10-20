@@ -1,7 +1,7 @@
 /* Render only with DOM text nodes: tool output and Markdown are untrusted text. */
 const Timeline = (() => {
  function create(ids={runtime:'runtime',info:'conversation-info',source:'history-source'}) {
-  let visible = 120, current = null, expanded = false, imageObserver = null;
+  let visible = 120, current = null, imageObserver = null;
   let navigator=null, navigationFrame=0, activeAnchor=null, pendingAnchor=null, navigationPinned=false, navigationSignature=null;
   let preview=null, previewAnchor=null, previewScroll=null, previewFrame=0, previewRequest=null, holdTimer=null, suppressClick=false, wheelAt=0;
   const navigationEvents=new AbortController();
@@ -275,6 +275,11 @@ const Timeline = (() => {
   }
   function artifacts(item, target) {
     for(const ref of item.artifacts||[]){
+      if(ref.kind==='directory'||ref.previewAvailable===false){
+        const card=el('section','result-attachment'),label=el('span','attachment-name',ref.name);
+        label.title=ref.kind==='directory'?'文件夹附件':'此附件不支持预览';
+        label.setAttribute('aria-label',ref.name+'，'+label.title);card.append(label);target.append(card);continue;
+      }
       if(ref.kind==='image'){picture(target,{type:ref.url?'image':'localImage',url:ref.url,artifactId:ref.id,name:ref.name});continue;}
       const card=el('section','result-attachment');
       if(ref.kind==='image')card.append(el('div','attachment-name',ref.name));
@@ -339,9 +344,9 @@ const Timeline = (() => {
       }
       return article;
     }
-    if(item.artifacts?.length){const output=el('details','activity');output.dataset.key=item.id;output.open=expanded;output.append(el('summary','',item.title||'执行结果'));const pictures=el('div','message-images');artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind==='image')},pictures);if(pictures.childNodes.length)output.append(pictures);artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind!=='image')},output);return output;}
+    if(item.artifacts?.length){const output=el('details','activity');output.dataset.key=item.id;output.append(el('summary','',item.title||'执行结果'));const pictures=el('div','message-images');artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind==='image')},pictures);if(pictures.childNodes.length)output.append(pictures);artifacts({...item,artifacts:item.artifacts.filter(ref=>ref.kind!=='image')},output);return output;}
     const card=el('details','activity'+(item.status==='inProgress'?' running':'')+(item.status==='failed'?' failed':''));
-    card.dataset.key=item.id;card.open=expanded;
+    card.dataset.key=item.id;
     const summary=el('summary','activity-summary');
     const icon=el('span','activity-icon',item.type==='contextCompaction'?'⇣':item.type==='reasoning'?'◌':item.type==='fileChange'?'±':'›_');
     const title=el('span','activity-title',item.title);
@@ -387,7 +392,7 @@ const Timeline = (() => {
     for(const item of all.slice(-visible)){
       const activity=item.type!=='turn'&&!['userMessage','steeringUserMessage','agentMessage','error'].includes(item.type);
       if(activity){
-        if(!group){group=el('details','activity-group');group.dataset.key=item.id+':group';group.open=expanded;const summary=el('summary');summary.append(el('span','activity-icon','›_'),el('span','activity-group-label'));group.append(summary);fragment.append(group);}
+        if(!group){group=el('details','activity-group');group.dataset.key=item.id+':group';const summary=el('summary');summary.append(el('span','activity-icon','›_'),el('span','activity-group-label'));group.append(summary);fragment.append(group);}
         group.append(renderEntry(item));
         group.firstChild.querySelector('.activity-group-label').textContent='执行活动 · '+(group.children.length-1)+' 项';
       }else{group=null;fragment.append(renderEntry(item));}
@@ -412,7 +417,7 @@ const Timeline = (() => {
     const latest=activeItems.at(-1);
     const elapsed=(data.earlierDurationMs||0)+all.filter(i=>i.type==='turn').reduce((sum,i)=>sum+(Number.isFinite(i.data?.durationMs)?i.data.durationMs:i.status==='inProgress'&&i.data?.turnStartedAtMs?Math.max(0,Date.now()-i.data.turnStartedAtMs):0),0);
     document.getElementById(ids.runtime).textContent=[elapsed?'已执行 '+duration(elapsed):'',data.status?.label||labels[runtime.type]||runtime.type,
-      runtime.type==='active'&&latest?latest.title:'',meta.latestModel,
+      runtime.type==='active'&&latest?latest.title:'',
       data.pendingRequests?.length?'有 '+data.pendingRequests.length+' 项待处理请求':''].filter(Boolean).join(' · ');
     const warnings=[];
     if(data.source==='local-rollout')warnings.push('历史已同步；如需继续对话，请先在桌面 Codex 打开此会话');
@@ -424,9 +429,8 @@ const Timeline = (() => {
     const info=document.getElementById(ids.info);
     info.replaceChildren(block('会话信息',{...meta,runtime,pendingRequests:data.pendingRequests||[],coverage:data.coverage||{}}));
   }
-  function setExpanded(value){expanded=value;if(current){for(const d of current.container.querySelectorAll('details.activity, details.activity-group'))d.open=value;}}
-  function reset(){hideSelectionAction();hidePreview();navigator?.remove();navigator=null;navigationSignature=null;activeAnchor=null;pendingAnchor=null;navigationPinned=false;for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;expanded=false;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
-  return {render,reset,configureSideSelection,setExpanded,configureQuestions,configureHistory,configureSubagents,navigateTo,activityAnchor,notificationAnchor};
+  function reset(){hideSelectionAction();hidePreview();navigator?.remove();navigator=null;navigationSignature=null;activeAnchor=null;pendingAnchor=null;navigationPinned=false;for(const state of questionState.values())clearTimeout(state.timer);questionState.clear();imageObserver?.disconnect();imageCache.clear();entryCache.clear();visible=120;current=null;document.getElementById(ids.runtime).textContent='';document.getElementById(ids.info).replaceChildren();}
+  return {render,reset,configureSideSelection,configureQuestions,configureHistory,configureSubagents,navigateTo,activityAnchor,notificationAnchor};
  }
  return {...create(),create};
 })();
