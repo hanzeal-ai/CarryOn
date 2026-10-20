@@ -97,7 +97,7 @@ class SharedBindingTests(unittest.TestCase):
             with self.assertRaises(OSError): self.confirm(preview)
         count = len(self.server.config['devices'])
         args = SimpleNamespace(input_json=False, state_dir=self.cli, url=None, permissions=None)
-        with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='y') as prompt, patch('sys.stdout', new_callable=io.StringIO), patch('carryon.services.start', return_value=0):
+        with patch('sys.platform', 'darwin'), patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='y') as prompt, patch('sys.stdout', new_callable=io.StringIO), patch('carryon.services.start', return_value=0):
             self.assertEqual(command(args), 0)
             self.assertEqual(prompt.call_count, 1)
         self.assertEqual(len(self.server.config['devices']), count)
