@@ -69,7 +69,7 @@ const Timeline = (() => {
     if(!current||previewAnchor===id)return;
     const all=current.data.timeline||[],index=all.findIndex(i=>i.id===id),item=all[index];if(!item)return;
     clearTimeout(holdTimer);if(previewScroll===null)previewScroll=navigator.scrollTop;previewAnchor=id;
-    if(!preview){preview=el('aside','conversation-navigation-preview');preview.setAttribute('role','tooltip');document.body.append(preview);}
+    if(!preview){preview=el('div','conversation-navigation-preview');preview.setAttribute('role','tooltip');document.body.append(preview);}
     preview.replaceChildren();scheduleNavigation();
     const user=all.slice(0,index+1).findLast(i=>['userMessage','steeringUserMessage'].includes(i.type));
     preview.append(el('strong','', (user?.text||item.title||'执行过程').slice(0,140)),el('p','',(item.text||item.title||item.data?.command||'执行过程').slice(0,500)));

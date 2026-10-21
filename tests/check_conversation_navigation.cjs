@@ -61,6 +61,13 @@ const assert=require('node:assert/strict');
  const widths=await page.locator('.conversation-navigator button').evaluateAll(nodes=>nodes.slice(-6).map(n=>parseFloat(getComputedStyle(n.firstChild).width)));
  assert.deepEqual(widths,width<=760?[6,10,16,22,28,22]:[12,20,28,40,52,40]);
  assert((await page.locator('.conversation-navigation-preview').textContent()).includes('动态对应的结果'));
+ const previewBounds=await page.locator('.conversation-navigation-preview').evaluate(n=>{
+  const box=n.getBoundingClientRect(),last=n.lastElementChild.getBoundingClientRect();
+  return {height:box.height,bottomGap:box.bottom-last.bottom,top:box.top,bottom:box.bottom};
+ });
+ assert(previewBounds.height<200,'short preview must fit its content: '+JSON.stringify(previewBounds));
+ assert(previewBounds.bottomGap<25,'preview must not contain sidebar-sized blank space: '+JSON.stringify(previewBounds));
+ assert(previewBounds.top>=0&&previewBounds.bottom<=844,'preview must stay within the viewport');
  await page.screenshot({path:'.runtime/navigation-preview-'+width+'.png'});
  await page.locator('.conversation-navigator').dispatchEvent('wheel',{deltaY:30});
  await page.waitForFunction(()=>document.querySelector('.conversation-navigator button.active')?.dataset.anchor==='later');
