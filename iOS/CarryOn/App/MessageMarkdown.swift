@@ -336,6 +336,7 @@ actor CodeHighlight {
 struct CodeFilePreview: View {
     @Environment(\.colorScheme) private var colorScheme
     let document: CodeDocument
+    let fileURL: URL?
     @Environment(\.dismiss) private var dismiss
     @State private var source = false
     @State private var highlighted: AttributedString?
@@ -359,7 +360,14 @@ struct CodeFilePreview: View {
                     }
                 }.foregroundStyle(Design.secondary).padding(.horizontal, 16).padding(.vertical, 6)
             }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if let fileURL {
+                        ShareLink(item: fileURL) { Label("分享文件", systemImage: "square.and.arrow.up") }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            }
             .task(id: document.id + String(colorScheme == .dark)) {
                 highlighted = nil
                 let result = await CodeHighlight.shared.render(document.text, language: document.language, dark: colorScheme == .dark)

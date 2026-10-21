@@ -1134,9 +1134,6 @@ struct ArtifactView: View {
             }
             if loading { ProgressView() }
             if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
-            HStack {
-                if canPreview, model.allows(.files), ref["kind"].text != "image", let localFile { ShareLink(item: localFile) { Label("分享文件", systemImage: "square.and.arrow.up") } }
-            }.font(.caption)
         }
         .frame(width: canPreview && ref["kind"].text == "image" && !inlineImage ? 88 : nil, height: canPreview && ref["kind"].text == "image" && !inlineImage ? 88 : nil)
         .frame(maxWidth: inlineImage ? .infinity : nil, alignment: .leading)
@@ -1156,7 +1153,7 @@ struct ArtifactView: View {
             } else if ref["kind"].text == "image" { await load() }
         }
         .quickLookPreview($preview)
-        .sheet(item: $codeDocument) { CodeFilePreview(document: $0) }
+        .sheet(item: $codeDocument) { CodeFilePreview(document: $0, fileURL: model.allows(.files) ? localFile : nil) }
 
         .onDisappear { if let localFile { try? FileManager.default.removeItem(at: localFile.deletingLastPathComponent()) }; localFile = nil }
     }
