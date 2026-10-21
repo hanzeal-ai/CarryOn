@@ -40,6 +40,7 @@ class ConsoleServer(Gateway):
         self.origin=parsed.scheme+'://'+parsed.netloc
         self.prefix=parsed.path.rstrip('/')
         self.sessions=self.auth.load_sessions();self.console_streams={};self.auth_lock=threading.RLock()
+        self.directory_changed=threading.Condition();self.directory_revision=0;self.directory_closed=False
         import copy
         config=copy.deepcopy(config)
         self.registry_path=Path(state_dir)/'devices.json' if state_dir is not None else None
@@ -59,6 +60,23 @@ class ConsoleServer(Gateway):
             from carryon.notifications.push import PushService
             self.push=PushService(self,Path(state_dir)/'push.sqlite',APNsSender(config['apns']))
 
+    def notify_directory(self):
+        with self.directory_changed:
+            self.directory_revision += 1
+            self.directory_changed.notify_all()
+
+    def session_info(self, key):
+        from carryon.workspaces.workspace_access import granted
+        from carryon.workspaces.connections import public_descriptor
+        with self.auth_lock, self.lock:
+            if self.sessions.get(key, 0) <= time.monotonic():
+                raise PermissionError('登录已过期，请重新登录')
+            devices=[{'workspace':public_descriptor(record),'id':device,'name':record.get('name',device),
+                      'online':device in self.devices and not self.devices[device].closed,
+                      'permissions':granted(self,key,device)} for device,record in self.config['devices'].items()
+                     if 'view' in granted(self,key,device)]
+            return {'devices':devices,'publicUrl':self.public_url,'account':self.auth.profile(self.auth.identity(key))}
+
     def replace_auth(self, config):
         updated=ConsoleAuth(config,self.account_settings.directory)
         if updated.fingerprint == self.auth.fingerprint:return
@@ -66,6 +84,7 @@ class ConsoleServer(Gateway):
         self.auth=updated
         # Persisted sessions are bound to the old authority and cannot restore.
         self.sessions={}
+        self.notify_directory()
         for sid in list(self.console_streams):self.release_stream(sid)
 
     def account_request(self, action, data):
@@ -120,15 +139,19 @@ class ConsoleServer(Gateway):
                     self.sessions.pop(session, None)
                     self.auth.identities.pop(session, None)
                 self.auth.save_sessions(self.sessions)
+            self.notify_directory()
             return {'changed':True}
 
     def server_close(self):
+        self.directory_closed=True
+        self.notify_directory()
         if getattr(self,'push',None):self.push.close()
         super().server_close()
 
     def save_devices(self,records):
         if self.registry_path:save_json(self.registry_path,records)
         self.config['devices']=records
+        self.notify_directory()
 
     def revoke_device(self,device):
         import socket
@@ -327,6 +350,19 @@ class ConsoleHandler(Handler):
                     self.reply(200,{'state':entry['state']});return
             key=self.session_key()
             if key is None:self.reply(401,{'error':'请先登录云端控制台'});return
+            if path == '/console/events' and method == 'GET':
+                if self.headers.get('Origin') != self.server.origin:
+                    raise PermissionError('实时连接来源不匹配')
+                if urlsplit(self.path).query:raise ValueError('实时连接不接受查询参数')
+                if not self.server.slots.acquire(False):
+                    self.reply(503,{'error':'连接过多'});return
+                try:
+                    from carryon.routes.websocket import upgrade
+                    from carryon.cloud.directory_socket import serve
+                    upgrade(self)
+                    serve(self,key)
+                finally:self.server.slots.release()
+                return
             if path == '/console/password' and method == 'POST':
                 self.reply(200, self.server.change_password(key, self.body())); return
             if path == '/console/binding/pending' and method == 'GET':
@@ -367,6 +403,7 @@ class ConsoleHandler(Handler):
                     remaining={k:v for k,v in self.server.sessions.items() if k!=key}
                     self.server.auth.save_sessions(remaining)
                     self.server.sessions=remaining
+                    self.server.notify_directory()
                     self.server.prune()
                     if self.server.push:self.server.push.unregister_session(key)
                     owned=[sid for sid,entry in self.server.console_streams.items() if entry['session']==key]
@@ -374,11 +411,7 @@ class ConsoleHandler(Handler):
                 self.cookie='carryon-console=; HttpOnly; SameSite=Strict; Path='+self.server.prefix+'/console/; Max-Age=0'
                 self.reply(200,{'authenticated':False});return
             if path=='/console/session' and method=='GET':
-                with self.server.lock:
-                    from carryon.workspaces.connections import public_descriptor
-                    devices=[{'workspace':public_descriptor(self.server.config['devices'][d]),'id':d,'name':self.server.config['devices'][d].get('name',d),'online':d in self.server.devices and not self.server.devices[d].closed,
-                              'permissions':granted(self.server,key,d)} for d in self.server.config['devices'] if 'view' in granted(self.server,key,d)]
-                self.reply(200,{'devices':devices,'publicUrl':self.server.public_url,'account':self.server.auth.profile(self.server.auth.identity(key))});return
+                self.reply(200,self.server.session_info(key));return
             if path.startswith('/console/devices/'):
                 parts=path.split('/')
                 if len(parts)<4 or not ID.fullmatch(parts[3]) or parts[3] not in self.server.config['devices']:

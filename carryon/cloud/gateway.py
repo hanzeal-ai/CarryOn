@@ -72,6 +72,9 @@ class Gateway(ThreadingHTTPServer):
         self.release=os.environ.get("CARRYON_RELEASE","development")
         self.slots=threading.BoundedSemaphore(64)
 
+    def notify_directory(self):
+        pass  # Plain gateways have no browser account directory.
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
@@ -198,6 +201,7 @@ class Handler(BaseHTTPRequestHandler):
                     if current.get('workspace') != workspace and hasattr(self.server, 'save_devices'):
                         self.server.save_devices({**self.server.config['devices'], device_id: {**current, 'workspace': workspace}})
                 self.server.devices[device_id]=device
+                self.server.notify_directory()
             self.connection.settimeout(45)
             ws.send({'type':'ready','protocol':PROTOCOL,'deviceId':device_id})
             threading.Thread(target=heartbeat,daemon=True).start()
@@ -208,7 +212,9 @@ class Handler(BaseHTTPRequestHandler):
             if device:
                 device.close()
                 with self.server.lock:
-                    if self.server.devices.get(device_id) is device:self.server.devices.pop(device_id,None)
+                    if self.server.devices.get(device_id) is device:
+                        self.server.devices.pop(device_id,None)
+                        self.server.notify_directory()
 
 
 def main():

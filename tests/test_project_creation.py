@@ -192,8 +192,12 @@ class ProjectCreationTests(unittest.TestCase):
     def test_invalid_project_and_missing_directory_do_not_start_runtime(self):
         for project in ('', project_identity('/other')[0]):
             with self.assertRaises((ValueError, BridgeError)): submit(self.bridge, 'bad-project', 'hello', project)
-        with patch('carryon.sessions.creation.Path.is_dir', return_value=False):
-            with self.assertRaises(BridgeError): submit(self.bridge, 'bad-directory', 'hello', self.project)
+        # Keep the catalog database accessible while the project's root is missing.
+        missing_root = self.home / 'missing-project'
+        write_projects(self.home, {'native-project': {'name': 'Current', 'rootPaths': [str(missing_root)]}})
+        missing_project = project_identity(str(missing_root), native_id='native-project')[0]
+        with self.assertRaisesRegex(BridgeError, '项目目录已不可用'):
+            submit(self.bridge, 'bad-directory', 'hello', missing_project)
         self.assertEqual(Creator.instances, [])
     def test_revocation_before_create_has_no_native_write(self):
         allowed = [True]

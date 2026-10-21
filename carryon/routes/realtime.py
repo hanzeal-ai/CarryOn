@@ -270,7 +270,9 @@ class Subscription:
                   'subscription': selection['subscription'], 'historyProtocol': selection.get('historyProtocol', 0)}
         if ipc:
             self.owner.sync_watches()
-            if hasattr(self.bridge,'workspace'):packet['workspaceRevision']=self.bridge.workspace.revision
+            if hasattr(self.bridge,'workspace'):
+                packet['workspaceRevision']=self.bridge.workspace.revision
+                packet['notificationRevision']=self.bridge.workspace.latest_notification_sequence()
             packet['jobs'] = self.bridge.journal.list(limit=100)
             packet['threadStatuses'] = {}
             for tid in ids:

@@ -31,6 +31,8 @@ class Workspace:
     def __init__(self,bridge):
         self.bridge=bridge;self.db=bridge.journal.conn;self.lock=bridge.journal.lock
         self.catalog_lock=threading.Lock()
+        self.catalog_dirty=threading.Event();self.catalog_dirty.set()
+        self.catalog_watch=None
         from carryon.workspaces.sync import WorkspaceSync
         self.sync=WorkspaceSync(self)
         self.projects=[];self.turn_candidates={};self.rows={};self.states={};self.fingerprints={};self.native_refs={};self.error=None;self.closed=threading.Event();self.worker=None;self.observer=None;self.revision=0
@@ -45,10 +47,15 @@ class Workspace:
 
     def start(self):
         self.observer=self.bridge.open_stream()
+        from carryon.workspaces.catalog_watch import CatalogWatch
+        self.catalog_watch=CatalogWatch(self.bridge.catalog.home,self.invalidate_catalog)
+        self.catalog_watch.start()
         self.worker=threading.Thread(target=self.run,daemon=True);self.worker.start()
 
     def close(self):
         self.closed.set()
+        if self.catalog_watch:self.catalog_watch.close()
+        self.bridge.notify()
         self.sync.close()
         if self.worker:self.worker.join(5)
         if self.observer:self.observer.close()
@@ -109,6 +116,10 @@ class Workspace:
         with self.lock:self.revision+=1
         self.bridge.notify()
 
+    def invalidate_catalog(self):
+        self.catalog_dirty.set()
+        self.bridge.notify()
+
     def catalog_refresh(self):
         # Serialize background and manual reads so an older catalog cannot win.
         with self.catalog_lock:
@@ -123,13 +134,23 @@ class Workspace:
                 self.rows=fresh;self.native_refs={k:v for k,v in self.native_refs.items() if k in fresh};self.error=None
 
     def run(self):
-        next_catalog=0;revision=-1
+        next_catalog=0;revision=-1;catalog_token=None
         while not self.closed.is_set():
+            wait_timeout=None
             try:
                 if self.bridge.status()['enabled']:
-                    if time.monotonic()>=next_catalog:
-                        self.catalog_refresh();next_catalog=time.monotonic()+15
                     ipc,generation=self.bridge.require()
+                    token=(id(ipc),generation,getattr(getattr(ipc,'events',None),'catalog_revision',0))
+                    fallback=self.catalog_watch is None or self.catalog_watch.mode!='filesystem-events'
+                    if self.catalog_dirty.is_set() or token!=catalog_token or fallback and time.monotonic()>=next_catalog:
+                        self.catalog_dirty.clear()
+                        try:self.catalog_refresh()
+                        except Exception:
+                            self.catalog_dirty.set()
+                            raise
+                        catalog_token=token;next_catalog=time.monotonic()+15
+                        self.bridge.notify()
+                    if fallback:wait_timeout=max(0,next_catalog-time.monotonic())
                     for tid in self.thread_ids():
                         native=ipc.current(tid)
                         if native is not None and native is not self.native_refs.get(tid):
@@ -138,13 +159,16 @@ class Workspace:
                                 self.observe(native)
                                 self.native_refs[tid]=native
                 else:
+                    catalog_token=None
                     with self.lock:self.states={};self.fingerprints={};self.native_refs={};self.turn_candidates={}
             except Exception as exc:
+                self.catalog_dirty.set()
                 with self.lock:self.error='工作区状态暂不可用：'+type(exc).__name__
+                wait_timeout=2  # Failed authoritative reads retry without a new event.
             with self.bridge.events:
-                if revision==self.bridge.event_revision:self.bridge.events.wait(2)
+                if revision==self.bridge.event_revision and not self.closed.is_set():
+                    self.bridge.events.wait(wait_timeout)
                 revision=self.bridge.event_revision
-            self.closed.wait(.1)
 
     def observe(self,state):
         tid=valid_id(state['id']);native_turns=turns(state)
@@ -236,6 +260,9 @@ class Workspace:
             self.bridge.notify()
         return {'readThrough':sequence}
 
+    def latest_notification_sequence(self):
+        with self.lock:return self.db.execute('SELECT COALESCE(MAX(sequence),0) FROM notification_events').fetchone()[0]
+
     def latest_sequence(self,tid):
         with self.lock:return self.db.execute('SELECT COALESCE(MAX(sequence),0) FROM notification_events WHERE thread_id=?',(tid,)).fetchone()[0]
 
@@ -255,7 +282,9 @@ class Workspace:
 
     def events(self,reader,after=0,limit=100):
         with self.lock:
-            records=self.db.execute('SELECT sequence,body FROM notification_events WHERE sequence>? ORDER BY sequence LIMIT ?',(after,limit)).fetchall()
+            records=self.db.execute('SELECT sequence,body FROM notification_events WHERE sequence>? ORDER BY sequence LIMIT ?',(after,limit+1)).fetchall()
+            has_more=len(records)>limit
+            records=records[:limit]
             rows=dict(self.rows)
         events=[]
         for record in records:
@@ -263,7 +292,7 @@ class Workspace:
             if tid in rows:
                 pid,_=row_project_identity(rows[tid])
                 events.append({**body,'sequence':record[0],'projectId':pid,'title':rows[tid].get('title','')})
-        return {'events':events,'nextSequence':records[-1][0] if records else after}
+        return {'events':events,'nextSequence':records[-1][0] if records else after,'hasMore':has_more}
 
     def projection(self,reader,activity_owner=None,available_only=False,include_unconfirmed=False):
         self.bridge.require()

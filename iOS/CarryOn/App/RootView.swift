@@ -20,7 +20,7 @@ struct RootView: View {
             else if model.devices.isEmpty { WorkspaceConnectionHelp() }
             else {
               GeometryReader { geometry in
-                let menuWidth = geometry.size.width / 2
+                let menuWidth = min(360, geometry.size.width * 0.75)
                 let offset = min(menuWidth, max(0, (menuOpen ? menuWidth : 0) + menuDrag))
                 let progress = menuWidth > 0 ? offset / menuWidth : 0
                 ZStack(alignment: .leading) {
@@ -37,9 +37,9 @@ struct RootView: View {
                                     .accessibilityHidden(true)
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 24 * progress, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 32 * progress, style: .continuous))
                         .overlay {
-                            RoundedRectangle(cornerRadius: 24 * progress, style: .continuous)
+                            RoundedRectangle(cornerRadius: 32 * progress, style: .continuous)
                                 .strokeBorder(Design.border.opacity(progress), lineWidth: 1)
                                 .allowsHitTesting(false)
                         }
@@ -101,7 +101,7 @@ struct RootView: View {
                                 Capsule().fill(Design.ink).frame(width: 12, height: 1.5)
                             }.frame(width: 44, height: 44)
                         }.accessibilityLabel("导航菜单")
-                    }
+                    }.carryOnFlatToolbar()
                 }
                 .navigationDestination(isPresented: Binding(get: { (model.selectedProject == nil || tab != 0) && model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                     if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
@@ -115,16 +115,13 @@ struct RootView: View {
                 HStack {
                     Text("CarryOn").font(.headline)
                     Spacer(minLength: 0)
-                    Button { setMenuOpen(false) } label: {
-                        Image(systemName: "xmark").frame(width: 44, height: 44)
-                    }.accessibilityLabel("关闭菜单")
+                    Button { setMenuOpen(false); tab = 0; homeNavigation.browsingThreads = true } label: {
+                        Image(systemName: "magnifyingglass").font(.system(size: 20)).frame(width: 44, height: 44)
+                    }.accessibilityLabel("搜索会话")
                 }.padding(.bottom, 12)
                 menuItem("会话", symbol: "bubble", selected: tab == 0) { tab = 0 }
                 menuItem(model.activityBadgeCount > 0 ? "动态（\(model.activityBadgeCount)）" : "动态", symbol: "clock.arrow.circlepath", selected: tab == 1) { tab = 1 }
-                menuItem("设置", symbol: "gearshape", selected: tab == 2) { tab = 2 }
                 Divider().padding(.vertical, 12)
-                menuItem("新建会话", symbol: "square.and.pencil") { tab = 0; homeNavigation.creating = true }
-                    .disabled(!model.canWrite(.create))
                 menuItem("切换工作区", symbol: "desktopcomputer") { tab = 0; homeNavigation.choosingWorkspace = true }
                 menuItem("全部项目", symbol: "folder") { tab = 0; homeNavigation.browsingProjects = true }
                 if model.status["supportsThreadSections"].bool == true {
@@ -138,7 +135,23 @@ struct RootView: View {
             }.padding(.horizontal, 12).padding(.vertical, 16)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Design.background)
+        .background(Design.canvas)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Button {
+                    setMenuOpen(false); tab = 0
+                    homeNavigation.creationProject = nil; homeNavigation.creating = true
+                } label: {
+                    Label("聊天", systemImage: "square.and.pencil").font(.body.weight(.medium))
+                        .padding(.horizontal, 18).frame(minHeight: 44)
+                        .foregroundStyle(Design.onAccent).background(Design.ink, in: Capsule())
+                }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+                Spacer()
+                Button { setMenuOpen(false); tab = 2 } label: {
+                    Image(systemName: "gearshape").font(.system(size: 22)).frame(width: 44, height: 44)
+                }.accessibilityLabel("设置")
+            }.padding(.horizontal, 20).padding(.vertical, 12).background(Design.canvas)
+        }
         .accessibilityAction(.escape) { setMenuOpen(false) }
     }
 
@@ -149,11 +162,11 @@ struct RootView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: symbol).frame(width: 22)
-                Text(title).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(.body).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }.padding(.horizontal, 10).padding(.vertical, 10)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .background(selected ? Design.border : .clear, in: RoundedRectangle(cornerRadius: 12))
+                .background(selected ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 12))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
             .accessibilityAddTraits(selected ? .isSelected : [])

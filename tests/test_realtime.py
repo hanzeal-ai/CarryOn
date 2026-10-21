@@ -169,7 +169,7 @@ class StatusSchedulingTests(unittest.TestCase):
         from carryon.errors import IPCError
         active=self.ids[-1];release=threading.Event();busy=threading.Event()
         entered=[];lock=threading.Lock()
-        self.bridge.workspace=SimpleNamespace(thread_ids=lambda:set(self.ids),invalidate_status=self.bridge.notify,revision=0)
+        self.bridge.workspace=SimpleNamespace(thread_ids=lambda:set(self.ids),invalidate_status=self.bridge.notify,revision=0,latest_notification_sequence=lambda:7)
         def snapshot(tid):
             if tid==active:
                 self.bridge.ipc.states[tid]={'threadRuntimeStatus':{'type':'active'}}
@@ -184,7 +184,9 @@ class StatusSchedulingTests(unittest.TestCase):
         try:
             self.assertTrue(busy.wait(1))
             self.session.subscribe({'type':'subscribe','threadId':None,'threadIds':[active],'subscription':'visible'})
-            self.assertEqual(self.session.update()[0]['threadStatuses'][active]['state'],'loading')
+            packet=self.session.update()[0]
+            self.assertEqual(packet['notificationRevision'],7)
+            self.assertEqual(packet['threadStatuses'][active]['state'],'loading')
             release.set()
             deadline=time.monotonic()+1
             while not self.bridge.ipc.current(active) and time.monotonic()<deadline:time.sleep(.01)

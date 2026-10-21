@@ -190,3 +190,21 @@ test('cloud write rejection clears only the rejected receipt and marks compose f
  await assert.rejects(client.submit('compose','thread','hello'),/permission denied/);
  assert.notEqual(calls[0],calls[1]);
 });
+test('directory WS works without a selected device and coalesces signals during refresh',async()=>{
+ const {client,sockets}=fixture(async()=>ok({}));client.token='session';let runs=0,release;
+ client.watchDirectory(async()=>{runs++;if(runs===1)await new Promise(resolve=>release=resolve);});
+ assert.equal(sockets[0].url,'wss://console.test/carryon/console/events');
+ const directory=sockets[0];directory.message({type:'directory-changed',revision:'a'});
+ directory.message({type:'directory-changed',revision:'b'});directory.message({type:'directory-changed',revision:'b'});
+ assert.equal(runs,1);release();await new Promise(setImmediate);assert.equal(runs,2);
+ directory.message({type:'ping'});assert.equal(directory.sent.at(-1).type,'pong');
+ client.close();assert.equal(client.directorySocket,directory);
+ client.stopDirectory();client.connectDirectory();sockets[1].message({type:'directory-changed',revision:'b'});
+ await new Promise(setImmediate);assert.equal(runs,3);client.stopDirectory();
+});
+test('directory session expiry stops both streams and rejects stale signals',async()=>{
+ const {client,sockets,errors}=fixture(async()=>ok({}));client.token='session';let runs=0;
+ client.watchDirectory(async()=>runs++);const directory=sockets[0];
+ directory.message({type:'error',status:401});assert.equal(client.token,'');assert.equal(client.directorySocket,null);
+ directory.message({type:'directory-changed',revision:'late'});assert.equal(runs,0);assert.deepEqual(errors,['auth']);
+});

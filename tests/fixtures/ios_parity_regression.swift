@@ -116,7 +116,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
     @ObservationIgnored var creationModelsIndependent = false
     @ObservationIgnored var creationProjectsReady = false
     private func focusEditor(in view: UIView) -> Bool {
-        if let editor = view as? UITextView, editor.isEditable, editor.accessibilityLabel == "询问 CarryOn" {
+        if let editor = view as? UITextView, editor.isEditable, editor.accessibilityIdentifier == "carryon-composer-editor" {
             return editor.becomeFirstResponder()
         }
         for child in view.subviews { if focusEditor(in: child) { return true } }

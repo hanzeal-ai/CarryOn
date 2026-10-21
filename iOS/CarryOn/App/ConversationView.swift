@@ -16,7 +16,13 @@ struct ConversationView: View {
     }
     @State private var commandPanel: CommandPanel?
     @State private var menu = false
+    @State private var renaming = false
+    @State private var archiving = false
+    @State private var grouping = false
+    @State private var showingChanges = false
+    @State private var creatingConversation = false
     @State private var activity = false
+    @State private var advancedModelInfo = false
     @State private var modelInfo = false
     @State private var showingVoice = false
     @State private var composerConfiguration = false
@@ -70,6 +76,7 @@ struct ConversationView: View {
     }
     private var actionTarget: ConversationActionTarget { .init(scope: model.scope, threadID: thread.id) }
     @State private var timeline: [JSONValue] = []
+    @State private var changesProjection: ConversationChanges.Snapshot?
     @State private var navigationIndex = ConversationPresentation.NavigationIndex([])
     @State private var projectedHistoryRevision = -1
     @State private var chatMessages: [ConversationListEntry] = []
@@ -107,16 +114,17 @@ struct ConversationView: View {
                 "outgoing": .array(model.visibleOutgoing)
             ])
             if projectedHistoryRevision != revision {
-                let source = model.history["timeline"].array
-                let (grouped, navigation) = await Task.detached(priority: .userInitiated) {
+                let history = model.history
+                let source = history["timeline"].array
+                let (grouped, navigation, changes) = await Task.detached(priority: .userInitiated) {
                     let grouped = ConversationChanges.timeline(ConversationProcess.timeline(source), source: source)
-                    return (grouped, ConversationPresentation.NavigationIndex(grouped))
+                    return (grouped, ConversationPresentation.NavigationIndex(grouped), ConversationChanges.Snapshot(history))
                 }.value
                 guard isCurrent() else { return }
                 if !bottomVisible, let lastTimelineItem, grouped.last != lastTimelineItem,
                    grouped.contains(where: { $0.stableID == lastTimelineItem.stableID }) { newMessages = true }
                 lastTimelineItem = grouped.last
-                timeline = grouped; projectedHistoryRevision = revision
+                timeline = grouped; changesProjection = changes; projectedHistoryRevision = revision
                 if model.historyRevision == revision, model.historySynchronized, model.historyFailure == nil,
                    model.history["syncing"].bool != true, model.history["historyWindow"]["hasMore"].bool == false,
                    let position = readingState?.visiblePosition, !grouped.contains(where: { $0.stableID == position.id }) {
@@ -266,6 +274,9 @@ struct ConversationView: View {
                 loadEarlier: loadEarlierMessages, transaction: tableUpdates, scroll: restoreScroll)
             composerAccessories.frame(maxWidth: .infinity)
                 .anchorPreference(key: ConversationComposerBounds.self, value: .bounds) { $0 }
+            if let changesProjection, !changesProjection.files.isEmpty || !changesProjection.summaries.isEmpty {
+                ConversationChangesCard(history: model.history, projection: changesProjection, threadID: thread.id)
+            }
             composerView
         }
         .background(Design.canvas)
@@ -290,7 +301,18 @@ struct ConversationView: View {
         chatContent
         .navigationTitle(model.history["thread"]["title"].string ?? model.selectedThread?.title ?? thread.title).navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(!model.threadParents.isEmpty)
+        .toolbarRole(.editor)
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.history["thread"]["title"].string ?? model.selectedThread?.title ?? thread.title)
+                        .font(.headline).lineLimit(1)
+                    Text([thread.value["projectName"].string, model.selectedWorkspace?.title ?? model.device?.title]
+                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(Design.secondary).lineLimit(1)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
             if !model.threadParents.isEmpty || model.otherActivityCount > 0 {
             ToolbarItem(placement: .topBarLeading) {
                 HStack(spacing: 8) {
@@ -316,8 +338,33 @@ struct ConversationView: View {
             }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { menu = true } label: { Image(systemName: "ellipsis") }.accessibilityLabel("会话操作")
-            }
+                Button { creatingConversation = true } label: { Image(systemName: "square.and.pencil") }
+                    .disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+            }.carryOnFlatToolbar()
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Text(model.history["thread"]["title"].string ?? thread.title)
+                    if model.status["supportsThreadSections"].bool == true {
+                        Button { grouping = true } label: { Label("移动到分组", systemImage: "pin") }
+                            .disabled(!model.canWrite(.edit) || model.writing)
+                    }
+                    if supportsOperation("rename", in: model.history) {
+                        Button { renaming = true } label: { Label("重命名", systemImage: "pencil") }
+                            .disabled(!model.canInteract(.edit) || model.writing)
+                    }
+                    Button { UIPasteboard.general.string = thread.id } label: { Label("复制对话串 ID", systemImage: "square.on.square") }
+                    if supportsOperation("archive", in: model.history) {
+                        Button(role: .destructive) { archiving = true } label: { Label("归档", systemImage: "archivebox") }
+                            .disabled(!model.canInteract(.edit) || model.state != "idle" || model.writing)
+                    }
+                    Divider()
+                    Button { showingChanges = true } label: { Label("更改", systemImage: "point.3.connected.trianglepath.dotted") }
+                    if model.history["controls"]["supportsFileReferences"].bool == true && model.allows(.files) {
+                        Button { filesPicker = FilePanel(scope: model.scope, threadID: thread.id) } label: { Label("引用项目文件", systemImage: "folder") }
+                    }
+                    Button { menu = true } label: { Label("更多操作", systemImage: "ellipsis") }
+                } label: { Image(systemName: "ellipsis").frame(minHeight: 44) }.accessibilityLabel("会话操作")
+            }.carryOnFlatToolbar()
         }
         .sheet(isPresented: Binding(get: { selectionText != nil }, set: { if !$0 { selectionText = nil } }), onDismiss: {
             if let launch = pendingSelectionSide {
@@ -340,6 +387,11 @@ struct ConversationView: View {
             catch { model.report(error, operation: "刷新其他会话角标", blocking: false) }
         }
         .sheet(isPresented: $menu) { ConversationMenu() }
+        .sheet(isPresented: $renaming) { RenameConversationView(thread: thread, scope: model.scope) }
+        .sheet(isPresented: $archiving) { ArchiveActionView(thread: thread, scope: model.scope, restoring: false) { archiving = false } }
+        .sheet(isPresented: $grouping) { SectionConversationView(thread: thread, scope: model.scope) }
+        .sheet(isPresented: $showingChanges) { ConversationChangesView(threadID: thread.id) }
+        .fullScreenCover(isPresented: $creatingConversation) { NewConversationView(initialProject: thread.value["projectId"].string) }
         .sheet(item: $commandPanel) { panel in
             if model.scope == panel.scope, model.selectedThread?.id == thread.id {
                 switch panel.name {
@@ -353,12 +405,22 @@ struct ConversationView: View {
             }
         }
 
+        .sheet(isPresented: $advancedModelInfo) { ModelInformationView(target: actionTarget) }
         .sheet(isPresented: $composerConfiguration) { ModelInformationView(target: actionTarget, configuration: true) }
         .alert("上下文用量", isPresented: $contextInformation) { Button("完成", role: .cancel) {} } message: {
             if let usage = ContextUsage(model.history["metadata"]["latestTokenUsageInfo"]) { Text("最近一轮使用 \(usage.used) / \(usage.capacity) tokens，剩余 \(usage.remaining)。") }
         }
         .sheet(isPresented: $showingVoice) { VoiceConversationView(target: actionTarget) }
-        .sheet(isPresented: $modelInfo) { ModelInformationView(target: actionTarget) }
+        .overlay {
+            if modelInfo {
+                ReasoningEffortOverlay(close: { modelInfo = false }) {
+                    ModelInformationView(target: actionTarget, quick: true, onClose: { modelInfo = false }, onAdvanced: {
+                        modelInfo = false
+                        advancedModelInfo = true
+                    })
+                }
+            }
+        }
         .sheet(isPresented: $skillsPicker) { SkillsPickerView(target: .conversation(actionTarget)) }
         .sheet(item: $filesPicker) { panel in ProjectFilesPicker(threadID: panel.threadID, scope: panel.scope) }
         .sheet(isPresented: $mentionsPicker) { SkillsPickerView(target: .conversation(actionTarget), mentions: true) }
@@ -602,9 +664,39 @@ struct ConversationView: View {
             hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftFiles.isEmpty || !model.draftUploads.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             sendLabel: model.state == "running" ? (queueFollowUp ? "排队发送" : "补充到当前任务") : nil,
+            compactLeading: AnyView(attachmentMenu),
+            voice: supportsOperation("voice-start", in: model.history) && model.canInteract(.send) ? { showingVoice = true } : nil,
             send: submitMessage,
             stop: interruptTurn,
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
+                attachmentMenu
+                Menu {
+                    Button { composerConfiguration = true } label: { Label("对话配置", systemImage: "gearshape") }
+                    if model.state == "running", canQueue {
+                        Button { queueFollowUps = true } label: { Label("排队发送 · 本轮结束后", systemImage: queueFollowUps ? "checkmark" : "text.badge.clock") }
+                        Button { queueFollowUps = false } label: { Label("立即补充 · 当前任务", systemImage: !queueFollowUps ? "checkmark" : "arrow.turn.down.right") }.disabled(model.history["controls"]["canSteer"].bool == false)
+                    }
+                } label: { Image(systemName: "checkmark.shield").frame(width: 44, height: 44) }.accessibilityLabel("对话配置")
+                Spacer(minLength: 4)
+                if let usage = ContextUsage(model.history["metadata"]["latestTokenUsageInfo"]) {
+                    Button { contextInformation = true } label: {
+                        ZStack {
+                            Circle().stroke(Design.secondary.opacity(0.25), lineWidth: 2)
+                            Circle().trim(from: 0, to: usage.fraction).stroke(Design.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
+                        }.frame(width: 18, height: 18).frame(width: 44, height: 44)
+                    }.accessibilityLabel("上下文已用 \(usage.percentage)%")
+                }
+                Button { modelInfo = true } label: {
+                    Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20)).frame(width: 44, height: 44)
+                }
+                    .accessibilityLabel("模型与思考强度").accessibilityValue(ModelPresentation.name(composerModel, catalog: model.cachedValue("/api/models")) + " " + ModelPresentation.effort(composerEffort))
+                if supportsOperation("voice-start", in: model.history) {
+                    Button { showingVoice = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }.accessibilityLabel("语音聊天").disabled(!model.canInteract(.send))
+                }
+            }
+        }
+    }
+    private var attachmentMenu: some View {
                 Menu {
                     UploadMenuItems(picker: uploadPicker, key: uploadKey, target: uploadTarget, disabled: submitting || model.editingMessage != .null)
                     Button { showingPhotos = true } label: {
@@ -622,34 +714,6 @@ struct ConversationView: View {
                 } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
                     .disabled(!model.canCompose || model.editingMessage != .null || loadingImages || submitting)
                     .accessibilityLabel("添加附件或技能")
-                Menu {
-                    Button { composerConfiguration = true } label: { Label("对话配置", systemImage: "gearshape") }
-                    if model.state == "running", canQueue {
-                        Button { queueFollowUps = true } label: { Label("排队发送 · 本轮结束后", systemImage: queueFollowUps ? "checkmark" : "text.badge.clock") }
-                        Button { queueFollowUps = false } label: { Label("立即补充 · 当前任务", systemImage: !queueFollowUps ? "checkmark" : "arrow.turn.down.right") }.disabled(model.history["controls"]["canSteer"].bool == false)
-                    }
-                } label: { Image(systemName: "gearshape").offset(x: -4).frame(width: 44, height: 44) }.accessibilityLabel("对话配置")
-                Spacer(minLength: 4)
-                if let usage = ContextUsage(model.history["metadata"]["latestTokenUsageInfo"]) {
-                    Button { contextInformation = true } label: {
-                        ZStack {
-                            Circle().stroke(Design.secondary.opacity(0.25), lineWidth: 2)
-                            Circle().trim(from: 0, to: usage.fraction).stroke(Design.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
-                        }.frame(width: 18, height: 18).frame(width: 44, height: 44)
-                    }.accessibilityLabel("上下文已用 \(usage.percentage)%")
-                }
-                Button { modelInfo = true } label: {
-                    HStack(spacing: 4) {
-                        Text(ModelPresentation.name(composerModel, catalog: model.cachedValue("/api/models"))).lineLimit(1).truncationMode(.middle)
-                        Text(ModelPresentation.effort(composerEffort)).foregroundStyle(Design.secondary).lineLimit(1)
-                    }.font(.subheadline).frame(minHeight: 44)
-                }
-                    .accessibilityLabel("模型与思考强度")
-                if supportsOperation("voice-start", in: model.history) {
-                    Button { showingVoice = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }.accessibilityLabel("语音聊天").disabled(!model.canInteract(.send))
-                }
-            }
-        }
     }
     private func submitMessage() {
         Task { await send() }
@@ -888,15 +952,15 @@ struct TimelineEntry: View {
                 let messageText = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
                 if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     MessageMarkdown(text: messageText, artifacts: user ? [] : item["artifacts"].array, threadID: threadID, resolveCreatedThreads: !user)
-                        .environment(\.colorScheme, user ? .dark : colorScheme)
-                        .padding(user ? 13 : 0).background(user ? Color.black : .clear, in: RoundedRectangle(cornerRadius: 20))
+                        .environment(\.colorScheme, colorScheme)
+                        .padding(user ? 14 : 0).background(user ? Design.input : .clear, in: RoundedRectangle(cornerRadius: 20))
                         .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
                         .environment(\.editConversationMessage, editAction)
                         .accessibilityActions { if canEdit { Button("编辑消息") { model.beginEditing(item) } } }
                 }
                 if !contentContext.isReadOnly { ForEach(item["asyncQuestions"].array, id: \.stableID) { question in AsyncQuestionView(question: question, threadID: threadID) } }
                 ForEach(refs.filter { $0["kind"].text != "image" }, id: \.stableID) { ref in ArtifactView(ref: ref, threadID: threadID) }
-            }.padding(.leading, user ? 32 : 0)
+            }.padding(.leading, user ? 96 : 0)
 
         } else if !item["subagents"].array.isEmpty {
             AgentActivityGroup(items: [item], parentID: threadID)
@@ -1020,6 +1084,9 @@ struct ModelInformationView: View {
     @Environment(\.dismiss) private var dismiss
     let target: ConversationActionTarget
     var configuration = false
+    var quick = false
+    var onClose: (() -> Void)? = nil
+    var onAdvanced: (() -> Void)? = nil
     private var snapshot: JSONValue { model.snapshot(for: target) }
     @State private var choices: [JSONValue] = []
     @State private var selectedModel = ""
@@ -1031,53 +1098,23 @@ struct ModelInformationView: View {
     @State private var failure: String?
     private var efforts: [String] { choices.first { $0["id"].text == selectedModel }?["efforts"].array.compactMap(\.string) ?? [] }
     var body: some View {
-        NavigationStack {
-            Form {
-                if loading { ProgressView() }
-                if !configuration {
-                Picker("模型", selection: $selectedModel) {
-                    if !choices.contains(where: { $0["id"].text == selectedModel }) { Text(selectedModel.isEmpty ? "未提供" : selectedModel).tag(selectedModel) }
-                    ForEach(choices, id: \.stableID) { Text($0["name"].text).tag($0["id"].text) }
-                }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || choices.isEmpty || saving || !model.canPerform(target, action: "settings"))
-                Picker("思考强度", selection: $effort) {
-                    if !efforts.contains(effort) { Text(effort.isEmpty ? "未提供" : effort).tag(effort) }
-                    ForEach(efforts, id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || efforts.isEmpty || saving || !model.canPerform(target, action: "settings"))
-                }
-                if configuration {
-                Picker("工作模式", selection: $workMode) {
-                    Text("执行").tag("default")
-                    Text("计划").tag("plan")
-                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("collaborationMode")) || selectedModel.isEmpty)
-                Picker("执行审批", selection: $approvalPolicy) {
-                    Text("按需请求").tag("on-request")
-                    Text("不可信命令请求").tag("untrusted")
-                    Text("不请求").tag("never")
-                    if approvalPolicy == "custom" { Text("当前自定义策略").tag("custom") }
-                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("approvalPolicy")))
-                }
-                if let failure { Text(failure).foregroundStyle(.red) }
-                if !loading && choices.isEmpty { Text("暂未读取到本机模型目录").foregroundStyle(Design.secondary) }
-                if supportsOperation("settings", in: snapshot) { Text("从下一轮生效").font(.caption).foregroundStyle(Design.secondary) }
-            }.navigationTitle(configuration ? "对话配置" : "模型与思考强度").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        if supportsOperation("settings", in: snapshot) { Button("保存") { Task {
-                            saving = true
-                            var settings: JSONValue = configuration ? .object([:]) : .object(["model": .string(selectedModel), "effort": .string(effort)])
-                            if configuration, approvalPolicy != "custom", approvalPolicy != snapshot["controls"]["settings"]["approvalPolicy"].string { settings = settings.setting("approvalPolicy", .string(approvalPolicy)) }
-                            if (configuration && workMode != (snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default")) || (!configuration && snapshot["controls"]["settings"]["collaborationMode"] != .null) {
-                                let previous = snapshot["controls"]["settings"]["collaborationMode"]["settings"]
-                                settings = settings.setting("collaborationMode", .object(["mode": .string(workMode), "settings": .object([
-                                    "model": .string(selectedModel), "reasoning_effort": .string(effort), "developer_instructions": previous["developer_instructions"]])]))
-                            }
-                            if settings.object?.isEmpty == true { saving = false; dismiss(); return }
-                            if await model.perform("settings", target: target, fields: ["settings": settings]) { dismiss() }
-                            saving = false
-                        } }.disabled(saving || loading || !model.canPerform(target, action: "settings") || (!configuration && !efforts.contains(effort))) }
-                    }
-                }
+        Group {
+          if quick && !configuration {
+            VStack(spacing: 8) {
+                if loading { ProgressView().frame(minHeight: 44) }
+                ReasoningEffortControl(modelName: ModelPresentation.name(selectedModel, catalog: .object(["models": .array(choices)])),
+                    effort: effort, efforts: efforts,
+                    disabled: saving || loading || !model.canPerform(target, action: "settings"),
+                    advanced: { onAdvanced?() }, choose: { value in
+                        guard !saving, !loading, efforts.contains(value), model.canPerform(target, action: "settings") else { return }
+                        effort = value; Task { await saveSettings() }
+                    })
+                if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+            }
+          } else {
+            advancedContent
+          }
+        }
                 .task {
                     let scope = model.scope
                     loading = true; failure = nil
@@ -1097,7 +1134,65 @@ struct ModelInformationView: View {
                         effort = choices.first { $0["id"].text == value }?["defaultEffort"].string ?? efforts[0]
                     }
                 }
-        }.presentationDetents([.medium])
+
+    }
+    private var advancedContent: some View {
+        NavigationStack {
+            Form {
+                if loading { ProgressView() }
+                if !configuration {
+                Picker("模型", selection: $selectedModel) {
+                    if !choices.contains(where: { $0["id"].text == selectedModel }) { Text(selectedModel.isEmpty ? "未提供" : selectedModel).tag(selectedModel) }
+                    ForEach(choices, id: \.stableID) { Text($0["name"].text).tag($0["id"].text) }
+                }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || choices.isEmpty || saving || !model.canPerform(target, action: "settings"))
+                Picker("思考强度", selection: $effort) {
+                    if !efforts.contains(effort) { Text(effort.isEmpty ? "未提供" : effort).tag(effort) }
+                    ForEach(efforts, id: \.self) { Text(ModelPresentation.effort($0)).tag($0) }
+                }.pickerStyle(.menu).disabled(!supportsOperation("settings", in: snapshot) || efforts.isEmpty || saving || !model.canPerform(target, action: "settings"))
+                }
+                if configuration {
+                Picker("工作模式", selection: $workMode) {
+                    Text("执行").tag("default")
+                    Text("计划").tag("plan")
+                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("collaborationMode")) || selectedModel.isEmpty)
+                Picker("执行审批", selection: $approvalPolicy) {
+                    Text("按需请求").tag("on-request")
+                    Text("不可信命令请求").tag("untrusted")
+                    Text("不请求").tag("never")
+                    if approvalPolicy == "custom" { Text("当前自定义策略").tag("custom") }
+                }.disabled(saving || loading || !model.canPerform(target, action: "settings") || !snapshot["controls"]["supportedSettings"].array.contains(.string("approvalPolicy")))
+                }
+                if let failure { Text(failure).foregroundStyle(.red) }
+                if !loading && choices.isEmpty { Text("暂未读取到本机模型目录").foregroundStyle(Design.secondary) }
+                if supportsOperation("settings", in: snapshot) { Text("从下一轮生效").font(.caption).foregroundStyle(Design.secondary) }
+            }.navigationTitle(configuration ? "对话配置" : "高级").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { closePanel() } }.carryOnFlatToolbar()
+                    ToolbarItem(placement: .confirmationAction) {
+                        if supportsOperation("settings", in: snapshot) { Button("保存") { Task {
+                            await saveSettings()
+                        } }.disabled(saving || loading || !model.canPerform(target, action: "settings") || (!configuration && !efforts.contains(effort))) }
+                    }
+                }
+          }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(Color(uiColor: .systemGroupedBackground))
+    }
+    private func closePanel() { if let onClose { onClose() } else { dismiss() } }
+    private func saveSettings() async {
+        guard !saving, !loading, model.canPerform(target, action: "settings"), configuration || efforts.contains(effort) else { return }
+        saving = true
+        var settings: JSONValue = configuration ? .object([:]) : .object(["model": .string(selectedModel), "effort": .string(effort)])
+        if configuration, approvalPolicy != "custom", approvalPolicy != snapshot["controls"]["settings"]["approvalPolicy"].string { settings = settings.setting("approvalPolicy", .string(approvalPolicy)) }
+        if (configuration && workMode != (snapshot["controls"]["settings"]["collaborationMode"]["mode"].string ?? "default")) || (!configuration && snapshot["controls"]["settings"]["collaborationMode"] != .null) {
+            let previous = snapshot["controls"]["settings"]["collaborationMode"]["settings"]
+            settings = settings.setting("collaborationMode", .object(["mode": .string(workMode), "settings": .object([
+                "model": .string(selectedModel), "reasoning_effort": .string(effort), "developer_instructions": previous["developer_instructions"]])]))
+        }
+        if settings.object?.isEmpty == true { saving = false; closePanel(); return }
+        if await model.perform("settings", target: target, fields: ["settings": settings]) { closePanel() }
+        saving = false
     }
 }
 

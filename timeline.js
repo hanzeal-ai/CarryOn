@@ -297,23 +297,43 @@ const Timeline = (() => {
       const load=()=>pending||(pending=loader(ref.id,'artifacts').catch(error=>{pending=null;throw error;}));
       const preview=el('button','quiet attachment-name',ref.name);
       const bytes=result=>Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));
-      preview.onclick=async()=>{status.textContent='';try{
-        const result=await load(), dialog=el('dialog','attachment-preview'),close=el('button','quiet','关闭');
-        const download=el('button','quiet','下载');download.type='button';
-        download.setAttribute('aria-label','下载 '+ref.name);
-        const data=bytes(result);let url;
-        const downloadStatus=el('span','image-status');
-        download.onclick=()=>{try{saveFile(new Blob([data],{type:result.mime||'application/octet-stream'}),ref.name);downloadStatus.textContent='';}catch(error){downloadStatus.textContent=error.message||'下载失败，请重试';}};
-        close.onclick=()=>dialog.close();dialog.append(download,close,downloadStatus);
-        if(result.mime==='application/pdf'){
-          url=URL.createObjectURL(new Blob([data],{type:'application/pdf'}));
-          const frame=el('iframe');frame.title=ref.name;frame.setAttribute('sandbox','');frame.src=url;dialog.append(frame);
-        }else if(result.mime.startsWith('text/')||/\.(json|md|swift|py|js|ts|tsx|csv|log)$/i.test(ref.name)){
-          dialog.append(el('pre','original',new TextDecoder().decode(data)));
-        }else {dialog.append(el('p','','暂不支持预览此文件格式。'));}
-        dialog.addEventListener('close',()=>{if(url)URL.revokeObjectURL(url);dialog.remove();},{once:true});
-        document.body.append(dialog);dialog.showModal();
-      }catch(error){status.textContent=error.message;}};
+      preview.onclick=()=>{
+        document.querySelector('.attachment-preview')?.close();
+        const dialog=el('dialog','attachment-preview'),bar=el('header','attachment-preview-bar'),title=el('h2','',ref.name);
+        dialog.setAttribute('aria-label',ref.name);dialog.tabIndex=-1;
+        const body=el('div','attachment-preview-body'),close=el('button','quiet','关闭'),expand=el('button','quiet','⛶'),download=el('button','quiet','下载');
+        for(const button of [close,expand,download])button.type='button';
+        expand.setAttribute('aria-label','进入完整视图');expand.setAttribute('aria-pressed','false');
+        expand.onclick=()=>{const full=dialog.classList.toggle('is-expanded');expand.setAttribute('aria-pressed',String(full));expand.setAttribute('aria-label',full?'退出完整视图':'进入完整视图');};
+        download.setAttribute('aria-label','下载 '+ref.name);download.disabled=true;
+        const downloadStatus=el('span','image-status');downloadStatus.setAttribute('role','status');
+        close.onclick=()=>dialog.close();bar.append(title,download,expand,close);dialog.append(bar,downloadStatus,body);
+        let url,closed=false;
+        const events=new AbortController();
+        const cleanup=()=>{if(closed)return;closed=true;events.abort();if(url)URL.revokeObjectURL(url);dialog.remove();if(!document.querySelector('.attachment-preview')){document.body.classList.remove('file-preview-open');if(preview.isConnected)preview.focus();}};
+        dialog.addEventListener('close',cleanup,{once:true});
+        document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!document.querySelector('dialog:modal')){event.preventDefault();dialog.close();}},{signal:events.signal});
+        const media=matchMedia('(max-width:760px)');
+        const present=()=>{if(dialog.open)dialog.removeAttribute('open');if(media.matches)dialog.showModal();else dialog.show();};
+        media.addEventListener('change',present,{signal:events.signal});
+        document.body.append(dialog);document.body.classList.add('file-preview-open');present();close.focus();
+        const render=async()=>{
+          body.replaceChildren(el('p','preview-status','正在加载文件…'));body.setAttribute('aria-busy','true');
+          try{
+            const result=await load();if(closed)return;
+            const data=bytes(result);body.replaceChildren();download.disabled=false;
+            download.onclick=()=>{try{saveFile(new Blob([data],{type:result.mime||'application/octet-stream'}),ref.name);downloadStatus.textContent='';}catch(error){downloadStatus.textContent=error.message||'下载失败，请重试';}};
+            if(result.mime==='application/pdf'){
+              url=URL.createObjectURL(new Blob([data],{type:'application/pdf'}));
+              const frame=el('iframe');frame.title=ref.name;frame.setAttribute('sandbox','');frame.src=url;body.append(frame);
+            }else if((result.mime||'').startsWith('text/')||/\.(json|md|swift|py|js|ts|tsx|csv|log)$/i.test(ref.name)){
+              body.append(el('pre','original',new TextDecoder().decode(data)));
+            }else body.append(el('p','preview-status','暂不支持预览此文件格式，可下载后打开。'));
+          }catch(error){if(closed)return;const retry=el('button','quiet','重试');retry.type='button';retry.onclick=render;const message=el('p','preview-status',error.message||'文件加载失败');message.setAttribute('role','alert');body.replaceChildren(message,retry);}
+          finally{body.removeAttribute('aria-busy');}
+        };
+        render();
+      };
       card.append(preview);
       target.append(card);
     }
@@ -344,7 +364,10 @@ const Timeline = (() => {
       artifacts({...item,artifacts:refs.filter(ref=>ref.kind==='image')},pictures);
       article.append(head);
       if(pictures.childNodes.length)article.append(pictures);
-      article.append(user?el('div','text',item.displayText??item.text??''):MessageMarkdown.render(displayText(item)));
+      const textBody=user?el('div','text',item.displayText??item.text??''):MessageMarkdown.render(displayText(item));
+      article.append(textBody);
+      const select=el('button','quiet select-text','选择文字');select.type='button';
+      select.onclick=()=>{const range=document.createRange();range.selectNodeContents(textBody);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);};head.append(select);
       artifacts({...item,artifacts:refs.filter(ref=>ref.kind!=='image')},article);
       for(const question of item.asyncQuestions||[])questionCard(question,article);
       const skills=parts.filter(part=>part.type==='skill'||part.type==='mention');

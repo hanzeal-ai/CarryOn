@@ -76,6 +76,7 @@ class CarryOnClient {
     this.delay = 500;
     this.selection = null;
     this.epoch = 0;
+    this.terminalAdmissions = new Set();
     this.onSubmission = () => {};
   }
 
@@ -180,6 +181,14 @@ class CarryOnClient {
         job.result?.goal?.threadId!==path.split('/')[2]||(body.action==='goal-pause'&&job.result?.goal?.status!=='paused')))){
       job={...job,state:'uncertain',error:'尚未确认目标变更，请核对原请求；不会自动再次执行'};
     }
+    if(path.endsWith('/session')&&(!['completed','failed','interrupted','uncertain'].includes(job.state)||job.id!==requestId||job.threadId!==path.split('/')[2]||job.kind!=='session:'+body.action||
+      (job.state==='completed'&&(job.result?.threadId!==path.split('/')[2]||!(job.kind==='session:load'?['loaded','conflict']:['released']).includes(job.result?.state))))){
+      job={...job,state:'uncertain',error:'会话加载凭证尚未确认，请核对原请求'};
+    }
+    if(path==='/usage/reset'&&(job.id!==requestId||job.threadId!=='quota:'+body.accountKey||job.kind!=='quota-reset'||
+      !['completed','failed','uncertain'].includes(job.state)||(job.state==='completed'&&!['reset','alreadyRedeemed','nothingToReset','noCredit'].includes(job.result?.outcome)))){
+      job={...job,state:'uncertain',error:'额度重置凭证尚未确认，请沿用原请求核对'};
+    }
     // Retain ambiguous receipts only; explicit rejections may be retried.
     if (['accepted','completed','inProgress','failed','interrupted','acknowledged'].includes(job.state)) {
       pending.delete(key);
@@ -218,6 +227,29 @@ class CarryOnClient {
     if(!isCurrent())throw Error('工作区或项目已改变');
     const key='project:'+Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
     return this.requestJob('/threads',{projectId,prompt,images,settings,skills,mentions,...(uploads.length?{uploads:[...uploads]}:{})},key,this.pending,'carryon-pending');
+  }
+
+  resetQuota(accountKey,isCurrent=()=>true){
+    if(!/^[a-f0-9]{64}$/.test(accountKey)||!isCurrent())throw Error('工作区或账号已改变，请重新确认');
+    return this.requestJob('/usage/reset',{accountKey,confirmed:true},'quota:'+accountKey,this.operations,'carryon-operations');
+  }
+  async controlSession(target, action, isCurrent=()=>true) {
+    if(!['load','release'].includes(action))throw Error('无效会话加载操作');
+    const epoch=this.epoch,key='session:'+target;
+    if(!isCurrent())throw Error('当前会话已改变');
+    const pending=this.operations.get(key);
+    if(pending){
+      const job=await this.request('/jobs/'+encodeURIComponent(pending));
+      if(epoch!==this.epoch||!isCurrent())throw Error('当前会话已改变');
+      if(job.id!==pending||job.threadId!==target||!['session:load','session:release'].includes(job.kind))throw Error('会话加载凭证身份不匹配');
+      if(['completed','failed','interrupted'].includes(job.state)){
+        if(job.state==='completed'&&(job.result?.threadId!==target||!(job.kind==='session:load'?['loaded','conflict']:['released']).includes(job.result?.state)))throw Error('会话加载结果尚未确认');
+        this.operations.delete(key);
+        sessionStorage.setItem((this.storageScope||this.localStorageScope||'carryon-')+'operations',JSON.stringify([...this.operations]));
+      }
+      return job;
+    }
+    return this.requestJob('/threads/'+target+'/session',{action},key,this.operations,'carryon-operations');
   }
 
   async operation(target, action, fields, isCurrent = () => true) {
@@ -296,13 +328,16 @@ class CarryOnClient {
   }
   async stopTerminal(target,body,isCurrent=()=>true){
     body={...body};const epoch=this.epoch,key='terminal:'+target,content=key+':content',path='/threads/'+encodeURIComponent(target)+'/terminals';
-    if(this.operations.has(key))throw Error('终端操作待核对，请先核对原请求');
-    const hash=await this.requestContent(path,body);
-    if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
-    if(this.operations.has(key))throw Error('终端操作待核对，请先核对原请求');
-    this.operations.set(content,hash);
-    try{return await this.requestJob(path,body,key,this.operations,'carryon-operations');}
-    finally{if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
+    const admission=JSON.stringify([epoch,target]);
+    if(this.operations.has(key)||this.terminalAdmissions.has(admission))throw Error('终端操作待核对，请先核对原请求');
+    this.terminalAdmissions.add(admission);
+    try{
+      const hash=await this.requestContent(path,body);
+      if(epoch!==this.epoch||!isCurrent())throw Error('工作区或会话已改变');
+      if(this.operations.has(key))throw Error('终端操作待核对，请先核对原请求');
+      this.operations.set(content,hash);
+      return await this.requestJob(path,body,key,this.operations,'carryon-operations');
+    }finally{this.terminalAdmissions.delete(admission);if(epoch===this.epoch&&!this.operations.has(key)){this.operations.delete(content);this.saveOperations();}}
   }
   async queryTerminal(target,id,isCurrent=()=>true){
     const epoch=this.epoch,key='terminal:'+target,content=key+':content',path='/threads/'+encodeURIComponent(target)+'/terminals',job=await this.request('/jobs/'+encodeURIComponent(id));

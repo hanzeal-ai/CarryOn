@@ -81,7 +81,13 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var submitting = false
     var resuming = false
     var sendLabel: String? = nil
-    var placeholder = "继续对话…"
+    var placeholder = "跟进"
+    var autofocus = false
+    var compactLeading: AnyView? = nil
+    var voice: (() -> Void)? = nil
+    @State private var editing = false
+    @FocusState private var textFocused: Bool
+    private var expanded: Bool { compactLeading == nil || editing || textFocused || !text.isEmpty || hasImages || !(skills?.wrappedValue.isEmpty ?? true) }
     let send: () -> Void
     var stop: (() -> Void)?
     var resume: (() -> Void)?
@@ -90,51 +96,75 @@ struct CarryOnChatComposer<Accessories: View>: View {
     private var actionDisabled: Bool { disabled || submitting || action == .unavailable || (action == .pause ? !stopAllowed : (!sendAllowed || !sendingReady)) }
     private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : sendLabel ?? (stopping ? "补充到当前任务" : "发送") }
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Group {
-                if let skills {
-                    ZStack(alignment: .topLeading) {
-                        if text.isEmpty && skills.wrappedValue.isEmpty {
-                            Text(stopping ? "补充要求…" : placeholder).foregroundStyle(.tertiary).allowsHitTesting(false)
-                        }
-                        InlineSkillEditor(text: $text, skills: skills, selection: selection ?? .constant(0), editable: draftEditable && (sendAllowed || commandInputAllowed),
-                                          placeholder: stopping ? "补充要求…" : placeholder)
-                    }
-                } else {
-                    TextField(stopping ? "补充要求…" : placeholder, text: $text, axis: .vertical)
-                        .lineLimit(1...6).fixedSize(horizontal: false, vertical: true).disabled(!draftEditable || !(sendAllowed || commandInputAllowed))
-                }
-            }.font(Font(ComposerTypography.font)).lineSpacing(ComposerTypography.lineSpacing).foregroundStyle(theme.colors.inputText).tint(Design.composerAccent)
-                .padding(.horizontal, 12).padding(.top, 13).padding(.bottom, 7)
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 0) {
-                accessories.foregroundStyle(theme.colors.mainTint)
-                if action == .send, stopping, let stop {
-                    Button(action: stop) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(theme.colors.mainTint).frame(width: 44, height: 44)
-                    }.disabled(disabled || !stopAllowed).accessibilityLabel("停止执行")
+                if !expanded, let compactLeading { compactLeading }
+                editor
+                    .padding(.horizontal, expanded ? 12 : 2)
+                    .padding(.top, expanded ? 13 : 0)
+                    .padding(.bottom, expanded ? 12 : 0)
+                if !expanded {
+                    if action == .unavailable, let voice {
+                        Button(action: voice) {
+                            Image(systemName: "waveform").font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(Design.onAccent).frame(width: 32, height: 32)
+                                .background(Design.ink, in: Circle()).frame(width: 44, height: 44)
+                        }.disabled(disabled).accessibilityLabel("语音聊天")
+                    } else { actionButton }
                 }
-                Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
-                    ZStack {
-                        if submitting {
-                            ComposerLoadingRing()
-                                .accessibilityHidden(true)
-                        }
-                        if !submitting { Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
-                            .font(.system(size: submitting ? 9 : 17, weight: .semibold))
-                            .foregroundStyle(.white) }
-                    }.frame(width: 32, height: 32).background(actionDisabled && !submitting ? Design.secondary.opacity(0.25) : theme.colors.sendButtonBackground, in: Circle())
-                        .frame(width: 44, height: 44)
-                }.disabled(actionDisabled)
-                    .accessibilityLabel(buttonLabel)
             }
-        }.animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: action)
-            .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: 28))
-            .overlay(RoundedRectangle(cornerRadius: 28).stroke(Design.surface.opacity(0.85), lineWidth: 1))
-            .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: 5)
-            .padding(.horizontal, 12).padding(.vertical, 8).background(theme.colors.mainBG)
+            if expanded {
+                HStack(alignment: .center, spacing: 0) {
+                    accessories.foregroundStyle(theme.colors.mainTint)
+                    if action == .send, stopping, let stop {
+                        Button(action: stop) {
+                            Image(systemName: "stop.fill").font(.system(size: 17, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                        }.disabled(disabled || !stopAllowed).accessibilityLabel("停止执行")
+                    }
+                    actionButton
+                }
+            }
+        }
+        .foregroundStyle(theme.colors.mainTint)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: expanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: action)
+        .padding(.horizontal, expanded ? 6 : 4).padding(.vertical, 2)
+        .background(theme.colors.inputBG, in: RoundedRectangle(cornerRadius: expanded ? 26 : 30))
+        .padding(.horizontal, expanded ? 12 : 32).padding(.vertical, 8)
+        .background(theme.colors.mainBG)
+    }
+    private var editor: some View {
+        Group {
+            if let skills {
+                ZStack(alignment: .topLeading) {
+                    if text.isEmpty && skills.wrappedValue.isEmpty {
+                        Text(placeholder).foregroundStyle(.secondary).allowsHitTesting(false)
+                    }
+                    InlineSkillEditor(text: $text, skills: skills, selection: selection ?? .constant(0),
+                                      editable: draftEditable && (sendAllowed || commandInputAllowed),
+                                      placeholder: placeholder, autofocus: autofocus, onEditingChanged: { editing = $0 })
+                }
+            } else {
+                TextField(placeholder, text: $text, axis: .vertical)
+                    .lineLimit(1...6).fixedSize(horizontal: false, vertical: true)
+                    .focused($textFocused).onAppear { if autofocus { textFocused = true } }.disabled(!draftEditable || !(sendAllowed || commandInputAllowed))
+            }
+        }.font(Font(ComposerTypography.font)).lineSpacing(ComposerTypography.lineSpacing)
+            .foregroundStyle(theme.colors.inputText).tint(Design.ink)
+    }
+    private var actionButton: some View {
+        Button(action: action == .pause ? { stop?() } : action == .restart ? { resume?() } : send) {
+            ZStack {
+                if submitting { ComposerLoadingRing().accessibilityHidden(true) }
+                else {
+                    Image(systemName: action == .pause ? "stop.fill" : action == .restart ? "play.fill" : "arrow.up")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(Design.onAccent)
+                }
+            }.frame(width: 32, height: 32)
+                .background(actionDisabled && !submitting ? Design.secondary.opacity(0.25) : theme.colors.sendButtonBackground, in: Circle())
+                .frame(width: 44, height: 44)
+        }.disabled(actionDisabled).accessibilityLabel(buttonLabel)
     }
 }
 

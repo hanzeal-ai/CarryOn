@@ -6,8 +6,8 @@ enum Design {
     static let background = neutral(light: 0.97, dark: 0.07)
     static let surface = neutral(light: 1, dark: 0.12)
     static let reviewCommentBackground = neutral(light: 0.91, dark: 0.16)
-    static let input = neutral(light: 0.985, dark: 0.16)
-    static let composerAccent = Color(red: 0.68, green: 0.46, blue: 0.96)
+    static let input = neutral(light: 0.955, dark: 0.16)
+    static let composerAccent = Color.primary
     static let ink = Color.primary
     static let secondary = Color.secondary
     static let border = Color.primary.opacity(0.10)
@@ -109,6 +109,7 @@ struct ThreadRow: View {
     @Environment(AppModel.self) private var model
     let record: Record
     var dimmed = false
+    var compact = false
     private var projectName: String {
         if let name = record.value["projectName"].string, !name.isEmpty { return name }
         if record.value["projectless"].bool == true { return "最近" }
@@ -119,20 +120,38 @@ struct ThreadRow: View {
         let status = model.listStatus(record)
         let state = status["state"].text
         HStack(spacing: 13) {
-            SymbolTile(name: "bubble.left.and.bubble.right", color: state == "running" && model.connected ? Design.green : Design.secondary)
+            if !compact { SymbolTile(name: "bubble.left.and.bubble.right", color: state == "running" && model.connected ? Design.green : Design.secondary) }
             VStack(alignment: .leading, spacing: 5) {
-                HStack { Text(record.title).font(.body.weight(.medium)).lineLimit(2)
+                HStack { Text(record.title).font(compact ? .body : .body.weight(.medium)).lineLimit(compact ? 1 : 2)
                     if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7).accessibilityLabel("未读") }
                 }
-                Text(projectName).font(.caption).foregroundStyle(Design.secondary).lineLimit(1)
+                Text(compact ? [projectName, model.selectedWorkspace?.title ?? model.device?.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ") : projectName)
+                    .font(.caption).foregroundStyle(Design.secondary).lineLimit(1)
+                if !compact {
                 HStack(spacing: 5) {
                     if state == "running" { ProgressView().controlSize(.mini) }
                     Text(state == "error" || (state == "idle" && record.value["failed"].bool == true) ? "执行失败" : status["label"].string ?? "状态未知")
                 }.font(.caption).foregroundStyle(state == "waiting" ? Design.orange : state == "running" ? Design.green : Design.secondary)
+                }
             }
             Spacer(minLength: 0)
+            if compact {
+                if state == "running" { ProgressView().controlSize(.small) }
+                else if state == "waiting" || state == "error" { Image(systemName: "exclamationmark.circle").foregroundStyle(state == "error" ? .red : Design.orange) }
+                else if ["unknown", "loading", "notLoaded"].contains(state) { Image(systemName: "questionmark.circle").foregroundStyle(Design.secondary) }
+            } else {
             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-        }.padding(.horizontal, 15).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+        }.padding(.horizontal, compact ? 0 : 15).padding(.vertical, compact ? 10 : 14).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             .saturation(dimmed ? 0 : 1).opacity(dimmed ? 0.5 : 1)
+            .accessibilityValue(status["label"].string ?? "状态未知")
+    }
+}
+
+// Match the flat navigation controls while retaining the native toolbar behavior.
+extension ToolbarContent {
+    @ToolbarContentBuilder func carryOnFlatToolbar() -> some ToolbarContent {
+        if #available(iOS 26.0, *) { sharedBackgroundVisibility(.hidden) }
+        else { self }
     }
 }

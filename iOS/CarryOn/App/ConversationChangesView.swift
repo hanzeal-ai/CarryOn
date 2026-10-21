@@ -165,58 +165,20 @@ struct ConversationChangesCard: View {
     let projection: ConversationChanges.Snapshot
     let threadID: String
     @State private var reviewing = false
-    @State private var expanded = false
-    @State private var selectedFile: String?
     private var files: [ConversationChanges.File] { projection.files }
     private var totals: ConversationChanges.LineCounts? { projection.totals }
     var body: some View {
-        VStack(spacing: 0) {
+        Button { reviewing = true } label: {
             HStack(spacing: 10) {
-                Image(systemName: "doc.badge.plus").font(.title3)
-                    .frame(width: 38, height: 38).background(Design.background, in: RoundedRectangle(cornerRadius: 10))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(files.isEmpty ? "文件改动" : "已编辑 \(files.count) 个文件").font(.subheadline.weight(.medium))
-                    if let totals { counts(totals) }
-                }
-                Spacer(minLength: 4)
-                Button { selectedFile = nil; reviewing = true } label: {
-                    Text("审核").font(.subheadline).padding(.horizontal, 12).padding(.vertical, 7)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Design.border, lineWidth: 1))
-                        .frame(minHeight: 44)
-                }.buttonStyle(.plain)
-                    .accessibilityLabel("审核文件改动")
-            }.padding(12)
-            ForEach(expanded ? files : Array(files.prefix(3))) { file in
-                Divider()
-                Button { selectedFile = file.path; reviewing = true } label: {
-                    HStack(spacing: 10) {
-                        Text(file.path).font(.caption).lineLimit(2).truncationMode(.middle)
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 4)
-                        if let count = file.lineCounts { counts(count) }
-                    }.padding(.vertical, 8).frame(minHeight: 44).padding(.horizontal, 12).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("查看 \(file.path) 的改动")
-            }
-            if files.count > 3 {
-                Divider()
-                Button { expanded.toggle() } label: {
-                    HStack {
-                        Text(expanded ? "收起" : "展开其余 \(files.count - 3) 个文件")
-                        Spacer()
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    }.font(.caption).padding(.horizontal, 12).frame(minHeight: 44).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityValue(expanded ? "已展开" : "已收起")
-            }
-            if history["historyWindow"]["hasMore"].bool == true || history["truncated"].bool == true {
-                Text("仅统计已加载的改动记录").font(.caption2).foregroundStyle(Design.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            }
-        }.foregroundStyle(Design.ink)
-            .background(Design.surface, in: RoundedRectangle(cornerRadius: 14))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Design.border, lineWidth: 1))
-            .sheet(isPresented: $reviewing, onDismiss: { selectedFile = nil }) {
-                ConversationChangesView(threadID: threadID, scopedHistory: history, filePath: selectedFile)
+                Text(files.isEmpty ? "文件改动" : "\(files.count) 个文件").foregroundStyle(Design.secondary)
+                if let totals { counts(totals) }
+            }.font(.caption).padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Design.input, in: Capsule()).frame(minHeight: 44)
+                .frame(maxWidth: .infinity)
+        }.buttonStyle(.plain).accessibilityLabel("审核文件改动")
+            .accessibilityHint(history["historyWindow"]["hasMore"].bool == true || history["truncated"].bool == true ? "仅统计已加载的改动记录" : "")
+            .sheet(isPresented: $reviewing) {
+                ConversationChangesView(threadID: threadID, scopedHistory: history)
             }
     }
     private func counts(_ value: ConversationChanges.LineCounts) -> some View {

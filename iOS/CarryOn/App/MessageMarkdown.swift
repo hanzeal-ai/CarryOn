@@ -40,7 +40,7 @@ struct MessageMarkdown: View {
                 if (askInSide != nil || editMessage != nil), !configuration.content.renderMarkdown().contains("![") {
                     SelectableMarkdownParagraph(markdown: configuration.content.renderMarkdown(), fontSize: bodySize, askInSide: askInSide, editMessage: editMessage)
                         .markdownMargin(top: 0, bottom: 8)
-                } else { configuration.label.markdownMargin(top: 0, bottom: 8) }
+                } else { configuration.label.relativeLineSpacing(.em(0.20)).markdownMargin(top: 0, bottom: 8) }
             }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 CodeBlockView(code: configuration.content, language: configuration.language)
@@ -185,7 +185,10 @@ private struct SelectableMarkdownParagraph: UIViewRepresentable {
         context.coordinator.updatingSelection = true
         defer { context.coordinator.updatingSelection = false }
         view.linkTextAttributes = [.foregroundColor: UIColor(Design.link)]
-        view.attributedText = NSAttributedString(value)
+        let attributed = NSMutableAttributedString(attributedString: NSAttributedString(value))
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = fontSize * 0.20
+        attributed.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: attributed.length))
+        view.attributedText = attributed
         if preserveSelection, NSMaxRange(selection) <= (view.text as NSString).length { view.selectedRange = selection }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {

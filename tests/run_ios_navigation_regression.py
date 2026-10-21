@@ -195,7 +195,9 @@ if mode == "home":
     text = picker.read_text()
     save = text.split('Button("完成") {', 1)[1].split('}.disabled', 1)[0]
     text = text.replace('    var body: some View {', '    private func fixtureSave() {' + save + '}\n    var body: some View {', 1)
-    text = text.replace('}.presentationDetents([.medium])', '}.presentationDetents([.medium])\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.choose"))) { _ in selected = "fixture-model"; effort = "high" }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.save"))) { _ in fixtureSave() }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.inspect"))) { _ in\n                NotificationCenter.default.post(name: Notification.Name("fixture.model.state"), object: ["selected": selected, "effort": effort, "loading": loading, "failure": failure ?? ""] as [String: Any])\n            }\n', 1)
+    anchor = '.presentationDragIndicator(.visible)'
+    if anchor not in text: raise SystemExit("Model picker fixture hook missing")
+    text = text.replace(anchor, anchor + '\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.choose"))) { _ in selected = "fixture-model"; effort = "high" }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.save"))) { _ in fixtureSave() }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.model.inspect"))) { _ in\n                NotificationCenter.default.post(name: Notification.Name("fixture.model.state"), object: ["selected": selected, "effort": effort, "loading": loading, "failure": failure ?? ""] as [String: Any])\n            }\n', 1)
     picker.write_text(text)
     configuration = source / "CarryOn/App/CreationConfigurationView.swift"
     text = configuration.read_text()

@@ -22,7 +22,7 @@ class CloudConsoleClient extends CarryOnClient {
     const result=await readApiResponse(response);
     if(epoch!==this.epoch)throw Error('设备已改变，请重新读取状态');
     if(!response.ok){
-      if(response.status===401){this.token='';this.close();this.onAuthError();}
+      if(response.status===401){this.token='';this.close();this.stopDirectory();this.onAuthError();}
       throw responseError(result.error||'云端请求失败',response.status,result.uncertain===true);
     }
     return result;
@@ -32,11 +32,50 @@ class CloudConsoleClient extends CarryOnClient {
       const session=await this.consoleRequest('session');
       this.token='session';this.devices=session.devices;this.account=session.account;
       const picker=document.getElementById('console-device');
-      picker.replaceChildren(...session.devices.map(d=>new Option((d.name||d.id)+(d.online?' · 在线':' · 离线'),d.id)));
+      const signature=JSON.stringify(session.devices);
+      if(signature!==this.deviceSignature){picker.replaceChildren(...session.devices.map(d=>new Option((d.name||d.id)+(d.online?' · 在线':' · 离线'),d.id)));this.deviceSignature=signature;}
       if(!session.devices.some(d=>d.id===this.device))this.device=session.devices[0]?.id||'';
       picker.value=this.device;this.setStorage();
+      this.connectDirectory();
       return session;
-    } catch(error){this.token='';throw error;}
+    } catch(error){throw error;}
+  }
+  watchDirectory(callback) { this.onDirectoryChange=callback;this.connectDirectory(); }
+  stopDirectory() {
+    clearTimeout(this.directoryRetry);clearTimeout(this.directoryHeartbeat);
+    const socket=this.directorySocket;this.directorySocket=null;
+    if(socket)socket.close();
+  }
+  connectDirectory() {
+    if(!this.token||!this.onDirectoryChange||this.directorySocket)return;
+    clearTimeout(this.directoryRetry);
+    const url=new URL('console/events',this.base);url.protocol=url.protocol==='https:'?'wss:':'ws:';
+    const socket=new WebSocket(url);this.directorySocket=socket;
+    const current=()=>this.directorySocket===socket&&!!this.token;
+    let dirty=false,running=false,revision=null;
+    const drain=async()=>{
+      if(running)return;running=true;
+      try{while(dirty&&current()){dirty=false;await this.onDirectoryChange();}}
+      catch(error){if(current()){this.onError(error);socket.close();}}
+      finally{running=false;}
+    };
+    const heartbeat=()=>{clearTimeout(this.directoryHeartbeat);this.directoryHeartbeat=setTimeout(()=>{if(current())socket.close();},45000);};
+    heartbeat();
+    socket.onmessage=event=>{
+      if(!current())return;heartbeat();
+      try{
+        const packet=JSON.parse(event.data);
+        if(packet.type==='ping'){socket.send(JSON.stringify({type:'pong'}));return;}
+        if(packet.type==='error'&&packet.status===401){this.token='';this.stopDirectory();this.close();this.onAuthError();return;}
+        if(packet.type==='directory-changed'&&typeof packet.revision==='string'&&packet.revision!==revision){revision=packet.revision;dirty=true;drain();}
+      }catch(error){this.onError(error);socket.close();}
+    };
+    socket.onclose=()=>{
+      if(this.directorySocket!==socket)return;
+      clearTimeout(this.directoryHeartbeat);this.directorySocket=null;
+      if(this.token)this.directoryRetry=setTimeout(()=>this.connectDirectory(),2000);
+    };
+    socket.onerror=()=>{};
   }
   setStorage() {
     sessionStorage.setItem('carryon-cloud-device',this.device);
@@ -47,7 +86,7 @@ class CloudConsoleClient extends CarryOnClient {
     this.operations=this.restore(this.storageScope+'operations');
   }
   async pair(token,username) {
-    this.close();this.epoch++;this.selection=null;
+    this.stopDirectory();this.close();this.epoch++;this.selection=null;
     await this.consoleRequest('login',username===undefined?{token:token.trim()}:{username:username.trim(),password:token});
     await this.initialize();
   }
@@ -78,6 +117,7 @@ class CloudConsoleClient extends CarryOnClient {
     return this.selection.subscription;
   }
   resume(){
+    this.connectDirectory();
     if(this.socket&&this.lastReceived&&Date.now()-this.lastReceived>45000){this.close();this.onDisconnect({});}
     this.connect();
   }
@@ -115,7 +155,7 @@ class CloudConsoleClient extends CarryOnClient {
       try{packet=JSON.parse(event.data);}catch(error){this.onError(error);socket.close();return;}
       if(packet.type==='ping'){socket.send(JSON.stringify({type:'pong'}));return;}
       if(packet.type==='error'){
-        if(packet.status===401){this.token='';this.close();this.onAuthError();return;}
+        if(packet.status===401){this.token='';this.close();this.stopDirectory();this.onAuthError();return;}
         this.onError(Error(packet.error||'实时订阅失败'));socket.close();return;
       }
       if(packet.type!=='update'||packet.subscription!==this.selection?.subscription||!Number.isInteger(packet.revision)||packet.revision<=revision)return;

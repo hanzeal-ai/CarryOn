@@ -8,6 +8,7 @@ func supportsOperation(_ action: String, in snapshot: JSONValue) -> Bool {
 }
 
 struct NewConversationView: View {
+    var initialProject: String? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var projects: [Record] = []
@@ -18,6 +19,7 @@ struct NewConversationView: View {
         var id: String { switch self { case .model(let scope): "model:" + scope; case .configuration(let scope): "configuration:" + scope } }
     }
     @State private var creationPanel: CreationPanel?
+    @State private var quickModelScope: String?
     @State private var creationModels: [JSONValue]?
     @State private var creationModelScope = ""
     @State private var creationModelVersion = UUID()
@@ -82,7 +84,7 @@ struct NewConversationView: View {
         NavigationStack {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
                 CarryOnChatComposer(text: draftBinding, skills: referenceBinding, selection: selectionBinding, disabled: !model.canWrite(.create) || !creationSettingsAllowed || !destinationAvailable || loading || loadingPhotos || !uploadsReady,
-                                    draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty || !uploads.isEmpty, submitting: loading, placeholder: "询问 CarryOn",
+                                    draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty || !uploads.isEmpty, submitting: loading, placeholder: "在 \(model.selectedWorkspace?.title ?? model.device?.title ?? "工作区") 上工作", autofocus: true,
                                     send: { Task { await create() } }) {
                     Menu {
                         UploadMenuItems(picker: uploadPicker, key: draftKey, target: uploadTarget, disabled: loading || !destinationAvailable)
@@ -93,12 +95,12 @@ struct NewConversationView: View {
                         .disabled(loading || loadingPhotos).accessibilityLabel("添加附件")
                     if !model.status["supportedCreationSettings"].array.isEmpty {
                         Button { creationPanel = .configuration(model.scope) } label: {
-                            Image(systemName: "gearshape").offset(x: -4).frame(width: 44, height: 44)
+                            Image(systemName: "checkmark.shield").frame(width: 44, height: 44)
                         }.disabled(loading || loadingPhotos || !model.canWrite(.create) || !model.canWrite(.edit)).accessibilityLabel("新会话配置")
                     }
                     Spacer(minLength: 4)
-                    Button { creationPanel = .model(model.scope) } label: {
-                        HStack(spacing: 5) { Text(ModelPresentation.name(creationSettings["model"].string ?? "默认模型", catalog: model.cachedValue("/api/models"))).lineLimit(1); Text(ModelPresentation.effort(creationSettings["effort"].text)).foregroundStyle(Design.secondary) }.font(.subheadline).frame(minHeight: 44)
+                    Button { quickModelScope = model.scope } label: {
+                        Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20)).frame(width: 44, height: 44)
                     }.accessibilityLabel("模型与思考强度")
                 }.id(draftKey)
             })
@@ -113,7 +115,16 @@ struct NewConversationView: View {
                         }.font(.subheadline).foregroundStyle(Design.secondary).frame(minHeight: 44)
                     }.accessibilityLabel("切换工作区")
                     if !directCreation {
-                        Button { selecting = true } label: {
+                        Menu {
+                            if projectlessCreation {
+                                Button { project = "" } label: { Label("不在项目中工作", systemImage: project.isEmpty ? "checkmark" : "bubble.left.and.bubble.right") }
+                                Divider()
+                            }
+                            ForEach(projects) { item in
+                                Button { project = item.id } label: { Label(item.title, systemImage: project == item.id ? "checkmark" : "folder") }
+                            }
+                            if hasMore || failure != nil { Button("查看全部项目") { selecting = true } }
+                        } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "folder")
                                 Text(projects.first(where: { $0.id == project })?.title ?? (projectlessCreation ? "无项目" : "选择项目")).lineLimit(1)
@@ -149,10 +160,10 @@ struct NewConversationView: View {
             .photosPicker(isPresented: $showingPhotos, selection: $photos,
                           maxSelectionCount: max(1, 3 - images.count), matching: .images)
             .disabled(loading)
-            .navigationTitle("新建会话").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
                 .onAppear { presentationActive = true }.onDisappear { presentationActive = false }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-                .task(id: model.scope) { projects = []; photos = []; failure = nil; creationPanel = nil; project = model.selectedProject?.id ?? ""; creationModelVersion = UUID(); creationModels = nil; modelCatalogFailure = nil; async let projectLoad: Void = loadProjects(reset: true); async let modelLoad: Void = loadCreationModels(); _ = await (projectLoad, modelLoad) }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Image(systemName: "chevron.left") }.accessibilityLabel("返回") }.carryOnFlatToolbar() }
+                .task(id: model.scope) { projects = []; photos = []; failure = nil; creationPanel = nil; quickModelScope = nil; project = initialProject ?? model.selectedProject?.id ?? ""; creationModelVersion = UUID(); creationModels = nil; modelCatalogFailure = nil; async let projectLoad: Void = loadProjects(reset: true); async let modelLoad: Void = loadCreationModels(); _ = await (projectLoad, modelLoad) }
                 .task(id: photos) {
                     guard !photos.isEmpty else { return }
                     let scope = model.scope
@@ -173,6 +184,19 @@ struct NewConversationView: View {
                     switch panel {
                     case .model(let scope): CreationModelPicker(selection: settingsBinding(scope: scope), scope: scope)
                     case .configuration(let scope): CreationConfigurationView(selection: settingsBinding(scope: scope), scope: scope)
+                    }
+                }
+                .overlay {
+                    if let scope = quickModelScope, scope == model.scope {
+                        ReasoningEffortOverlay(close: { quickModelScope = nil }) {
+                            CreationModelPicker(selection: settingsBinding(scope: scope), scope: scope, quick: true, onClose: {
+                                quickModelScope = nil
+                                Task { await loadCreationModels() }
+                            }, onAdvanced: {
+                                quickModelScope = nil
+                                creationPanel = .model(scope)
+                            })
+                        }
                     }
                 }
                 .sheet(isPresented: $selecting) {
@@ -272,14 +296,6 @@ struct ConversationMenu: View {
                         Divider().padding(.leading, 60)
                         Button { metadata = true } label: { SettingRow(icon: "info.circle", title: "会话信息", chevron: true) }
                         Divider().padding(.leading, 60)
-                        if let thread = model.selectedThread, !model.conversationReadOnly {
-                            Button {
-                                let target = ConversationActionTarget(scope: model.scope, threadID: thread.id)
-                                Task { if await model.perform("compact", target: target) { dismiss() } }
-                            } label: { SettingRow(icon: "arrow.down.right.and.arrow.up.left", title: "压缩上下文") }
-                                .disabled(!model.canInteract(.edit) || model.state != "idle" || !model.history["controls"]["requests"].array.isEmpty)
-                            Divider().padding(.leading, 60)
-                        }
                         if let thread = model.selectedThread, !model.conversationReadOnly,
                            model.status["supportsSessionLoading"].bool == true,
                            !model.canInteract || model.history["executionBackend"].text == "carryon-owner" {

@@ -71,9 +71,10 @@ for(const width of [390,1440,320,768])for(const colorScheme of ['light','dark'])
  if(width>=761){
   assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).fontSize),'16px','official rem baseline');
   const account=await page.locator('#account-menu').boundingBox(),sidebar=await page.locator('main > aside').boundingBox();
-  assert(account.x>=sidebar.x&&account.x+account.width<=sidebar.x+sidebar.width,'account stays inside sidebar');
+  assert(account.x>=0&&account.x+account.width<=sidebar.x,'account stays in the left navigation rail');
+  assert.equal(Math.round(sidebar.x),52,'navigation rail matches the reference');
   const handle=page.getByRole('separator',{name:'调整侧栏宽度'});await handle.focus();await page.keyboard.press('ArrowRight');
-  assert.equal(Math.round((await page.locator('main > aside').boundingBox()).width),285);await page.keyboard.press('ArrowLeft');await page.locator('#title').focus();
+  assert.equal(Math.round((await page.locator('main > aside').boundingBox()).width),298);await page.keyboard.press('ArrowLeft');await page.locator('#title').focus();
  }
  await page.screenshot({path:prefix+'-chat.png'});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'chat stays within viewport');

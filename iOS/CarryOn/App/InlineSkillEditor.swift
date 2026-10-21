@@ -54,6 +54,17 @@ private final class SkillAttachment: NSTextAttachment {
 }
 
 private final class SkillTextView: UITextView {
+    var focusOnAttach = false
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil, focusOnAttach {
+            focusOnAttach = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil, self.isEditable else { return }
+                self.becomeFirstResponder()
+            }
+        }
+    }
     override func copy(_ sender: Any?) {
         let value = NSMutableAttributedString(attributedString: attributedText.attributedSubstring(from: selectedRange))
         var tokens: [(NSRange, String)] = []
@@ -80,10 +91,14 @@ struct InlineSkillEditor: UIViewRepresentable {
     @Binding var selection: Int
     var editable: Bool
     var placeholder: String
+    var autofocus = false
+    var onEditingChanged: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = SkillTextView()
+        view.focusOnAttach = autofocus
+        view.accessibilityIdentifier = "carryon-composer-editor"
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.textContainerInset = .zero
@@ -144,6 +159,8 @@ struct InlineSkillEditor: UIViewRepresentable {
         var rendered: ComposerDocument?
         var renderedFont: UIFont?
         var updating = false
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.onEditingChanged?(true) }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.onEditingChanged?(false) }
         func textViewDidChangeSelection(_ textView: UITextView) {
             if !updating { parent.selection = textView.selectedRange.location }
         }

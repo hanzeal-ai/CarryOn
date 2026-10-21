@@ -17,11 +17,19 @@ private final class VisualTransport: URLProtocol, @unchecked Sendable {
         }
         let requestBody = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] ?? [:]
         let path = requestBody["path"] as? String ?? ""
-        let projects = ["openai", "superassistant", "codex"].map { ["id": $0, "name": $0, "title": $0, "cwd": "/workspace/" + $0, "total": 3] as [String: Any] }
-        let threads: [[String: Any]] = [["id": "recent", "title": "检查项目改动", "cwd": "/workspace/codex", "runtime": ["type": "idle"], "status": ["state": "idle", "label": "已完成"], "updatedAt": 1_790_899_200]]
+        let projects = ["openai", "superassistant", "codex"].map { ["id": $0, "name": $0, "title": $0, "cwd": "/workspace/" + $0, "total": 1] as [String: Any] }
+        let threads: [[String: Any]] = [
+            ["id": "recent", "title": "检查项目改动", "projectId": "codex", "projectName": "codex", "cwd": "/workspace/codex", "runtime": ["type": "idle"], "status": ["state": "idle", "label": "已完成"], "updatedAt": 1_790_899_200],
+            ["id": "running", "title": "完善移动端交互", "projectId": "openai", "projectName": "openai", "runtime": ["type": "running"], "status": ["state": "running", "label": "执行中"]],
+            ["id": "waiting", "title": "核对样式与截图", "projectId": "superassistant", "projectName": "superassistant", "runtime": ["type": "idle"], "status": ["state": "idle", "label": "已完成"]]
+        ]
         let field = path.hasPrefix("/api/projects") ? "projects" : "threads"
-        let rows = field == "projects" ? projects : threads
-        let response: [String: Any] = [field: rows, "total": rows.count, "nextOffset": rows.count]
+        let query = URLComponents(string: "https://fixture.invalid" + path)?.queryItems?.first { $0.name == "search" }?.value ?? ""
+        let rows = field == "projects" ? projects : threads.filter { query.isEmpty || ($0["title"] as? String ?? "").localizedCaseInsensitiveContains(query) }
+        var response: [String: Any] = [field: rows, "total": rows.count, "nextOffset": rows.count]
+        if path.hasPrefix("/api/models") {
+            response = ["models": [["id": "fixture-model", "name": "Fixture", "efforts": ["low", "medium", "high"], "defaultEffort": "medium"]]]
+        }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: response)); client?.urlProtocolDidFinishLoading(self)
     }

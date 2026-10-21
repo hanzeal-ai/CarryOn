@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/message-markdown.css">
   <script src="/message-markdown.js" defer></script>
   <script src="/timeline.js" defer></script>
+  <script src="/elicitation-form.js" defer></script>
   <script src="/operations.js" defer></script>
   <script src="/client.js" defer></script>
   <script src="/cloud-console-client.js" defer></script>
@@ -45,15 +46,17 @@
   <script src="/section-controls.js" defer></script>
   <script src="/sections-sidebar.js" defer></script>
   <script src="/search-controls.js" defer></script>
+<script src="/account-controls.js" defer></script>
 <script src="/app.js" defer></script>
   <script src="/workspace-binding.js" defer></script>
   <script src="/desktop-ui.js" defer></script>
   <script src="/mobile-ui.js" defer></script>
+  <link rel="stylesheet" href="/interface.css">
 </head>
 <body class="booting">
   <header>
     <div class="brand"><img class="mark" src="/logo.svg" alt="" width="42" height="42"><div><strong>CarryOn</strong></div></div>
-    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><span id="status" class="badge">等待连接</span><details id="account-menu" class="account-menu"><summary aria-label="设置与账户"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m9 3-1 3-3 1-2 3 2 2v3l3 2 1 3h6l1-3 3-2v-3l2-2-2-3-3-1-1-3z"/></svg></summary><div class="account-panel"><button id="console-requests" hidden>连接申请</button><button id="open-archives">已归档</button><button id="notification-settings" class="quiet">通知设置</button><label id="inactive-preference"><span>显示不活跃会话</span><input id="show-inactive" type="checkbox"></label><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
+    <div class="connection"><div class="device-picker"><select id="console-device" aria-label="云端设备" hidden></select></div><span id="status" class="badge">等待连接</span><details id="account-menu" class="account-menu"><summary aria-label="设置与账户"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m9 3-1 3-3 1-2 3 2 2v3l3 2 1 3h6l1-3 3-2v-3l2-2-2-3-3-1-1-3z"/></svg></summary><div class="account-panel"><button id="open-settings">设置</button><button id="console-requests" hidden>连接申请</button><button id="open-archives">已归档</button><button id="notification-settings" class="quiet">通知设置</button><label id="inactive-preference"><span>显示不活跃会话</span><input id="show-inactive" type="checkbox"></label><button id="console-standby" hidden>查看远程待机</button><button id="console-remove-device" hidden>移除当前设备</button><button id="console-logout" class="danger-text" hidden>退出登录</button></div></details></div>
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <section id="pairing" class="pairing" hidden aria-labelledby="auth-title">
@@ -82,7 +85,7 @@
     </aside>
     <section class="conversation">
       <div class="conversation-head"><div><h2 id="title" tabindex="-1">CarryOn</h2><p id="cwd"></p></div><span id="history-source"></span></div>
-      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="move-section" disabled hidden>移动到分组</button><button id="manage-plugins" hidden>插件</button><button id="manage-skills" hidden>管理技能</button><button id="open-terminals" hidden>后台终端</button><button id="rename-thread" disabled>重命名</button><button id="archive-thread" disabled>归档会话</button><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="view-changes" class="quiet">查看改动</button><button id="jump-latest" class="quiet" hidden>回到最新</button><button id="open-side" class="quiet" disabled>临时聊天</button><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
+      <div class="timeline-toolbar"><span id="runtime" role="status"></span><div><details class="display-menu"><summary aria-label="会话菜单">···</summary><div><button id="move-section" disabled hidden>移动到分组</button><button id="manage-plugins" hidden>插件</button><button id="manage-skills" hidden>管理技能</button><button id="open-terminals" hidden>后台终端</button><button id="session-control" hidden disabled>加载会话</button><button id="rename-thread" disabled>重命名</button><button id="archive-thread" disabled>归档会话</button><button id="open-subagents" class="quiet" disabled>子会话</button></div></details><button id="view-changes" class="quiet">查看改动</button><button id="jump-latest" class="quiet" hidden>回到最新</button><button id="open-side" class="quiet" disabled>临时聊天</button><details class="session-actions" hidden><summary>会话操作</summary><section id="operations" aria-label="会话操作" hidden></section></details><details class="session-info"><summary>会话信息</summary><div id="conversation-info"></div></details></div></div>
       <div id="messages" class="messages" aria-live="polite"><div class="welcome"><span class="welcome-icon"><img src="/logo.svg" alt="" width="48" height="48"></span><h2>选择会话，继续工作</h2></div></div>
 
       <section id="requests" aria-label="待处理请求" hidden></section>
@@ -116,7 +119,7 @@
   <dialog id="create-dialog">
     <form id="create-form">
       <div class="dialog-head"><h2>新建会话</h2><button type="button" id="close-dialog" class="quiet" aria-label="关闭弹窗">✕</button></div>
-      <div class="new-task-hero"><img src="/logo.svg" alt=""><h1>新建会话</h1></div>
+      <div class="new-task-hero"><img src="/logo.svg" alt=""><h1>我们要做什么？</h1></div>
       <label id="new-project-label" for="new-project">项目<select id="new-project" required><option value="">选择项目</option></select></label>
       <label for="new-prompt">任务</label><carryon-composer id="new-prompt" placeholder="描述你希望完成的任务…"></carryon-composer>
       <div id="new-upload-previews" class="upload-previews" aria-live="polite" hidden></div>

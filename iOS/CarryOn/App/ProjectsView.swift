@@ -3,9 +3,11 @@ import CarryOnCore
 
 @MainActor @Observable final class HomeNavigationState {
     var creating = false
+    var creationProject: String? = nil
     var choosingWorkspace = false
     var browsingProjects = false
     var browsingThreads = false
+    var searchingHome = false
     var browsingArchives = false
     var searchingContent = false
     var browsingSections = false
@@ -20,56 +22,59 @@ struct ProjectsView: View {
     @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
     @State private var projectSearch = RecordListState()
     @State private var threadSearch = RecordListState()
+    @FocusState private var homeSearchFocused: Bool
     var body: some View {
         @Bindable var model = model
         ScrollViewReader { proxy in
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                if let workspace = model.selectedWorkspace {
-                    HStack {
-                        Text(workspace.title).font(.subheadline).foregroundStyle(Design.secondary).lineLimit(1)
-                        Spacer()
-                        Menu {
-                            ForEach(workspace.connections) { connection in
-                                Button { if connection.id != model.selectedDevice { model.switchDevice(connection.id) } } label: {
-                                    if connection.id == model.selectedDevice {
-                                        Label(WorkspaceGroup.connectionLabel(connection), systemImage: "checkmark")
-                                    } else { Text(WorkspaceGroup.connectionLabel(connection)) }
-                                }
-                            }
-                        } label: { Label(model.connectionTitle, systemImage: "arrow.left.arrow.right") }
-                        .accessibilityLabel("切换连接")
-                    }
-                }
-                Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4).padding(.bottom, 5)
+            VStack(alignment: .leading, spacing: 20) {
+                workspaceFilters
                 if model.status["supportsThreadSections"].bool == true { PinnedThreadsSummary { navigation.browsingSections = true } }
                 VStack(alignment: .leading, spacing: 8) {
-                    homeHeading("项目", more: listState.records.count > 5) { navigation.browsingProjects = true }
-                    VStack(spacing: 0) {
-                    ForEach(Array(listState.records.prefix(5))) { record in
-                        Button { model.selectedProject = record } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: "folder").font(.system(size: 20)).frame(width: 24)
-                                Text(record.title).font(.body).lineLimit(1)
-                                Spacer(minLength: 0)
-                            }.frame(minHeight: 44).contentShape(Rectangle())
-                        }.buttonStyle(.plain).id(record.id)
+                    homeHeading("项目", more: listState.total > listState.records.count) { navigation.browsingProjects = true }
+                    ForEach(listState.records) { project in
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 12) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "folder").font(.system(size: 20)).accessibilityHidden(true)
+                                    Text(project.title).font(.body).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }.frame(minHeight: 44)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityAddTraits(.isHeader)
+                                Button {
+                                    navigation.creationProject = project.id
+                                    navigation.creating = true
+                                } label: { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
+                                    .foregroundStyle(Design.secondary).disabled(!model.canWrite(.create) || project.value["canCreate"].bool == false)
+                                    .accessibilityLabel("在 " + project.title + " 新建会话")
+                            }
+                            let threads = threadListState.records.filter { $0.value["projectId"].string == project.id }
+                            ForEach(threads) { record in homeThread(record).padding(.leading, 32) }
+                            if (project.value["total"].int ?? 0) > threads.count {
+                                Button("查看全部") { model.selectedProject = project }
+                                    .font(.subheadline).foregroundStyle(Design.secondary)
+                                    .frame(minHeight: 44).padding(.leading, 32)
+                            }
+                        }.id(project.id)
                     }
-                    }.scrollTargetLayout()
                     homeStatus(listState)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    homeHeading("最近会话", more: threadListState.total > 20) { navigation.browsingThreads = true }
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(threadListState.records.prefix(20))) { record in
-                            Button { model.open(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
-                                .onAppear { threadListState.visibleThreadIDs.insert(record.id); watchRecents() }
-                                .onDisappear { threadListState.visibleThreadIDs.remove(record.id); watchRecents() }
-                        }
-                    }.scrollTargetLayout()
-                    homeStatus(threadListState)
+                let ungrouped = threadListState.records.filter { record in
+                    !listState.records.contains { $0.id == record.value["projectId"].string }
                 }
-            }.padding(.horizontal, 24).padding(.bottom, 24).frame(maxWidth: .infinity, alignment: .leading)
+                if !ungrouped.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        homeHeading("最近会话", more: threadListState.total > threadListState.records.count) { navigation.browsingThreads = true }
+                        ForEach(ungrouped) { record in homeThread(record) }
+                    }
+                }
+                if threadListState.failure != nil || threadListState.records.isEmpty { homeStatus(threadListState) }
+                if threadListState.total > threadListState.records.count {
+                    Button("查看全部会话") { navigation.browsingThreads = true }
+                        .font(.subheadline).foregroundStyle(Design.secondary).frame(minHeight: 44)
+                }
+            }.padding(.horizontal, 20).padding(.bottom, 20).frame(maxWidth: .infinity, alignment: .leading)
         }.scrollPosition(id: $listState.scrollID, anchor: .top).background(Design.canvas)
             .task {
                 if let anchor = listState.scrollID {
@@ -78,6 +83,34 @@ struct ProjectsView: View {
                 }
             }
         }
+            .accessibilityHidden(navigation.searchingHome && !threadSearch.search.isEmpty)
+            .overlay {
+                if navigation.searchingHome && !threadSearch.search.isEmpty {
+                    VStack(spacing: 8) {
+                        workspaceFilters.padding(.horizontal, 20)
+                        RecordListView(path: "/api/workspace/threads", key: "threads", controlsVisible: false, compactRows: true, state: threadSearch) { model.open($0) }
+                    }.background(Design.canvas)
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if navigation.searchingHome {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(Design.secondary)
+                            TextField("搜索聊天", text: $threadSearch.search).focused($homeSearchFocused)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
+                            if !threadSearch.search.isEmpty {
+                                Button { threadSearch.search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Design.secondary) }.accessibilityLabel("清除搜索")
+                            }
+                        }.padding(.horizontal, 14).frame(minHeight: 44).background(Design.input, in: Capsule())
+                        Button { homeSearchFocused = false; threadSearch.search = ""; navigation.searchingHome = false } label: {
+                            Image(systemName: "xmark").font(.title3).frame(width: 44, height: 44)
+                        }.accessibilityLabel("关闭搜索")
+                    }.padding(.horizontal, 20).padding(.vertical, 8).background(Design.canvas)
+                        .onAppear { homeSearchFocused = true }
+                }
+            }
+            .toolbar(navigation.searchingHome ? .hidden : .visible, for: .navigationBar)
             .refreshable { await loadHome(refresh: true, fullSync: true) }
             .task(id: model.scope) { projectSearch.reset(); threadSearch.reset(); await loadHome(refresh: false) }
             .onChange(of: showInactiveConversations) { _, _ in Task { await loadHome(refresh: true) } }
@@ -85,11 +118,26 @@ struct ProjectsView: View {
             .onChange(of: model.connected) { _, connected in if connected { Task { await loadHome(refresh: true) } } }
             .onAppear { threadListState.isVisible = true; watchRecents() }
             .onDisappear { threadListState.isVisible = false; model.watchList(threadListState.watchID, threads: []) }
+            .navigationTitle("CarryOn").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { navigation.creating = true } label: {
-                        Image(systemName: "square.and.pencil").frame(width: 44, height: 44)
-                    }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+                    Button { navigation.searchingHome = true } label: {
+                        Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+                    }.accessibilityLabel("搜索会话")
+                }.carryOnFlatToolbar()
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !navigation.searchingHome {
+                Button { navigation.creationProject = nil; navigation.creating = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus").font(.system(size: 22))
+                        Text("向 CarryOn 提问").font(.body).foregroundStyle(Design.secondary)
+                        Spacer(minLength: 0)
+                        Image(systemName: "square.and.pencil").font(.system(size: 18))
+                    }.padding(.horizontal, 16).frame(minHeight: 48)
+                        .background(Design.input, in: Capsule())
+                }.buttonStyle(.plain).disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+                    .padding(.horizontal, 32).padding(.vertical, 8).background(Design.canvas)
                 }
             }
             .sheet(isPresented: $navigation.browsingSections) { NativeSectionsView() }
@@ -112,7 +160,7 @@ struct ProjectsView: View {
                 RecordListView(path: "/api/projects/\(ConsoleAddress.component(project.id))/threads", key: "threads") { model.open($0) }
                     .navigationTitle(project.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                        Button { navigation.creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+                        Button { navigation.creationProject = project.id; navigation.creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                     } }
                     .navigationDestination(isPresented: Binding(get: { model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                         if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
@@ -120,7 +168,60 @@ struct ProjectsView: View {
             }
         }.background(Design.canvas)
             .sheet(isPresented: $navigation.choosingWorkspace) { WorkspaceSwitcher() }
-            .fullScreenCover(isPresented: $navigation.creating) { NewConversationView() }
+            .fullScreenCover(isPresented: $navigation.creating) { NewConversationView(initialProject: navigation.creationProject) }
+    }
+    private var workspaceFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(model.workspaceGroups) { workspace in
+                        Section(workspace.title) {
+                            ForEach(workspace.connections) { connection in
+                                Button { if connection.id != model.selectedDevice { model.switchDevice(connection.id) } } label: {
+                                    Label(WorkspaceGroup.connectionLabel(connection), systemImage: connection.id == model.selectedDevice ? "checkmark" : "laptopcomputer")
+                                }
+                            }
+                        }
+                    }
+                    Button("管理工作区") { navigation.choosingWorkspace = true }
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle().fill(model.connected ? Design.green : Design.secondary).frame(width: 5, height: 5)
+                        Image(systemName: "laptopcomputer")
+                        Text(model.selectedWorkspace?.title ?? model.device?.title ?? "工作区").lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }.font(.subheadline).padding(.horizontal, 16).frame(minHeight: 44)
+                        .background(Design.input, in: Capsule())
+                }.buttonStyle(.plain).accessibilityLabel("切换工作区")
+                if let workspace = model.selectedWorkspace, workspace.connections.count > 1 {
+                    ForEach(workspace.connections) { connection in
+                        Button { if connection.id != model.selectedDevice { model.switchDevice(connection.id) } } label: {
+                            Text(WorkspaceGroup.connectionLabel(connection)).font(.subheadline)
+                                .foregroundStyle(connection.id == model.selectedDevice ? Design.ink : Design.secondary)
+                                .padding(.horizontal, 14).frame(minHeight: 44)
+                                .background(connection.id == model.selectedDevice ? Design.input : .clear, in: Capsule())
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+        }.padding(.top, 8)
+    }
+    private func homeThread(_ record: Record) -> some View {
+        Button { model.open(record) } label: {
+            HStack(spacing: 10) {
+                Text(record.title).font(.body).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 0)
+                let state = model.listStatus(record)["state"].text
+                if state == "running" { ProgressView().controlSize(.small) }
+                else if state == "waiting" { Image(systemName: "exclamationmark.circle").foregroundStyle(Design.orange) }
+                else if state == "error" || record.value["failed"].bool == true { Image(systemName: "exclamationmark.circle").foregroundStyle(.red) }
+                else if ["unknown", "loading", "notLoaded"].contains(state) { Image(systemName: "questionmark.circle").foregroundStyle(Design.secondary) }
+                else if record.value["unread"].bool == true { Circle().fill(Design.blue).frame(width: 7, height: 7) }
+            }.frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain).id(record.id)
+            .accessibilityValue(model.listStatus(record)["label"].text)
+            .onAppear { threadListState.visibleThreadIDs.insert(record.id); watchRecents() }
+            .onDisappear { threadListState.visibleThreadIDs.remove(record.id); watchRecents() }
     }
     private func homeHeading(_ title: String, more: Bool, action: @escaping () -> Void) -> some View {
         HStack {
@@ -183,6 +284,8 @@ struct RecordListView: View {
     let path: String
     let key: String
     var isProjectList = false
+    var controlsVisible = true
+    var compactRows = false
     var retainReadActivity = false
     var excludedThreadID: String?
     var beforeActivityOpen: (() -> Void)?
@@ -194,6 +297,7 @@ struct RecordListView: View {
     private var queryIdentity: String { model.scope + path + state.search + state.filter + String(showInactiveConversations) + (excludedThreadID ?? "") }
     var body: some View {
         VStack(spacing: 0) {
+            if controlsVisible {
             VStack(spacing: 8) {
                 SearchField(text: $state.search, placeholder: isProjectList ? "搜索项目" : "搜索会话")
                 if !isProjectList {
@@ -205,6 +309,7 @@ struct RecordListView: View {
                     }.pickerStyle(.segmented).accessibilityIdentifier("conversation-filter")
                 }
             }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+            }
             ScrollViewReader { proxy in
               ScrollView {
                 VStack(spacing: 16) {
@@ -232,11 +337,11 @@ struct RecordListView: View {
                                     ActivityRow(record: record, scope: model.scope, dimmed: retainReadActivity && record.value["activityRead"].bool == true, beforeOpen: beforeActivityOpen)
                                         .id(record.id)
                                 } else {
-                                    Button { select(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
+                                    Button { select(record) } label: { ThreadRow(record: record, compact: compactRows) }.buttonStyle(.plain).id(record.id)
                                         .onAppear { state.visibleThreadIDs.insert(record.id); syncListWatch() }
                                         .onDisappear { state.visibleThreadIDs.remove(record.id); syncListWatch() }
                                 }
-                                if record.id != state.records.last?.id { Divider().padding(.leading, 16) }
+                                if !compactRows && record.id != state.records.last?.id { Divider().padding(.leading, 16) }
                             }
                         }.scrollTargetLayout()
                     }

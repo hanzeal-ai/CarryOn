@@ -571,3 +571,32 @@ test('project files preserve search identity and original submission across relo
  await assert.rejects(restored.client.submit('compose','thread','',[],()=>true,[],[],[{...files[0],query:'source'}]),/lost/);assert.equal(restored.requests[0].body.requestId,id);
  await assert.rejects(restored.client.submit('compose','thread','',[],()=>true,[],[],files),/lost/);assert.notEqual(restored.requests[1].body.requestId,id);
 });
+
+
+test('session controls query uncertain receipt without replay and reject foreign identity',async()=>{
+ const f=fixture();let id;
+ f.respond(async()=>{const request=f.requests.at(-1);id=request.body?.requestId||id;return {ok:true,json:async()=>({id,threadId:'thread',kind:'session:load',state:'uncertain'})};});
+ assert.equal((await f.client.controlSession('thread','load')).state,'uncertain');
+ assert.equal((await f.client.controlSession('thread','release')).state,'uncertain');
+ assert.equal(f.requests.filter(r=>r.body).length,1);
+ f.respond(async()=>({ok:true,json:async()=>({id,threadId:'foreign',kind:'session:load',state:'failed'})}));
+ await assert.rejects(f.client.controlSession('thread','load'),/身份/);
+ assert(f.client.operations.has('session:thread'));
+ f.respond(async()=>({ok:true,json:async()=>({id,threadId:'thread',kind:'session:load',state:'completed',result:{threadId:'thread',state:'loaded'}})}));
+ assert.equal((await f.client.controlSession('thread','load')).state,'completed');
+ assert(!f.client.operations.has('session:thread'));
+});
+test('session controls retain wrong initial receipts and do not write after selection change',async()=>{
+ const f=fixture();f.respond(async()=>({ok:true,json:async()=>({id:'foreign',threadId:'thread',kind:'session:release',state:'completed',result:{threadId:'thread',state:'released'}})}));
+ assert.equal((await f.client.controlSession('thread','release')).state,'uncertain');assert(f.client.operations.has('session:thread'));
+ await assert.rejects(f.client.controlSession('other','load',()=>false),/会话/);
+ assert.equal(f.requests.filter(r=>r.body).length,1);
+});
+
+test('session controls keep incomplete admission and mismatched action results pending',async()=>{
+ for(const [state,result] of [['accepted',null],['completed',{threadId:'thread',state:'released'}]]){
+  const f=fixture();f.respond(async()=>({ok:true,json:async()=>({id:f.requests.at(-1).body.requestId,threadId:'thread',kind:'session:load',state,result})}));
+  assert.equal((await f.client.controlSession('thread','load')).state,'uncertain');
+  assert(f.client.operations.has('session:thread'));
+ }
+});

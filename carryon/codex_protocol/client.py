@@ -251,7 +251,8 @@ class ProtocolClient:
 
     def _apply(self, event, tid):
         method, params = event['method'], event.get('params', {})
-        if method in ('thread/started', 'thread/archived', 'thread/unarchived', 'thread/name/updated'):
+        if method in ('thread/started', 'thread/archived', 'thread/unarchived', 'thread/name/updated',
+                      'thread/deleted', 'project/changed', 'thread/project/updated'):
             self.events.catalog_revision += 1
         if method == 'serverRequest/resolved':
             waiter = self.response_waiters.get((tid, type(params.get('requestId')), params.get('requestId')))

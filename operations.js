@@ -12,7 +12,14 @@ const Operations = (() => {
   const el = (tag, text) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const box = id => document.getElementById(id);
   box('question-later').onclick=()=>box('question-dialog').close();
-  function reset() {currentHistory=null;modelCatalog=null;messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  function reset() {suspendedControls.clear();window.DesktopUI?.restoreOperations();currentHistory=null;modelCatalog=null;messageEditor?.remove();messageEditor=null;messageEditorKey='';window.MobileUI?.resetOperations();selected=null;signature='';box('question-dialog').close();box('question-content').replaceChildren();seenQuestions.clear();box('operations').closest('.session-actions').hidden=true;for(const id of ['operations','requests']){box(id).replaceChildren();box(id).hidden=true;}}
+  const suspendedControls=new Map();
+  function suspend(){
+    writable=false;signature='';
+    for(const container of [box('operations'),box('requests'),box('question-content'),messageEditor,document.querySelector('.desktop-action-dialog')]){
+      if(container)for(const control of container.querySelectorAll('button')){if(control.parentElement?.classList.contains('desktop-action-dialog'))continue;if(!suspendedControls.has(control))suspendedControls.set(control,control.disabled);control.disabled=true;}
+    }
+  }
   async function send(target, action, fields, button) {
     if(target!==selected||!writable||!currentHistory?.controls?.supportedOperations?.includes(action))return;
     button.disabled=true;
@@ -123,6 +130,7 @@ const Operations = (() => {
     load();
   }
   function render(history, threadId, api, notice, canWrite=true, forkOptions) {
+    for(const [control,disabled] of suspendedControls)control.disabled=disabled;suspendedControls.clear();
     currentHistory=history;
     writable=canWrite&&history.access?.canInteract!==false;
     if(history.access?.canInteract===false){reset();return;}
@@ -133,13 +141,14 @@ const Operations = (() => {
     const forkRows=c.supportedOperations?.includes('fork')?[...new Map((history.timeline||[]).filter(item=>item.type==='userMessage'&&item.turnId&&item.turnId!==c.activeTurnId).map(item=>[item.turnId,{id:item.turnId,text:(item.text||'用户消息').slice(0,80)}])).values()]:[];
     const next=JSON.stringify([threadId,c,history.runtime,history.status,history.queue,canWrite,forkOptions?.allowed,forkRows]);
     if(next===signature)return;
-    window.MobileUI?.beforeOperationsRender();
     const same=selected===threadId;
+    const resumeDesktop=window.DesktopUI?.beforeOperationsRender(same);
+    window.MobileUI?.beforeOperationsRender();
     const opened=same?new Set([...box('operations').querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent)):new Set();
     const allDrafts=same?new Map([...box('operations').querySelectorAll('[data-draft-key]'),...box('requests').querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')].map(n=>[n.dataset.draftKey,n.value])):new Map();
     const focused=document.activeElement;
     const dialogWasOpen=same&&box('question-dialog').open;
-    box('question-dialog').close();
+    if(!same)box('question-dialog').close();
     box('question-content').replaceChildren();
     const draft=same&&focused?.dataset.draftKey?{key:focused.dataset.draftKey,value:focused.value,start:focused.selectionStart,end:focused.selectionEnd}:null;
     selected=threadId;signature=next;
@@ -202,7 +211,12 @@ const Operations = (() => {
         if(c.supportedOperations.includes('queue-add')){
         const input=field(queue,'下一轮任务','',true);
         input.parentElement.classList.add('mobile-redundant-operation');
-        button(queue,'加入队列',b=>send(threadId,'queue-add',{...base,prompt:input.value},b)).classList.add('mobile-redundant-operation');
+        button(queue,'加入队列',async b=>{
+          const prompt=input.value,epoch=api.epoch;if(!prompt.trim())return;
+          if(await send(threadId,'queue-add',{...base,prompt},b)&&selected===threadId&&transport===api&&api.epoch===epoch){
+            for(const field of document.querySelectorAll('.mobile-queue [data-draft-key]'))if(field.dataset.draftKey===input.dataset.draftKey&&field.value===prompt)field.value='';
+          }
+        }).classList.add('mobile-redundant-operation');
         }
         const list=el('div');queue.append(list);
         if(!q.messages.length)list.append(el('p','暂无排队任务'));
@@ -228,6 +242,8 @@ const Operations = (() => {
     for(const r of c.requests){
       const card=el('section');card.className='request-card';card.dataset.action=r.action;card.append(el('h3',labels[r.action]));
       const detail=el('details');detail.append(el('summary','查看请求内容'));const pre=el('pre',JSON.stringify(r.params,null,2));detail.append(pre);card.append(detail);
+      const problem=el('p');problem.setAttribute('role','alert');card.append(problem);
+      const report=message=>{problem.textContent=message;};
       const base={nativeRequestId:r.id,requestFingerprint:r.fingerprint};
       const respond=(fields,b)=>send(threadId,r.action,{...base,...fields},b);
       if(['command-approval','file-approval'].includes(r.action)){
@@ -239,8 +255,9 @@ const Operations = (() => {
         }
       }else if(r.action==='permissions-approval'){
         const scopeLabel=el('label','授权有效期'), scope=el('select');scope.append(new Option('仅本轮','turn'),new Option('整个会话','session'));scopeLabel.append(scope);card.append(scopeLabel);
-        const response=field(card,'授予权限 JSON',JSON.stringify(r.params.permissions||{},null,2),true);
-        const reviewLabel=el('label','继续逐条审查本轮命令'), review=el('input');review.type='checkbox';reviewLabel.append(review);card.append(reviewLabel);
+        const advanced=el('details');advanced.append(el('summary','调整请求的权限'));card.append(advanced);
+        const response=field(advanced,'授予权限 JSON',JSON.stringify(r.params.permissions||{},null,2),true);
+        const reviewLabel=el('label','继续逐条审查本轮命令'), review=el('input');review.type='checkbox';review.checked=true;reviewLabel.append(review);card.append(reviewLabel);
         button(card,'授予所选权限',b=>{try{const permissions=JSON.parse(response.value);if(confirm('确认授予填写的权限，期限为'+(scope.value==='session'?'整个会话':'本轮')+'？'))respond({response:{permissions,scope:scope.value,strictAutoReview:review.checked}},b);}catch(e){notice('权限 JSON 格式错误：'+e.message);}});
         button(card,'拒绝',b=>respond({decision:'decline'},b));
       }else if(r.action==='user-input'){
@@ -250,10 +267,12 @@ const Operations = (() => {
           if(q.options?.length){const choices=el('div');for(const o of q.options){const choice=button(choices,o.label,()=>{n.value=o.label;});if(o.description)choice.append(el('small',o.description));}card.append(choices);}
           return [q.id,n];
         });
-        button(card,'提交回答',async b=>{if(inputs.some(([,n])=>!n.value.trim())){notice('请回答全部问题');return;}if(await respond({answers:Object.fromEntries(inputs.map(([id,n])=>[id,[n.value]]))},b))box('question-dialog').close();});
+        button(card,'提交回答',async b=>{if(inputs.some(([,n])=>!n.value.trim())){report('请回答全部问题');return;}if(await respond({answers:Object.fromEntries(inputs.map(([id,n])=>[id,[n.value]]))},b))box('question-dialog').close();});
       }else{
-        const input=field(card,'回应内容（JSON 对象；无内容时留空）','',true);
-        button(card,'允许并提交',b=>{try{const content=input.value.trim()?JSON.parse(input.value):null;if(confirm('确认已查看请求并提交此回应？'))respond({response:{action:'accept',content}},b);}catch(e){notice('JSON 格式错误：'+e.message);}});
+        if(ElicitationForm.supports(r.params.requestedSchema)){
+          const values=ElicitationForm.render(card,r.params.requestedSchema);
+          button(card,'提交',b=>{try{respond({response:{action:'accept',content:values()}},b);}catch(e){report(e.message);}});
+        }else card.append(el('p','此请求包含暂不支持的表单，请在 Codex App 完成。'));
         button(card,'拒绝',b=>respond({response:{action:'decline'}},b));
         button(card,'取消',b=>respond({response:{action:'cancel'}},b));
       }
@@ -266,6 +285,7 @@ const Operations = (() => {
         if(dialogWasOpen||!seenQuestions.has(key)){seenQuestions.add(key);open();}
       }else requests.append(card);
     }
+    if(!box('question-content').children.length)box('question-dialog').close();
     for(const d of root.querySelectorAll('details'))if(opened.has(d.querySelector('summary')?.textContent))d.open=true;
     const fields=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]'),...box('question-content').querySelectorAll('[data-draft-key]')];
     for(const input of fields)if(allDrafts.has(input.dataset.draftKey))input.value=allDrafts.get(input.dataset.draftKey);
@@ -276,9 +296,10 @@ const Operations = (() => {
     if(!canWrite)for(const container of [root,requests,box('question-content')])for(const control of container.querySelectorAll('button,input,select,textarea'))control.disabled=true;
     window.MobileUI?.decorate(root);
     if(draft){
-      const input=[...root.querySelectorAll('[data-draft-key]'),...requests.querySelectorAll('[data-draft-key]')].find(n=>n.dataset.draftKey===draft.key);
+      const input=fields.find(n=>n.dataset.draftKey===draft.key);
       if(input){input.value=draft.value;input.focus();if(input.setSelectionRange&&draft.start!==null)input.setSelectionRange(draft.start,draft.end);}
     }
+    resumeDesktop?.();
   }
-  return {render,reset,labels,renderModelSettings};
+  return {render,reset,suspend,labels,renderModelSettings};
 })();

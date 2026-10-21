@@ -91,9 +91,41 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
         try? image.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("conversationvisual.png"))
         var results: [String: Bool] = [:]
         var comparisonLines: [String] = []
+        var compactDiagnostics: [String: Any] = [:]
         func textViews(_ view: UIView) -> [UITextView] {
             (view as? UITextView).map { [$0] } ?? view.subviews.flatMap(textViews)
         }
+
+        let savedDraft = model.draft, savedReferences = model.draftSkills
+        model.draft = ""; model.draftSkills = []
+        try? await Task.sleep(for: .milliseconds(350))
+        let compactEditor = textViews(window).first { $0.accessibilityIdentifier == "carryon-composer-editor" && $0.isEditable }
+        let compactWidth = compactEditor?.bounds.width ?? 0
+        let compactImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        try? compactImage.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("phone-compact-composer.png"))
+        compactEditor?.becomeFirstResponder()
+        try? await Task.sleep(for: .milliseconds(350))
+        let expandedEditor = textViews(window).first { $0.accessibilityIdentifier == "carryon-composer-editor" && $0.isEditable }
+        results["compactExpansionKeepsEditorAndFocus"] = compactEditor != nil && expandedEditor === compactEditor && expandedEditor?.isFirstResponder == true
+        results["expandedEditorGainsHorizontalSpace"] = compactWidth > 0 && (expandedEditor?.bounds.width ?? 0) > compactWidth
+        expandedEditor?.insertText("验证输入不会丢失")
+        try? await Task.sleep(for: .milliseconds(150))
+        results["expandedInputUpdatesExistingDraft"] = model.draft == "验证输入不会丢失" && expandedEditor?.isFirstResponder == true
+        expandedEditor?.resignFirstResponder(); model.draft = ""
+        // Keyboard dismissal and the composer animation settle asynchronously.
+        // Keep the width assertion; wait for its visible result within a bounded deadline.
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(50))
+            if compactEditor?.isFirstResponder == false && abs((compactEditor?.bounds.width ?? 0) - compactWidth) < 1 { break }
+        }
+        results["emptyBlurRestoresCompactLayout"] = compactEditor?.isFirstResponder == false && abs((compactEditor?.bounds.width ?? 0) - compactWidth) < 1
+        compactDiagnostics = ["beforeWidth": compactWidth, "afterWidth": compactEditor?.bounds.width ?? 0,
+                              "focusedAfterBlur": compactEditor?.isFirstResponder ?? false, "draftAfterBlur": model.draft,
+                              "referenceCount": model.draftSkills.count]
+        let blurredImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        try? blurredImage.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("phone-blurred-composer.png"))
+        model.draft = savedDraft; model.draftSkills = savedReferences
+        try? await Task.sleep(for: .milliseconds(150))
 
         let comparisonDraft = model.draft, comparisonReferences = model.draftSkills
         model.draft = "Use \u{fffc} to make a Codex remote app that use the app server. Make a \u{fffc} companion app. Use \u{fffc} and make sure the code is tight."
@@ -228,6 +260,7 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
         results["passed"] = results.values.allSatisfy { $0 }
         var result: [String: Any] = results
         result["comparisonLines"] = comparisonLines
+        result["compactDiagnostics"] = compactDiagnostics
         result["creates"] = ConversationVisualTransport.state.counts.0
         result["sends"] = ConversationVisualTransport.state.counts.1
         result["modelError"] = model.error ?? ""

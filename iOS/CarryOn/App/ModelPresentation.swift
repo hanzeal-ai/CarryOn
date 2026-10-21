@@ -7,6 +7,16 @@ enum ModelPresentation {
         return label.prefix(4).lowercased() == "gpt-" ? String(label.dropFirst(4)) : label
     }
     static func effort(_ value: String) -> String {
-        value.prefix(1).uppercased() + value.dropFirst()
+        switch value {
+        case "none": "无"
+        case "minimal": "最少"
+        case "low": "低"
+        case "medium": "中"
+        case "high": "高"
+        case "xhigh": "超高"
+        case "max": "最高"
+        case "ultra": "极高"
+        default: value.prefix(1).uppercased() + value.dropFirst()
+        }
     }
 }

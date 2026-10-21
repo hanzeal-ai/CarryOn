@@ -52,6 +52,7 @@ class BindingInvites:
     def save(self):
         if self.path:
             save_json(self.path, self.entries)
+        if hasattr(self.server, 'notify_directory'):self.server.notify_directory()
 
     def start(self, data):
         name = data.get('name')
