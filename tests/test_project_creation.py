@@ -9,6 +9,8 @@ from unittest.mock import patch
 from carryon.owner.integration import OwnerBridge
 from carryon.owner.manager import OwnerManager
 from carryon.sessions.creation import submit, resolve_project
+from carryon.sessions.catalog import Catalog
+from native_project_fixture import write_projects
 from carryon.errors import BridgeError
 from carryon.errors import IPCError
 from carryon.store import Journal
@@ -17,8 +19,7 @@ from test_bridge import FakeIPC, CHILD
 from test_owner import Runtime, Bus, state
 
 
-class ProjectCatalog:
-    def __init__(self, home): self.home = home
+class ProjectCatalog(Catalog):
     def get(self, tid): return {'id': tid, 'created_at': time.time()}
     def list(self, *args): return []
 
@@ -27,6 +28,8 @@ class Creator(Runtime):
     hook = None
     error = None
     instances = []
+    def queue_snapshot(self, tid, refresh=False):
+        return {'items': []}
     def request(self, method, params, before_send):
         self.last_settings = params['threadSettings']
         before_send(lambda: self.calls.append(('thread/settings/update', params)))
@@ -61,7 +64,8 @@ class ProjectCreationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.home = Path(self.temp.name)
         self.state = self.home / '.codex-global-state.json'
-        self.state.write_text(json.dumps({'local-projects': {'native-project': {'rootPaths': [str(self.home)]}}}))
+        self.state.write_text(json.dumps({'local-projects': {'obsolete-desktop-id': {'name': 'Old', 'rootPaths': [str(self.home)]}}}))
+        write_projects(self.home, {'native-project': {'name': 'Current', 'rootPaths': [str(self.home)]}})
         self.project = project_identity(str(self.home), native_id='native-project')[0]
         self.journal = Journal(self.home / 'jobs.sqlite')
         self.bridge = OwnerBridge('fake', ProjectCatalog(self.home), self.journal,
@@ -100,6 +104,38 @@ class ProjectCreationTests(unittest.TestCase):
         again = submit(self.bridge, job['id'], prompt, self.project)
         self.assertEqual(again, job); self.assertEqual(len(Creator.instances), 1)
         with self.assertRaises(BridgeError): submit(self.bridge, job['id'], 'different', self.project)
+    def test_projectless_creation_uses_private_directory_without_native_membership(self):
+        job = self.settled(submit(self.bridge, 'no-project', 'hello', None))
+        self.assertEqual(job['state'], 'completed', job)
+        params = Creator.instances[0].calls[0][1]
+        self.assertIsNone(params['projectId'])
+        self.assertEqual(params['cwd'], str(self.manager.directory / 'tasks' / 'no-project'))
+        self.assertTrue(Path(params['cwd']).is_dir())
+        self.assertEqual(submit(self.bridge, 'no-project', 'hello', None), job)
+        self.assertEqual(len(Creator.instances), 1)
+        self.assertTrue(self.bridge.status()['supportsProjectlessCreation'])
+
+    def test_projectless_upload_destination_and_recent_group_are_equivalent(self):
+        from carryon.uploads import target_identity
+        expected = {'type': 'creation', 'projectId': None}
+        self.assertEqual(target_identity(self.bridge, {'type': 'creation'}), expected)
+        self.assertEqual(target_identity(self.bridge, {'type': 'creation', 'projectId': project_identity(None)[0]}), expected)
+        job = self.settled(submit(self.bridge, 'recent-create', 'hello', project_identity(None)[0]))
+        self.assertEqual(job['state'], 'completed', job)
+        self.assertIsNone(Creator.instances[0].calls[0][1]['projectId'])
+
+    def test_projectless_rejects_unexpected_native_membership_before_sending(self):
+        original = Creator.create_thread
+        def wrong(runtime, params, before_send):
+            meta = original(runtime, params, before_send)
+            meta['projectId'] = 'unexpected'
+            return meta
+        with patch.object(Creator, 'create_thread', wrong):
+            job = self.settled(submit(self.bridge, 'wrong-membership', 'hello', None))
+        self.assertEqual(job['state'], 'uncertain')
+        self.assertEqual(job['createdThreadId'], CHILD)
+        self.assertEqual([c[0] for c in Creator.instances[0].calls], ['thread/start'])
+
     def test_same_request_concurrently_creates_once(self):
         entered = threading.Event(); proceed = threading.Event()
         Creator.hook = lambda _: (entered.set(), proceed.wait(2))
@@ -154,7 +190,7 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual(submit(self.bridge, job['id'], 'task', self.project, settings={'approvalPolicy': 'on-request'})['id'], job['id'])
         self.assertEqual(len(Creator.instances), 1)
     def test_invalid_project_and_missing_directory_do_not_start_runtime(self):
-        for project in (None, project_identity('/other')[0]):
+        for project in ('', project_identity('/other')[0]):
             with self.assertRaises((ValueError, BridgeError)): submit(self.bridge, 'bad-project', 'hello', project)
         with patch('carryon.sessions.creation.Path.is_dir', return_value=False):
             with self.assertRaises(BridgeError): submit(self.bridge, 'bad-directory', 'hello', self.project)
@@ -168,7 +204,7 @@ class ProjectCreationTests(unittest.TestCase):
         self.assertEqual(job['state'], 'failed'); self.assertEqual(Creator.instances[0].calls, [])
         self.assertFalse(Creator.instances[0].connected)
     def test_project_change_before_write_blocks_creation(self):
-        Creator.hook = lambda _: self.state.write_text(json.dumps({'local-projects': {}}))
+        Creator.hook = lambda _: write_projects(self.home, {})
         job = self.settled(submit(self.bridge, 'changed-project', 'hello', self.project))
         self.assertEqual(job['state'], 'failed'); self.assertEqual(Creator.instances[0].calls, [])
     def test_lost_creation_reply_is_uncertain_and_never_recreated(self):
@@ -232,3 +268,14 @@ class ProjectCreationTests(unittest.TestCase):
         stored = self.settled({'id': request_key('binding-a', body['requestId'])})
         self.assertEqual(stored['sourceBinding'], 'binding-a'); self.assertEqual(stored['state'], 'completed')
         with self.assertRaises(BridgeError): scoped_dispatch(self.bridge, 'GET', '/api/jobs/' + body['requestId'], None, True, 'binding-b')
+
+    def test_obsolete_desktop_project_id_is_rejected_before_creating(self):
+        stale = project_identity(str(self.home), native_id='obsolete-desktop-id')[0]
+        with self.assertRaises(BridgeError): submit(self.bridge, 'stale-project', 'task', stale)
+        self.assertEqual(Creator.instances, [])
+
+    def test_create_uses_native_project_without_desktop_json(self):
+        self.state.unlink()
+        job = self.settled(submit(self.bridge, 'native-project-only', 'task', self.project))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(Creator.instances[0].calls[0][1]['projectId'], 'native-project')

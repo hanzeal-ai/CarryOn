@@ -29,8 +29,23 @@ def validate_wheel(data):
             or (entry.external_attr>>16)&0o170000==0o120000 or entry.filename in names):
             raise ValueError('Unsafe wheel member')
         names.add(entry.filename)
-    if 'carryon/cloud/gateway.py' not in names:raise ValueError('Gateway missing')
+    if 'carryon/cloud/gateway.py' not in names:
+        raise ValueError('Gateway missing: expected carryon/cloud/gateway.py in wheel')
     return archive
+
+def service_module(archive):
+    """Reject host entrypoint drift before switching or restarting any release."""
+    result=subprocess.run(
+        ['/usr/bin/systemctl','show',UNIT,'--property=ExecStart','--value'],
+        capture_output=True,text=True,check=True,timeout=10)
+    modules=re.findall(r'(?:^|\s)-m\s+(carryon(?:\.[A-Za-z_][A-Za-z0-9_]*)+)(?=\s|;|$)',result.stdout)
+    if len(modules)!=1:
+        raise ValueError('Cannot identify CarryOn ExecStart module; inspect '+UNIT+' and its drop-ins')
+    module=modules[0]
+    if module.replace('.','/')+'.py' not in archive.namelist():
+        raise ValueError('Service entrypoint '+module+' is missing from wheel; '
+                         'an operator must update '+UNIT+' and its drop-ins, then reload systemd before deploying')
+    return module
 
 def switch(target):
     link=BASE/'current.next'
@@ -57,6 +72,7 @@ def main():
     data=sys.stdin.buffer.read(10*1024*1024+1)
     if len(data)>10*1024*1024:raise ValueError('Upload too large')
     archive=validate_wheel(data)
+    module=service_module(archive)
     with (BASE/'deploy.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         destination=BASE/'releases'/release
@@ -68,7 +84,7 @@ def main():
             (temporary/'release.env').write_text('CARRYON_RELEASE='+release+'\n')
             for path in temporary.rglob('*'):path.chmod(0o755 if path.is_dir() else 0o644)
             temporary.chmod(0o755)
-            subprocess.run(['/usr/bin/python3.11','-B','-c','import carryon.cloud.gateway'],cwd=temporary,check=True,timeout=15)
+            subprocess.run(['/usr/bin/python3.11','-B','-c','import carryon.cloud.gateway; import '+module],cwd=temporary,check=True,timeout=15)
             temporary.rename(destination)
         finally:
             if temporary.exists():shutil.rmtree(temporary)

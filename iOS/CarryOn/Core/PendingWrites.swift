@@ -108,6 +108,7 @@ import CryptoKit
                job["state"].text != "completed" || job["result"]["threadId"].text != job["threadId"].text ||
                 job["result"]["name"].string == nil || job["result"]["name"] != job["name"] { continue }
             var targets = [job["threadId"].text, "new"]
+            if job["kind"].text == "create" { targets.append("new:") }
             if let project = job["creationProject"]["groupId"].string { targets.append("new:" + project) }
             for target in targets {
                 if remove(scope: scope, target: target, requestID: job["id"].text) { changed = true }

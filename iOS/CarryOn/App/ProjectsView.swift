@@ -1,21 +1,25 @@
 import SwiftUI
 import CarryOnCore
 
+@MainActor @Observable final class HomeNavigationState {
+    var creating = false
+    var choosingWorkspace = false
+    var browsingProjects = false
+    var browsingThreads = false
+    var browsingArchives = false
+    var searchingContent = false
+    var browsingSections = false
+}
+
 struct ProjectsView: View {
+    @State var navigation = HomeNavigationState()
     @State var listState = RecordListState()
     @State var threadListState = RecordListState()
     @State var homeLoader = WorkspaceHomeLoader()
     @Environment(AppModel.self) private var model
-    @State private var creating = false
-    @State private var choosingWorkspace = false
     @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
     @State private var projectSearch = RecordListState()
     @State private var threadSearch = RecordListState()
-    @State private var browsingProjects = false
-    @State private var browsingThreads = false
-    @State private var browsingArchives = false
-    @State private var searchingContent = false
-    @State private var browsingSections = false
     var body: some View {
         @Bindable var model = model
         ScrollViewReader { proxy in
@@ -38,9 +42,9 @@ struct ProjectsView: View {
                     }
                 }
                 Text("CarryOn").font(.system(size: 34, weight: .regular)).padding(.top, 4).padding(.bottom, 5)
-                if model.status["supportsThreadSections"].bool == true { PinnedThreadsSummary { browsingSections = true } }
+                if model.status["supportsThreadSections"].bool == true { PinnedThreadsSummary { navigation.browsingSections = true } }
                 VStack(alignment: .leading, spacing: 8) {
-                    homeHeading("项目", more: listState.records.count > 5) { browsingProjects = true }
+                    homeHeading("项目", more: listState.records.count > 5) { navigation.browsingProjects = true }
                     VStack(spacing: 0) {
                     ForEach(Array(listState.records.prefix(5))) { record in
                         Button { model.selectedProject = record } label: {
@@ -55,7 +59,7 @@ struct ProjectsView: View {
                     homeStatus(listState)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    homeHeading("最近会话", more: threadListState.total > 20) { browsingThreads = true }
+                    homeHeading("最近会话", more: threadListState.total > 20) { navigation.browsingThreads = true }
                     LazyVStack(spacing: 0) {
                         ForEach(Array(threadListState.records.prefix(20))) { record in
                             Button { model.open(record) } label: { ThreadRow(record: record) }.buttonStyle(.plain).id(record.id)
@@ -83,30 +87,24 @@ struct ProjectsView: View {
             .onDisappear { threadListState.isVisible = false; model.watchList(threadListState.watchID, threads: []) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { creating = true } label: { Label("新建会话", systemImage: "square.and.pencil") }.disabled(!model.canWrite(.create))
-                        Button { choosingWorkspace = true } label: { Label("切换工作区", systemImage: "desktopcomputer") }
-                        Button { browsingProjects = true } label: { Label("全部项目", systemImage: "folder") }
-                        if model.status["supportsThreadSections"].bool == true { Button { browsingSections = true } label: { Label("分组", systemImage: "folder") } }
-                        Button { browsingArchives = true } label: { Label("已归档", systemImage: "archivebox") }
-                        Button { browsingThreads = true } label: { Label("搜索会话", systemImage: "magnifyingglass") }
-                        if model.status["supportsFullTextSearch"].bool == true { Button { searchingContent = true } label: { Label("搜索会话内容", systemImage: "text.magnifyingglass") } }
-                    } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }.accessibilityLabel("更多操作")
+                    Button { navigation.creating = true } label: {
+                        Image(systemName: "square.and.pencil").frame(width: 44, height: 44)
+                    }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                 }
             }
-            .sheet(isPresented: $browsingSections) { NativeSectionsView() }
-            .sheet(isPresented: $browsingArchives) { ArchivedThreadsView() }
-            .sheet(isPresented: $searchingContent) { ConversationSearchView() }
-            .sheet(isPresented: $browsingProjects) {
+            .sheet(isPresented: $navigation.browsingSections) { NativeSectionsView() }
+            .sheet(isPresented: $navigation.browsingArchives) { ArchivedThreadsView() }
+            .sheet(isPresented: $navigation.searchingContent) { ConversationSearchView() }
+            .sheet(isPresented: $navigation.browsingProjects) {
                 NavigationStack {
-                    RecordListView(path: "/api/projects", key: "projects", isProjectList: true, state: projectSearch) { record in browsingProjects = false; model.selectedProject = record }
-                        .navigationTitle("项目").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { browsingProjects = false } } }
+                    RecordListView(path: "/api/projects", key: "projects", isProjectList: true, state: projectSearch) { record in navigation.browsingProjects = false; model.selectedProject = record }
+                        .navigationTitle("项目").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { navigation.browsingProjects = false } } }
                 }
             }
-            .sheet(isPresented: $browsingThreads) {
+            .sheet(isPresented: $navigation.browsingThreads) {
                 NavigationStack {
-                    RecordListView(path: "/api/workspace/threads", key: "threads", state: threadSearch) { record in browsingThreads = false; model.open(record) }
-                        .navigationTitle("会话").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { browsingThreads = false } } }
+                    RecordListView(path: "/api/workspace/threads", key: "threads", state: threadSearch) { record in navigation.browsingThreads = false; model.open(record) }
+                        .navigationTitle("会话").toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { navigation.browsingThreads = false } } }
                 }
             }
         .navigationDestination(isPresented: Binding(get: { model.selectedProject != nil }, set: { if !$0 { model.selectedProject = nil } })) {
@@ -114,15 +112,15 @@ struct ProjectsView: View {
                 RecordListView(path: "/api/projects/\(ConsoleAddress.component(project.id))/threads", key: "threads") { model.open($0) }
                     .navigationTitle(project.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                        Button { creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
+                        Button { navigation.creating = true } label: { Image(systemName: "plus") }.disabled(!model.canWrite(.create)).accessibilityLabel("新建会话")
                     } }
                     .navigationDestination(isPresented: Binding(get: { model.selectedThread != nil }, set: { if !$0 { model.closeThread() } })) {
                         if let thread = model.selectedThread { ConversationView(thread: thread).id(model.scope + thread.id) }
                     }
             }
         }.background(Design.canvas)
-            .sheet(isPresented: $choosingWorkspace) { WorkspaceSwitcher() }
-            .fullScreenCover(isPresented: $creating) { NewConversationView() }
+            .sheet(isPresented: $navigation.choosingWorkspace) { WorkspaceSwitcher() }
+            .fullScreenCover(isPresented: $navigation.creating) { NewConversationView() }
     }
     private func homeHeading(_ title: String, more: Bool, action: @escaping () -> Void) -> some View {
         HStack {

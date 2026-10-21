@@ -7,7 +7,7 @@
 | 首次初始化 | `carryon init` | 初始化向导 |
 | 新建独立工作区 | `carryon services create --name 名称` | 添加工作区，只填写名称 |
 | 列举工作区 | `carryon services list` | 工作区列表 |
-| 登录独立 Codex 账号 | `carryon services login --state-dir 目录` | 初始化中的登录模型账号 |
+| 登录共享的本机 Codex 账号 | `carryon services login --state-dir 目录` | 初始化中的登录本机 Codex 账号 |
 | 启停 | `carryon start/stop --state-dir 目录` | 启动／停止服务 |
 | 删除本地条目 | 停止后 `carryon services remove --state-dir 目录` | 删除工作区，保留文件 |
 | 工作区成员 | `carryon members --state-dir 目录` | 使用者与权限 |
@@ -15,6 +15,8 @@
 | 自托管云端 | `carryon init --url HTTPS地址` | 初始化高级设置 |
 
 CarryOn 数据目录保存连接配置和投递日志。默认 IPC 工作区读取实际 Codex HOME；新增工作区的 Codex HOME 由创建流程单独分配，不接受启动时替换为其他工作区目录。
+
+独立工作区共享本机 Codex 登录，项目与会话仍独立。已登录本机 Codex 时，新建工作区无需再次登录；旧工作区重启服务后生效。共享来源和同步行为见 [绑定流程](ONBOARDING.md)。
 
 每个云端绑定保存独立凭证、控制许可和恢复状态。`cloud control --binding-id ID --allow-control/--read-only` 调整电脑侧许可；账号成员权限仍由云端检查。`cloud disconnect --binding-id ID` 只断开该本地连接，不删除其他绑定或会话。
 

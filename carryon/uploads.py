@@ -98,8 +98,10 @@ def target_identity(bridge, value):
             if project_id not in (None, project_identity(None)[0]):
                 raise BridgeError('此工作区不支持该新建项目', 409)
             return {'type': 'creation', 'projectId': None}
-        from carryon.sessions.creation import resolve_project
-        project = resolve_project(bridge.catalog, project_id)
+        from carryon.sessions.creation import resolve_target
+        project = resolve_target(bridge.catalog, project_id)
+        if project is None:
+            return {'type': 'creation', 'projectId': None}
         return {'type': 'creation', 'projectId': project_id, 'project': project}
     raise ValueError('附件目标无效')
 

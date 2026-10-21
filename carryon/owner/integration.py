@@ -25,7 +25,7 @@ class OwnerBridge(Bridge):
 
     def status(self):
         from carryon.sessions.creation_settings import supported
-        return {**super().status(), 'supportsPluginManagement': True, 'supportsThreadSections': True, 'supportsFullTextSearch': True, 'supportsArchiving': True, 'supportsSessionLoading': True, 'supportsCreationReferences': True, 'supportedCreationSettings': supported()}
+        return {**super().status(), 'supportsPluginManagement': True, 'supportsThreadSections': True, 'supportsFullTextSearch': True, 'supportsArchiving': True, 'supportsSessionLoading': True, 'supportsProjectlessCreation': True, 'supportsCreationReferences': True, 'supportedCreationSettings': supported()}
 
     def owners(self):
         with self.lock:

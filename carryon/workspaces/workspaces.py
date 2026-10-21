@@ -39,6 +39,6 @@ def create(name='新工作区', *, backend='app-server', codex_home=None, cli_so
             return register(directory, name=name, port=0, codex_home=home, backend=backend, cli_socket=cli_socket)
         home = private_dir(directory/'codex')
         private_dir(directory/'projects')
-        # No credential or session copy. Account login belongs to this CODEX_HOME.
+        # Projects/sessions stay here; the runtime borrows local Codex auth in memory.
         (home/'config.toml').write_text('approval_policy = "on-request"\nsandbox_mode = "workspace-write"\n')
         return register(directory, name=name, port=0, codex_home=home, backend='app-server')

@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 (async()=>{
  const browser=await chromium.launch();
  try { for(const width of [1280,390]){
- const page=await browser.newPage({viewport:{width,height:844}});
+ const page=await browser.newPage({viewport:{width,height:844},hasTouch:width<=760});
  const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGEERROR',e.stack)});let authenticated=true;
  const writes=[];const threads=[{id:'t1',title:'让手机上的对话更顺手',cwd:'/workspace/CarryOn',unread:true},{id:'t2',title:'检查远端连接',cwd:'/workspace/CarryOn',unread:false}];
  const projects=[{id:'p1',name:'CarryOn',cwd:'/workspace/CarryOn',total:12,waiting:1,running:2,unread:3,unknown:0},{id:'p2',name:'MarkFix',cwd:'/workspace/MarkFix',total:8,waiting:0,running:0,unread:1,unknown:0}];
@@ -49,11 +49,17 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('.conversation-navigator button').count(),147);
  assert.equal(await page.locator('.conversation-navigator').evaluate(n=>getComputedStyle(n).position),'fixed');
  assert.equal(await page.locator('.conversation-navigator').evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)');
- const widths=await page.locator('.conversation-navigator button').evaluateAll(nodes=>nodes.slice(-6).map(n=>parseFloat(n.firstChild.style.width)));
- assert.deepEqual(widths,width<=760?[6,10,16,22,28,22]:[12,20,28,40,52,40]);
+ async function assertRailCompact(){
+  await page.waitForFunction(expected=>[...document.querySelectorAll('.conversation-navigator button span')].every(n=>parseFloat(getComputedStyle(n).width)===expected),width<=760?6:12);
+ }
+ await assertRailCompact();
+ await page.screenshot({path:'.runtime/navigation-default-'+width+'.png'});
  const beforePreview=await page.evaluate(()=>{const v=document.querySelector('#messages').closest('.mobile-chat-scroll')||document.querySelector('#messages');return {scroll:v.scrollTop,count:document.querySelector('#messages').childElementCount};});
  await page.locator('.conversation-navigator button[data-anchor="result"]').hover();
  await page.locator('.conversation-navigation-preview').waitFor();
+ await page.waitForFunction(expected=>parseFloat(getComputedStyle(document.querySelector('.conversation-navigator button.active span')).width)===expected,width<=760?28:52);
+ const widths=await page.locator('.conversation-navigator button').evaluateAll(nodes=>nodes.slice(-6).map(n=>parseFloat(getComputedStyle(n.firstChild).width)));
+ assert.deepEqual(widths,width<=760?[6,10,16,22,28,22]:[12,20,28,40,52,40]);
  assert((await page.locator('.conversation-navigation-preview').textContent()).includes('动态对应的结果'));
  await page.screenshot({path:'.runtime/navigation-preview-'+width+'.png'});
  await page.locator('.conversation-navigator').dispatchEvent('wheel',{deltaY:30});
@@ -64,8 +70,34 @@ const assert=require('node:assert/strict');
  await page.mouse.move(300,40);
  await page.waitForFunction(()=>!document.querySelector('.conversation-navigation-preview'));
  await page.waitForFunction(()=>document.querySelector('.conversation-navigator button.active')?.dataset.anchor==='result');
+ await assertRailCompact();
  const afterPreview=await page.evaluate(()=>{const v=document.querySelector('#messages').closest('.mobile-chat-scroll')||document.querySelector('#messages');return {scroll:v.scrollTop,count:document.querySelector('#messages').childElementCount};});
  assert.deepEqual(afterPreview,beforePreview,'preview must not move or render the message list');
+ async function assertKeyboardPreview(){
+  await page.locator('.conversation-navigator button[data-anchor="m144"]').focus();
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(()=>document.activeElement.dataset.anchor),'result');
+  await page.locator('.conversation-navigation-preview').waitFor();
+  await page.waitForFunction(expected=>parseFloat(getComputedStyle(document.querySelector('.conversation-navigator button.active span')).width)===expected,width<=760?28:52);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!document.querySelector('.conversation-navigation-preview'));
+  await assertRailCompact();
+  await page.locator('.conversation-navigator button[data-anchor="result"]').evaluate(n=>n.blur());
+ }
+ await assertKeyboardPreview();
+ if(width<=760){
+  const touch=await page.context().newCDPSession(page);
+  for(const end of ['touchEnd','touchCancel']){
+   const box=await page.locator('.conversation-navigator button[data-anchor="result"]').boundingBox();
+   await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});
+   await page.locator('.conversation-navigation-preview').waitFor();
+   await touch.send('Input.dispatchTouchEvent',{type:end,touchPoints:[]});
+   await page.waitForFunction(()=>!document.querySelector('.conversation-navigation-preview'));
+   await assertRailCompact();
+  }
+  await touch.detach();
+  await assertKeyboardPreview();
+ }
  await page.evaluate(()=>{const container=document.querySelector('#messages');window.previewMutationCount=0;window.previewObserver=new MutationObserver(m=>window.previewMutationCount+=m.length);previewObserver.observe(container,{childList:true,subtree:true});const buttons=[...document.querySelectorAll('.conversation-navigator button')];for(let i=0;i<200;i++)buttons[i%buttons.length].dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));document.querySelector('.conversation-navigator').dispatchEvent(new PointerEvent('pointerleave'));});
  assert.equal(await page.evaluate(()=>{previewObserver.disconnect();return previewMutationCount;}),0,'rapid preview must not rebuild messages');
 
@@ -78,8 +110,10 @@ const assert=require('node:assert/strict');
 
  await page.locator('.conversation-navigator button[data-anchor="m0"]').click();
  await page.waitForFunction(()=>document.querySelector('.conversation-navigator button.active')?.dataset.anchor==='m0');
+ await assertRailCompact();
  await assertRailCentered();
  assert(await page.locator('[data-navigation-id="m0"]').isVisible());
+ await page.mouse.move(300,40);
  await page.evaluate(()=>Timeline.navigateTo('later'));
  await page.waitForFunction(()=>document.querySelector('.conversation-navigator button.active')?.dataset.anchor==='later');
  assert(await page.locator('[data-navigation-id="later"]').evaluate(n=>n.open));

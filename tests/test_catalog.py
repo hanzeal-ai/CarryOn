@@ -6,6 +6,7 @@ from pathlib import Path
 from contextlib import closing
 from unittest.mock import patch
 from carryon.sessions.catalog import Catalog
+from native_project_fixture import replace_projects
 
 
 class CatalogTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class CatalogTests(unittest.TestCase):
             state={'local-projects':{'one':{'rootPaths':['/repo/one']},'two':{'rootPaths':['/repo/two']}}}
             (Path(home)/'.codex-global-state.json').write_text(json.dumps(state))
             db.execute('CREATE TABLE threads(id,project_id)')
+            replace_projects(db, state['local-projects'])
             rows=[{'id':'unassigned','cwd':'/worktree/branch'}]
             with patch('carryon.sessions.catalog.subprocess.run') as run:
                 run.return_value.returncode=0
@@ -29,6 +31,7 @@ class CatalogTests(unittest.TestCase):
             }, 'projectless-thread-ids': ['recent']}
             (Path(home) / '.codex-global-state.json').write_text(json.dumps(state))
             db.execute('CREATE TABLE threads(id,project_id)')
+            replace_projects(db, state['local-projects'])
             db.executemany('INSERT INTO threads VALUES(?,?)', [('web','bundle'), ('api','bundle'), ('other','shared')])
             rows = [{'id': tid, 'cwd': cwd} for tid,cwd in [
                 ('web','/project/web'), ('api','/project/api'), ('other','/project/web'),
@@ -55,9 +58,11 @@ class CatalogTests(unittest.TestCase):
                      'thread-project-assignments': {'assigned': {'projectId': 'bundle'}}}
             path = Path(home) / '.codex-global-state.json'
             db.execute('CREATE TABLE threads(id,project_id)')
-            db.execute("INSERT INTO threads VALUES('native','bundle')")
+            replace_projects(db, state['local-projects'])
+            db.executemany('INSERT INTO threads VALUES(?,?)', [('native','bundle'), ('assigned','bundle')])
             def classify():
                 path.write_text(json.dumps(state))
+                replace_projects(db, state['local-projects'])
                 rows = [{'id': tid, 'cwd': '/repo'} for tid in ('inferred','assigned','native','recent')]
                 Catalog(home).classify_projects(db, rows)
                 result = {r['id']: r for r in rows}
@@ -81,6 +86,7 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             with closing(sqlite3.connect(Path(home) / 'state_5.sqlite')) as db:
                 db.execute('CREATE TABLE threads(id,title,name,cwd,updated_at,created_at,history_mode,archived,source,thread_source)')
+                replace_projects(db, {})
                 db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)', [
                     ('one','raw private prompt','Readable title','/test',3,1,'paginated',0,'vscode','user'),
                     ('two','internal prompt','Internal','/test',4,1,'legacy',0,'vscode','subagent'),
@@ -107,11 +113,12 @@ class CatalogTests(unittest.TestCase):
             (Path(home) / '.codex-global-state.json').write_text(json.dumps(state))
             with closing(sqlite3.connect(Path(home) / 'state_5.sqlite')) as db:
                 db.execute('CREATE TABLE threads(id,title,name,cwd,updated_at,created_at,history_mode,archived,source,thread_source,project_id)')
+                replace_projects(db, state['local-projects'])
                 examples = [
                     ('explicit', '/workspace/project', None, True),
                     ('unassigned', '/temporary/xue', None, True),
                     ('similar-name', '/workspace/project-other', None, True),
-                    ('assigned', '/worktrees/branch', None, False),
+                    ('assigned', '/worktrees/branch', 'saved', False),
                     ('root', '/workspace/project', None, False),
                     ('child', '/workspace/project/web', None, False),
                     ('native', '/worktrees/new', 'native-project', False),
@@ -136,9 +143,35 @@ class CatalogTests(unittest.TestCase):
             (home / '.codex-global-state.json').write_text(json.dumps({'local-projects': {'saved': {'rootPaths': [str(repo)]}}}))
             with closing(sqlite3.connect(home / 'state_5.sqlite')) as db:
                 db.execute('CREATE TABLE threads(id,title,name,cwd,updated_at,created_at,history_mode,archived,source,thread_source)')
+                replace_projects(db, {'native-saved': {'rootPaths': [str(repo)]}})
                 for tid, cwd in [('main', repo), ('branch', tree), ('child', repo / 'src')]:
                     db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)', (tid, tid, tid, str(cwd), 1, 1, 'legacy', 0, 'vscode', 'user'))
                 db.commit()
             rows = Catalog(home).list()
             self.assertEqual({row['projectRoot'] for row in rows}, {str(repo)})
             self.assertFalse(any(row['projectless'] for row in rows))
+
+    def test_native_project_store_ignores_conflicting_legacy_ids_and_metadata(self):
+        with tempfile.TemporaryDirectory() as home, closing(sqlite3.connect(':memory:')) as db:
+            (Path(home) / '.codex-global-state.json').write_text(json.dumps({
+                'local-projects': {'desktop-id': {'name': 'Old name', 'rootPaths': ['/repo']}},
+                'thread-project-assignments': {'thread': {'projectId': 'desktop-id'}},
+            }))
+            db.execute('CREATE TABLE threads(id,project_id)')
+            replace_projects(db, {'native-id': {'name': 'Current name', 'rootPaths': ['/repo', '/api']}})
+            rows = [{'id': 'thread', 'cwd': '/repo'}]
+            Catalog(home).classify_projects(db, rows)
+            self.assertEqual(rows[0]['nativeProjectId'], 'native-id')
+            self.assertEqual(rows[0]['projectName'], 'Current name')
+            self.assertEqual(rows[0]['projectRoots'], ['/repo', '/api'])
+
+    def test_native_project_catalog_works_without_desktop_json_and_is_read_only(self):
+        with tempfile.TemporaryDirectory() as home:
+            from native_project_fixture import write_projects
+            write_projects(home, {'native-id': {'name': 'Current', 'rootPaths': ['/first', '/second']}})
+            catalog = Catalog(home)
+            self.assertEqual(catalog.projects()[0]['rootPaths'], ['/first', '/second'])
+            with catalog.connection() as conn:
+                with self.assertRaises(sqlite3.OperationalError):
+                    conn.execute("UPDATE projects SET name='changed'")
+            self.assertEqual(catalog.projects()[0]['name'], 'Current')

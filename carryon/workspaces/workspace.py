@@ -33,7 +33,7 @@ class Workspace:
         self.catalog_lock=threading.Lock()
         from carryon.workspaces.sync import WorkspaceSync
         self.sync=WorkspaceSync(self)
-        self.turn_candidates={};self.rows={};self.states={};self.fingerprints={};self.native_refs={};self.error=None;self.closed=threading.Event();self.worker=None;self.observer=None;self.revision=0
+        self.projects=[];self.turn_candidates={};self.rows={};self.states={};self.fingerprints={};self.native_refs={};self.error=None;self.closed=threading.Event();self.worker=None;self.observer=None;self.revision=0
         with self.lock:
             self.db.executescript('''
             CREATE TABLE IF NOT EXISTS notification_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,thread_id TEXT NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL);
@@ -113,9 +113,12 @@ class Workspace:
         # Serialize background and manual reads so an older catalog cannot win.
         with self.catalog_lock:
             rows=self.bridge.catalog.list(2147483647,0,'')
+            projects=[] if getattr(self.bridge.catalog,'independent',False) else [
+                dict(project) for project in getattr(self.bridge.catalog,'projects',lambda:[])()]
             with self.lock:
                 fresh={r['id']:dict(r) for r in rows}
-                if fresh!=self.rows:self.revision+=1
+                if fresh!=self.rows or projects!=self.projects:self.revision+=1
+                self.projects=projects
                 self.turn_candidates={k:v for k,v in self.turn_candidates.items() if k in fresh}
                 self.rows=fresh;self.native_refs={k:v for k,v in self.native_refs.items() if k in fresh};self.error=None
 
@@ -266,7 +269,7 @@ class Workspace:
         self.bridge.require()
         with self.lock:
             if self.error:raise ValueError(self.error)
-            rows=list(self.rows.values());states=dict(self.states)
+            rows=list(self.rows.values());states=dict(self.states);projects=list(self.projects)
             preferences=self.preferences(reader)
             unread_events=self.db.execute('''SELECT e.thread_id,e.kind FROM notification_events e
                 LEFT JOIN notification_readers r ON r.thread_id=e.thread_id AND r.reader=?
@@ -305,6 +308,12 @@ class Workspace:
             project_activity[pid]=max(project_activity.get(pid,0),row.get('updated_at') or 0)
             group['total']+=1;group['waiting']+=int(actionable);group['running']+=int(status['state']=='running');group['unread']+=int(tid in unread)
             group['unknown']+=int(status['state'] in ('unknown','loading','notLoaded','error'))
+        for project in projects:
+            roots = project['rootPaths']
+            pid, _ = project_identity(roots[0] if roots else None, native_id=project['id'])
+            group = groups.setdefault(pid, {'id':pid, 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})
+            group.update(name=project['name'], cwd=roots[0] if roots else '', rootPaths=roots, canCreate=bool(roots))
+            project_activity.setdefault(pid, 0)
         if getattr(self.bridge.catalog, 'independent', False):
             pid, name = project_identity(None)
             groups.setdefault(pid, {'id':pid, 'name':name, 'cwd':'', 'rootPaths':[], 'total':0, 'waiting':0, 'running':0, 'unread':0, 'unknown':0})['canCreate'] = getattr(ipc, 'account_ready', False)

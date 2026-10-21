@@ -68,7 +68,8 @@ def dispatch(bridge, method, target, data=None, *, remote=False, control=False, 
         return result
     if method == "GET" and path == "/api/usage":
         from carryon.usage import read
-        respond(200, read(bridge.catalog.home))
+        from carryon.app_server.shared_account import account_home
+        respond(200, read(account_home(bridge)))
     elif method == 'POST' and path == '/api/usage/reset':
         from carryon.quota_reset import submit
         respond(200, submit(bridge, data, source, authorize))

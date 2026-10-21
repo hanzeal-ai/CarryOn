@@ -58,7 +58,10 @@ class ProtocolClient:
                                 'capabilities': {'experimentalApi': True}})
         self._write({'method': 'initialized', 'params': {}})
         account = self.rpc('account/read', {'refreshToken': False})
+        if not isinstance(account, dict):
+            raise IPCError('Codex 账号响应格式无效')
         self.account_ready = bool(account.get('account')) or account.get('requiresOpenaiAuth') is False
+        return account
 
     def receive(self, value):
         if 'method' in value:

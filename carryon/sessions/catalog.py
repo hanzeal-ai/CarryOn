@@ -100,21 +100,35 @@ class Catalog:
             self.classify_projects(conn, rows)
             return rows
 
+    def projects(self):
+        if self.independent and not any(self.home.glob('state_*.sqlite')):
+            return []
+        with self.connection() as conn:
+            return self._projects(conn)
+
+    @staticmethod
+    def _projects(conn):
+        # Project IDs passed to thread/start belong to the native project store.
+        records = conn.execute("""SELECT p.id,p.name,p.created_at_ms,p.updated_at_ms,r.path
+            FROM projects p LEFT JOIN project_roots r ON r.project_id=p.id
+            ORDER BY p.position,p.id,r.position""").fetchall()
+        projects = {}
+        for pid, name, created, updated, root in records:
+            project = projects.setdefault(pid, {'id': pid, 'name': name,
+                'createdAt': created, 'updatedAt': updated, 'rootPaths': []})
+            if root is not None:
+                project['rootPaths'].append(str(Path(root).expanduser().absolute()))
+        return list(projects.values())
+
     def classify_projects(self, conn, rows):
-        # Desktop projectless tasks have a working directory too. A directory
-        # alone does not make a task belong to a saved Codex project.
+        # Native membership wins over desktop projectless presentation markers.
         path = self.home / '.codex-global-state.json'
         state = json.loads(path.read_text()) if path.exists() else {}
         projectless = set(state.get('projectless-thread-ids', []))
-        assignments = state.get('thread-project-assignments', {})
-        roots = [Path(root).expanduser().absolute()
-                 for project in state.get('local-projects', {}).values()
-                 for root in project.get('rootPaths', [])]
-        roots.extend(Path(root).expanduser().absolute()
-                     for root in state.get('electron-saved-workspace-roots', []))
+        projects = {p['id']: p for p in self._projects(conn)}
+        roots = [Path(root) for project in projects.values() for root in project['rootPaths']]
         columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
         native = dict(conn.execute('SELECT id,project_id FROM threads')) if 'project_id' in columns else {}
-        projects = state.get('local-projects', {})
         git_roots = {}
         def repository(path):
             key = str(path)
@@ -131,13 +145,11 @@ class Catalog:
                 row['projectless'] = False
             elif tid in projectless:
                 row['projectless'] = True
-            elif assignments.get(tid, {}).get('projectId'):
-                row['projectless'] = False
             else:
                 cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
                 row['projectless'] = not (cwd and any(cwd.is_relative_to(root) for root in roots))
             cwd = Path(row['cwd']).expanduser().absolute() if row.get('cwd') else None
-            pid = native.get(tid) or assignments.get(tid, {}).get('projectId')
+            pid = native.get(tid)
             if tid in projectless and not native.get(tid):
                 continue
             assigned = projects.get(pid, {}).get('rootPaths', []) if native.get(tid) or tid not in projectless else []

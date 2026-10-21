@@ -33,7 +33,8 @@ import CoreImage.CIFilterBuiltins
             HStack { Text("连接工作区").font(.title2.weight(.semibold)); Spacer(); Button("账号登录码") { loginCode = true }.disabled(url.isEmpty) }
             Label(cli ? "本机 Codex CLI" : appServer ? "独立 Codex 工作区" : "本机 Codex App", systemImage: "laptopcomputer").foregroundStyle(DesktopDesign.secondary)
             if appServer {
-                Button("登录 Codex 模型账号") { Task { await loginCodex() } }.disabled(busy)
+                Text("共享本机 Codex 登录，项目和会话独立保存。").font(.caption).foregroundStyle(DesktopDesign.secondary)
+                Button("登录本机 Codex 账号") { Task { await loginCodex() } }.disabled(busy)
             }
             if !codexAvailable && !appServer && !cli { Text("尚未发现运行中的 Codex App，可以先绑定，服务启动后将等待连接。").font(.caption).foregroundStyle(DesktopDesign.secondary) }
             if phase != "waiting" && phase != "bound" && phase != "confirming" {
@@ -195,7 +196,7 @@ import CoreImage.CIFilterBuiltins
         }
         if phase == "bound" {
             qr = nil
-            message = state["accountReady"] as? Bool == false ? "绑定已完成，此工作区尚未完成 Codex 登录。" : state["bridgeConnected"] as? Bool == true && state["cloudConnected"] as? Bool == true ? "工作区已就绪，可在手机使用。" : state["running"] as? Bool == true ? "绑定已完成，正在等待 Codex 或云端连接。" : "绑定已保存，点击工作区的启动服务即可运行。"
+            message = state["accountReady"] as? Bool == false ? "绑定已完成，请登录本机 Codex，工作区将自动共享登录状态。" : state["bridgeConnected"] as? Bool == true && state["cloudConnected"] as? Bool == true ? "工作区已就绪，可在手机使用。" : state["running"] as? Bool == true ? "绑定已完成，正在等待 Codex 或云端连接。" : "绑定已保存，点击工作区的启动服务即可运行。"
         }
     }
     private func cancelBinding() async {

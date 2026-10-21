@@ -10,6 +10,8 @@ from carryon.sessions.creation_references import discover
 from carryon.errors import BridgeError
 from carryon.errors import IPCError
 from carryon.workspaces.workspace import project_identity
+from carryon.sessions.catalog import Catalog
+from native_project_fixture import write_projects
 
 
 class Runtime(SimpleNamespace):
@@ -53,13 +55,24 @@ class DiscoveryTests(unittest.TestCase):
         self.mentions.side_effect = lambda *_: (allowed.__setitem__(0, False) or {'mentions': [], 'errors': []})
         with self.assertRaises(BridgeError): discover(self.bridge, authorize=authorize)
     def test_owner_project_change_closes_temporary_runtime(self):
-        self.bridge.catalog.independent = False
-        state = self.root / '.codex-global-state.json'
-        state.write_text(json.dumps({'local-projects': {'native': {'rootPaths': [str(self.root)]}}}))
+        self.bridge.catalog = Catalog(self.root)
+        write_projects(self.root, {'native': {'rootPaths': [str(self.root)]}})
         project = project_identity(str(self.root), native_id='native')[0]
         closed = []
         self.runtime.connect = lambda: None; self.runtime.close = lambda: closed.append(True)
         self.bridge.owners = lambda: SimpleNamespace(directory=self.root / 'owner', runtime_factory=lambda *a, **k: self.runtime)
-        self.mentions.side_effect = lambda *_: (state.write_text('{"local-projects":{}}') and {'mentions': [], 'errors': []})
+        self.mentions.side_effect = lambda *_: (write_projects(self.root, {}) or {'mentions': [], 'errors': []})
         with self.assertRaises(BridgeError): discover(self.bridge, project)
         self.assertEqual(closed, [True]); self.assertEqual(list((self.root / 'owner').iterdir()), [])
+
+    def test_owner_projectless_discovery_uses_task_directory_and_closes_runtime(self):
+        self.bridge.catalog = Catalog(self.root)
+        closed = []
+        self.runtime.connect = lambda: None
+        self.runtime.close = lambda: closed.append(True)
+        self.bridge.owners = lambda: SimpleNamespace(directory=self.root / 'owner', runtime_factory=lambda *a, **k: self.runtime)
+        result = discover(self.bridge)
+        self.assertEqual(Path(result['cwd']).parent, self.root / 'owner' / 'tasks')
+        self.assertFalse(Path(result['cwd']).exists())
+        self.assertEqual(closed, [True])
+        self.skills.assert_called_once_with(self.runtime, result['cwd'])

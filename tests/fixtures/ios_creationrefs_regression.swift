@@ -53,6 +53,7 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
             if path == "/api/models" { return ["fixtureDelay": modelDelay, "models": validModelCatalog ? [["id": "gpt-5.5", "name": "5.5", "efforts": ["medium", "high"], "defaultEffort": "medium"]] : "invalid" as Any] }
             return [:]
         }
+        func clearCaptures() { lock.lock(); defer { lock.unlock() }; captures = [] }
         func all() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return captures }
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -91,13 +92,36 @@ private final class MockTransport: URLProtocol, @unchecked Sendable {
         model.addressText = "https://creationrefs.invalid/"; model.selectedDevice = "a"
         model.devices = ["a", "b"].map { try! Record(.object(["id": .string($0), "title": .string("Office " + $0), "online": .bool(true), "permissions": .array(["view", "create", "send", "edit"].map(JSONValue.string))])) }
         model.restoringLogin = false; model.authenticated = true; model.connected = true; model.historySynchronized = true
-        model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true), "supportedCreationSettings": .array(["model", "effort", "approvalPolicy", "collaborationMode"].map(JSONValue.string)), "supportsDirectCreation": .bool(true), "supportsCreationReferences": .bool(true)])
+        model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true), "supportedCreationSettings": .array(["model", "effort", "approvalPolicy", "collaborationMode"].map(JSONValue.string)), "supportsProjectlessCreation": .bool(true), "supportsCreationReferences": .bool(true)])
     }
     func run() async {
         guard !started else { return }; started = true
         try? await Task.sleep(for: .seconds(2))
         var result: [String: Bool] = [:]
         let a = model.scope + "\nnew"
+        model.draftStore.texts[a] = "destination verification"
+        func sendDestination() async -> [String: Any] {
+            NotificationCenter.default.post(name: Notification.Name("fixture.creationrefs.submit"), object: nil)
+            try? await Task.sleep(for: .milliseconds(500))
+            return MockTransport.store.all().last(where: { $0["path"] as? String == "/api/threads" })?["body"] as? [String: Any] ?? [:]
+        }
+        let free = await sendDestination()
+        result["projectlessCreateOmitsProjectEvenWithOneProject"] = free["prompt"] as? String == "destination verification" && free["projectId"] == nil
+        NotificationCenter.default.post(name: Notification.Name("fixture.creationrefs.project"), object: "p")
+        try? await Task.sleep(for: .milliseconds(100))
+        let selected = await sendDestination()
+        result["selectedProjectSent"] = selected["projectId"] as? String == "p"
+        NotificationCenter.default.post(name: Notification.Name("fixture.creationrefs.project"), object: "")
+        try? await Task.sleep(for: .milliseconds(100))
+        let cleared = await sendDestination()
+        result["clearProjectRestoresProjectlessCreate"] = cleared["projectId"] == nil
+        let destinationWrites = MockTransport.store.all().filter { $0["path"] as? String == "/api/threads" }.count
+        model.status = model.status.setting("supportsProjectlessCreation", .bool(false))
+        _ = await sendDestination()
+        result["unsupportedProjectlessPreventsWrite"] = MockTransport.store.all().filter { $0["path"] as? String == "/api/threads" }.count == destinationWrites
+        model.status = model.status.setting("supportsProjectlessCreation", .bool(true))
+        MockTransport.store.clearCaptures()
+
         model.draftStore.settings[a] = .object(["model": .string("gpt-5.5"), "effort": .string("high"), "approvalPolicy": .string("never"), "collaborationMode": .object(["mode": .string("plan"), "settings": .object(["model": .string("gpt-5.5"), "reasoning_effort": .string("high"), "developer_instructions": .null])])])
         model.draftStore.texts[a] = "\u{fffc}\u{fffc}"
         model.draftStore.skills[a] = [.init(name: "code-review", path: "/fixture/SKILL.md", offset: 0, displayName: "Review", iconData: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGElEQVR4nGNgaPj/nyI8asCoAaMGDBcDAIHifh+5bmkmAAAAAElFTkSuQmCC"), .init(name: "Calendar", path: "app://calendar", offset: 1)]

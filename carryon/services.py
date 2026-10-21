@@ -200,7 +200,7 @@ def start(args):
                 raise ValueError('启动失败，请检查端口是否占用以及日志：'+str(directory/'server.log'))
         bridge = call(directory, '/bridge', {'enabled': True}, timeout=20)
     print(f"CarryOn {info['version']} 本地服务已启动：http://127.0.0.1:{info['port']}/")
-    print('工作区 app-server 已启动，尚未完成 Codex 登录。' if bridge.get('accountReady') is False else
+    print('工作区 app-server 已启动，请登录本机 Codex；工作区将自动共享登录状态。' if bridge.get('accountReady') is False else
           'Codex 已连接' if bridge.get('enabled') else bridge.get('connectionError') or '正在等待 Codex 连接。')
     if not args.no_open: open_console(directory, info)
     return 0

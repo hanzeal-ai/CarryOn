@@ -18,7 +18,9 @@ CarryOn 用户账号可授权多台电脑和多个工作区。新工作区须单
 
 桌面「添加工作区」只填写名称（默认“新工作区”）。CLI 使用 `carryon services create --name 名称`，返回该工作区的内部定位信息。工作区拥有独立 `CODEX_HOME`、配置、会话存储和 app-server 进程；HTTP 监听端口由操作系统分配。进程通过私有 stdio 接入 Codex，不复用默认 IPC 的会话。
 
-桌面初始化中的「登录 Codex 模型账号」打开 Codex 官方认证页面；CLI 可对返回的目录执行 `carryon services login --state-dir 目录`。账号认证仅写入该工作区。目录下 `projects` 是默认执行目录，Codex 使用 `workspace-write` 与 `on-request`。工作区隔离是会话与配置隔离，不是不同 OS 用户或容器级文件系统隔离。
+独立工作区自动共享本机 Codex 登录状态，无需逐个登录。来源优先使用已登记的本机 Codex App 目录，否则使用启动 CarryOn 时的 `CODEX_HOME`（默认 `~/.codex`）。桌面「登录本机 Codex 账号」和 `carryon services login --state-dir 目录` 都登录这个共享来源。Codex 管理凭证存储和刷新，工作区仅在内存中接收访问令牌，不复制凭证文件或会话。本机账号登录、退出或切换后，工作区在下次发送前及后台检查时同步；后台检查间隔为 30 秒。已有独立工作区在重启服务后使用共享登录，原目录和会话保持不变。
+
+目录下 `projects` 是默认执行目录，Codex 使用 `workspace-write` 与 `on-request`。各工作区仍有独立配置、项目、会话和数据库。工作区隔离不是不同 OS 用户或容器级文件系统隔离。
 
 独立工作区支持直接创建会话，无需 IPC 控制会话。发送、停止、引导、压缩、编辑、审批通过 app-server 原生协议适配。该版本 app-server 没有可用的排队编辑公共接口，相关操作明确返回不支持，不伪造原生队列。
 

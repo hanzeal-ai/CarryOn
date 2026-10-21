@@ -1,5 +1,4 @@
 """Create project threads in a temporary app-server owned for the task lifetime."""
-import json
 import re
 import threading
 import time
@@ -9,15 +8,16 @@ from pathlib import Path
 from carryon.contracts import digest, text, validate_request_id
 from carryon.errors import BridgeError
 from carryon.errors import IPCError
+from carryon.paths import private_dir
 from carryon.workspaces.workspace import project_identity
 
 
 def resolve_project(catalog, project_id):
     if not isinstance(project_id, str) or not re.fullmatch(r'[0-9a-f]{64}', project_id):
         raise ValueError('请选择一个项目')
-    state = json.loads((catalog.home / '.codex-global-state.json').read_text())
     matches = []
-    for native_id, project in state.get('local-projects', {}).items():
+    for project in catalog.projects():
+        native_id = project['id']
         roots = project.get('rootPaths', [])
         if roots and project_identity(roots[0], native_id=native_id)[0] == project_id:
             matches.append({'id': native_id, 'cwd': str(Path(roots[0]).expanduser().absolute()), 'groupId': project_id})
@@ -27,6 +27,12 @@ def resolve_project(catalog, project_id):
     if not Path(project['cwd']).is_dir():
         raise BridgeError('项目目录已不可用，请在 Codex 重新选择项目', 409)
     return project
+
+
+def resolve_target(catalog, project_id):
+    if project_id in (None, project_identity(None)[0]):
+        return None
+    return resolve_project(catalog, project_id)
 
 
 def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, images=None, settings=None, skills=None, mentions=None):
@@ -49,7 +55,7 @@ def submit(bridge, request_id, prompt, project_id, source=None, authorize=None, 
             if previous.get('fingerprint') != fingerprint:
                 raise BridgeError('requestId 已用于不同内容')
             return previous
-        project = resolve_project(bridge.catalog, project_id)
+        project = resolve_target(bridge.catalog, project_id)
         service = bridge.owners()
         job = {'id': request_id, 'kind': 'create', 'threadId': '', 'state': 'preparing',
                'created': time.time(), 'fingerprint': fingerprint, 'creationProject': project,
@@ -71,7 +77,7 @@ def dispatch(bridge, ipc, generation, service, job, prompt, authorize, images=No
         with bridge.lock:
             bridge.check_generation(ipc, generation)
             if authorize: authorize()
-            if resolve_project(bridge.catalog, project['groupId']) != project:
+            if project is not None and resolve_project(bridge.catalog, project['groupId']) != project:
                 raise BridgeError('目标项目已改变，请重新选择项目')
     def create_write(write):
         nonlocal created_sent
@@ -92,12 +98,13 @@ def dispatch(bridge, ipc, generation, service, job, prompt, authorize, images=No
             runtime_directory=service.directory / 'creations' / job['id'])
         runtime.connect()
         runtime.require_account()
-        thread = runtime.create_thread({'cwd': project['cwd'], 'projectId': project['id'],
+        cwd = project['cwd'] if project else str(private_dir(service.directory / 'tasks' / job['id']))
+        thread = runtime.create_thread({'cwd': cwd, 'projectId': project['id'] if project else None,
                                         'historyMode': 'paginated'}, create_write)
         from carryon.sessions.catalog import valid_id
         tid = valid_id(thread['id'])
         bridge.journal.update(job['id'], threadId=tid, createdThreadId=tid)
-        if (thread.get('projectId') != project['id'] or Path(thread.get('cwd', '')).resolve() != Path(project['cwd']).resolve() or
+        if (thread.get('projectId') != (project['id'] if project else None) or Path(thread.get('cwd', '')).resolve() != Path(cwd).resolve() or
                 thread.get('historyMode') != 'paginated'):
             raise IPCError('原生创建结果与目标项目不符，未投递任务')
         from carryon.sessions.creation_settings import apply

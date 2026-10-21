@@ -141,7 +141,10 @@ def main(argv=None):
                 from carryon.usage import executable
                 row=records().get(str(args.state_dir), {})
                 if row.get('backend') != 'app-server': raise ValueError('请在对应的 Codex CLI 或 Codex App 中登录后重新连接')
-                return subprocess.call([executable(), 'login', '--device-auth'], env=dict(os.environ, CODEX_HOME=row['codexHome']), cwd=row['codexHome'])
+                from carryon.app_server.shared_account import source_home
+                home = source_home()
+                home.mkdir(parents=True, exist_ok=True, mode=0o700)
+                return subprocess.call([executable(), 'login', '--device-auth'], env=dict(os.environ, CODEX_HOME=str(home)), cwd=str(home))
             elif args.action=='remove':result=remove(args.state_dir)
             else:result=list_services(args.state_dir)
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0

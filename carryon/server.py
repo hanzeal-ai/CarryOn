@@ -106,7 +106,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/codex-account' and method in ('GET','POST'):
                 if bridge.status().get('backend') != 'app-server': raise ValueError('请在此工作区对应的 Codex CLI 或 Codex App 中登录')
                 ipc, _ = bridge.require()
-                result = ipc.rpc('account/read', {'refreshToken':False}) if method == 'GET' else ipc.rpc('account/login/start', {'type':'chatgpt'})
+                if method == 'GET':
+                    ipc.shared_account.sync()
+                    result = ipc.rpc('account/read', {'refreshToken':False})
+                else:
+                    result = ipc.shared_account.start_login()
                 self.reply(200,result); return
 
             if path == '/api/service' and method == 'GET':

@@ -22,8 +22,9 @@ const Timeline = (() => {
     if(nearest&&!navigationPinned)activeAnchor=nearest.id;
     const displayedAnchor=previewAnchor||activeAnchor;
     const selectedIndex=[...navigator.children].findIndex(b=>b.dataset.anchor===displayedAnchor);
+    const widths=innerWidth<=760?[28,22,16,10,6]:[52,40,28,20,12];
     for(const [index,button] of [...navigator.children].entries()){
-      const distance=Math.abs(index-selectedIndex);button.firstChild.style.width=(selectedIndex<0?12:(innerWidth<=760?[28,22,16,10,6]:[52,40,28,20,12])[Math.min(4,distance)])+'px';
+      const distance=Math.abs(index-selectedIndex);button.firstChild.style.width=widths[previewAnchor!==null&&selectedIndex>=0?Math.min(4,distance):4]+'px';
       const selected=button.dataset.anchor===displayedAnchor;
       button.classList.toggle('active',selected);button.setAttribute('aria-current',selected?'location':'false');
       if(selected){const y=button.offsetTop;if(y<navigator.scrollTop)navigator.scrollTop=y;else if(y+button.offsetHeight>navigator.scrollTop+navigator.clientHeight)navigator.scrollTop=y+button.offsetHeight-navigator.clientHeight;}
@@ -98,7 +99,7 @@ const Timeline = (() => {
     navigator.replaceChildren(...all.filter(i=>i.type!=='turn').map((item,index)=>{
       const button=el('button');button.type='button';button.dataset.anchor=item.id;
       const label=(item.text||item.title||labels[item.type]||'执行活动').slice(0,100);
-      button.onpointerenter=event=>{if(event.pointerType!=='touch'){showPreview(item.id);}};button.onfocus=()=>{showPreview(item.id);};button.onblur=hidePreview;
+      button.onpointerenter=event=>{if(event.pointerType!=='touch'){showPreview(item.id);}};button.onfocus=()=>{if(button.matches(':focus-visible'))showPreview(item.id);};button.onblur=hidePreview;
       button.onpointerdown=event=>{suppressClick=false;if(event.pointerType==='touch')holdTimer=setTimeout(()=>{suppressClick=true;showPreview(item.id);},350);};button.onpointerup=()=>clearTimeout(holdTimer);button.onpointercancel=hidePreview;
      button.setAttribute('aria-label','跳转到第 '+(index+1)+' 条：'+label);
       button.append(el('span'));button.onclick=()=>{if(!suppressClick){hidePreview();navigateTo(item.id);}suppressClick=false;};return button;
@@ -159,11 +160,18 @@ const Timeline = (() => {
       } catch(error){if(frame.isConnected)status.textContent=error.message||'图片暂不可用';}
     };
   }
+  function saveFile(blob,name){
+    const url=URL.createObjectURL(blob),link=el('a');
+    link.href=url;link.download=name;document.body.append(link);
+    try{link.click();}finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+  }
   function openImage(url,name){
     const dialog=el('dialog','timeline-image-lightbox'),bar=el('div','timeline-image-lightbox-actions'),close=el('button','quiet','关闭'),image=el('img','timeline-full-image');
     image.src=url;image.alt=name;
     close.onclick=()=>dialog.close();image.onclick=()=>image.classList.toggle('original-size');
-    bar.append(close);dialog.append(bar,image);dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    const download=el('button','quiet','下载');download.type='button';
+    download.onclick=()=>{const [header,data]=url.split(',');saveFile(new Blob([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],{type:header.slice(5,header.indexOf(';'))}),name);};
+    bar.append(download,close);dialog.append(bar,image);dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     document.body.append(dialog);dialog.showModal();
   }
   const labels = {inProgress:'进行中',completed:'已完成',failed:'失败',interrupted:'已中断',declined:'已拒绝',
@@ -289,10 +297,14 @@ const Timeline = (() => {
       const load=()=>pending||(pending=loader(ref.id,'artifacts').catch(error=>{pending=null;throw error;}));
       const preview=el('button','quiet attachment-name',ref.name);
       const bytes=result=>Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));
-      preview.onclick=async()=>{try{
+      preview.onclick=async()=>{status.textContent='';try{
         const result=await load(), dialog=el('dialog','attachment-preview'),close=el('button','quiet','关闭');
-        close.onclick=()=>dialog.close();dialog.append(close);
+        const download=el('button','quiet','下载');download.type='button';
+        download.setAttribute('aria-label','下载 '+ref.name);
         const data=bytes(result);let url;
+        const downloadStatus=el('span','image-status');
+        download.onclick=()=>{try{saveFile(new Blob([data],{type:result.mime||'application/octet-stream'}),ref.name);downloadStatus.textContent='';}catch(error){downloadStatus.textContent=error.message||'下载失败，请重试';}};
+        close.onclick=()=>dialog.close();dialog.append(download,close,downloadStatus);
         if(result.mime==='application/pdf'){
           url=URL.createObjectURL(new Blob([data],{type:'application/pdf'}));
           const frame=el('iframe');frame.title=ref.name;frame.setAttribute('sandbox','');frame.src=url;dialog.append(frame);

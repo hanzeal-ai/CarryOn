@@ -88,8 +88,43 @@ fs.mkdirSync('.runtime/uploads',{recursive:true});
    {id:'small',name:'说明.txt',kind:'file'}
   ]}]},$('messages'),()=>{throw Error('非预览附件不应自动读取');}));
   assert.equal(await page.locator('#messages .result-attachment button').count(),1);
-  assert.equal(await page.locator('#messages .result-attachment button').innerText(),'说明.txt');
+  assert.equal(await page.locator('#messages .result-attachment button.attachment-name').innerText(),'说明.txt');
   assert.equal(await page.locator('#messages [aria-label=\"设计资料，文件夹附件\"]').count(),1);
+  // Browser download must preserve the actual bytes and Unicode filename, including on mobile.
+  await page.evaluate(()=>{
+   window.downloadAttempts=0;
+   Timeline.render({thread:{id:'t1'},timeline:[{id:'download-result',type:'agentMessage',text:'生成完成',artifacts:[
+    {id:'binary',name:'报告 数据.bin',kind:'file'}
+   ]}]},$('messages'),async(id,kind)=>{
+    if(id!=='binary'||kind!=='artifacts')throw Error('附件路由错误');
+    window.downloadAttempts++;
+    if(window.downloadAttempts===1)throw Error('文件权限已撤销');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    return {mime:'application/octet-stream',base64:'AAEC/w=='};
+   });
+  });
+  assert.equal(await page.getByRole('button',{name:'下载 报告 数据.bin',exact:true}).count(),0);
+  const previewButton=page.getByRole('button',{name:'报告 数据.bin',exact:true});
+  await previewButton.click();await page.getByText('文件权限已撤销',{exact:true}).waitFor();
+  await previewButton.click();
+  const downloadButton=page.locator('.attachment-preview').getByRole('button',{name:'下载 报告 数据.bin',exact:true});
+  await downloadButton.waitFor();
+  const downloaded=page.waitForEvent('download');await downloadButton.click();
+  const file=await downloaded;assert.equal(file.suggestedFilename(),'报告 数据.bin');
+  assert.deepEqual(fs.readFileSync(await file.path()),Buffer.from([0,1,2,255]));
+  assert.equal(await page.locator('#messages .image-status').innerText(),'');
+  assert.equal(await page.evaluate(()=>window.downloadAttempts),2);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:`.runtime/uploads/${width}-${cloud?'cloud':'local'}-download.png`});
+  await page.locator('.attachment-preview').getByRole('button',{name:'关闭',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'下载 报告 数据.bin',exact:true}).count(),0);
+  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=';
+  await page.evaluate(png=>Timeline.render({thread:{id:'t1'},timeline:[{id:'image-download',type:'agentMessage',text:'图片',artifacts:[{id:'png',kind:'image',name:'结果.png',url:'data:image/png;base64,'+png}]}]},$('messages')),png);
+  await page.getByRole('button',{name:'打开原图',exact:true}).click();
+  const imageDownloaded=page.waitForEvent('download');await page.locator('.timeline-image-lightbox').getByRole('button',{name:'下载',exact:true}).click();
+  const imageFile=await imageDownloaded;assert.equal(imageFile.suggestedFilename(),'结果.png');
+  assert.deepEqual(fs.readFileSync(await imageFile.path()),Buffer.from(png,'base64'));
+  await page.locator('.timeline-image-lightbox').getByRole('button',{name:'关闭',exact:true}).click();
   // In-flight completion stays with its captured conversation.
   delayChunk=100;await choose('原会话.txt',Buffer.alloc(60000,2));await select('t2');
   await page.waitForTimeout(400);assert.equal(await page.locator('#upload-previews .upload-chip').count(),0);

@@ -46,6 +46,7 @@ struct ConversationView: View {
     @State private var visibleCount = 120
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
+    @State private var showingPhotos = false
     @State private var uploadPicker = UploadPickerState()
     private var uploadKey: String { model.scope + "\n" + thread.id }
     private var uploadTarget: UploadTarget { .thread(thread.id) }
@@ -369,6 +370,8 @@ struct ConversationView: View {
     var body: some View {
         conversationPresentation
         .background(ConversationUploadPicker(state: uploadPicker))
+        .photosPicker(isPresented: $showingPhotos, selection: $photos,
+                      maxSelectionCount: max(1, 3 - images.count), matching: .images)
         .onChange(of: model.historyRevision, initial: true) { _, _ in
             if model.history["thread"]["id"].text == thread.id { readingState?.historyLimit = model.historyLimit }
             refreshMessages()
@@ -604,7 +607,7 @@ struct ConversationView: View {
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
                 Menu {
                     UploadMenuItems(picker: uploadPicker, key: uploadKey, target: uploadTarget, disabled: submitting || model.editingMessage != .null)
-                    PhotosPicker(selection: $photos, maxSelectionCount: max(1, 3 - images.count), matching: .images) {
+                    Button { showingPhotos = true } label: {
                         Label("照片", systemImage: "photo")
                     }.disabled(images.count >= 3)
                     if model.history["controls"]["supportsFileReferences"].bool == true && model.allows(.files) {

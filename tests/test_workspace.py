@@ -725,3 +725,33 @@ class AvailableConversationTests(unittest.TestCase):
         row=self.workspace.dispatch('local','GET','/api/activity',None,{})[1]['threads'][0]
         self.assertEqual(row['activityPreview']['kind'],'other')
         self.assertEqual(row['activityPreview']['text'],'Partial result')
+
+    def test_native_projects_include_empty_project_and_keep_shared_roots_distinct(self):
+        projects = [{'id': 'native-one', 'name': 'Renamed project', 'rootPaths': ['/shared']},
+                    {'id': 'native-two', 'name': 'Empty project', 'rootPaths': ['/shared']}]
+        self.bridge.catalog.projects = lambda: projects
+        self.workspace.catalog_refresh()
+        result = self.workspace.dispatch('local', 'GET', '/api/projects', None, {})[1]
+        ids = [project_identity('/shared', native_id=p['id'])[0] for p in projects]
+        groups = {p['id']: p for p in result['projects']}
+        for pid, project in zip(ids, projects):
+            self.assertEqual(groups[pid]['name'], project['name'])
+            self.assertEqual(groups[pid]['rootPaths'], ['/shared'])
+            self.assertEqual(groups[pid]['total'], 0)
+            self.assertTrue(groups[pid]['canCreate'])
+        self.assertNotEqual(*ids)
+        before = self.workspace.revision
+        projects[0] = {**projects[0], 'name': 'New name'}
+        self.workspace.catalog_refresh()
+        self.assertGreater(self.workspace.revision, before)
+        groups = {p['id']: p for p in self.workspace.projection('local')[0]}
+        self.assertEqual(groups[ids[0]]['name'], 'New name')
+
+    def test_independent_workspace_keeps_direct_creation_instead_of_empty_native_projects(self):
+        self.bridge.catalog.independent = True
+        self.bridge.catalog.projects = lambda: [{'id': 'native', 'name': 'Saved elsewhere', 'rootPaths': ['/saved']}]
+        self.bridge.ipc.account_ready = True
+        self.workspace.catalog_refresh()
+        groups = {p['id']: p for p in self.workspace.projection('local')[0]}
+        self.assertNotIn(project_identity('/saved', native_id='native')[0], groups)
+        self.assertTrue(groups[project_identity(None)[0]]['canCreate'])

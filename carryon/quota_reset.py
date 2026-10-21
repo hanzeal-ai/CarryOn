@@ -53,7 +53,8 @@ def submit(bridge, data, source=None, authorize=None):
                 write()
         params = {'idempotencyKey': request_id}
         if credit is not None: params['creditId'] = credit
-        result = native_consume(bridge.catalog.home, account, params, guarded)
+        from carryon.app_server.shared_account import account_home
+        result = native_consume(account_home(bridge), account, params, guarded)
         if not isinstance(result, dict) or result.get('outcome') not in OUTCOMES:
             raise ValueError('原生重置回执无效')
         bridge.journal.update(request_id, state='completed', result={'outcome': result['outcome']},

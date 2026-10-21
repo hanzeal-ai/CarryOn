@@ -1,5 +1,6 @@
 """Run native desktop lifecycle model against the real CLI and isolated app-servers."""
 import os
+import json
 import platform
 import shlex
 import subprocess
@@ -9,6 +10,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix='carryon-desktop-') as temp:
     root=Path(temp).resolve(); cli=root/'cli'; binary=root/'desktop-smoke'
+    native_home=root/'native-codex'; native_home.mkdir()
+    (native_home/'auth.json').write_text(json.dumps({'OPENAI_API_KEY':'sk-desktop-shared-fixture'}))
     cli.write_text('#!/bin/sh\ncd '+shlex.quote(str(ROOT))+'\nexec '+shlex.quote(sys.executable)+' -m carryon "$@"\n');cli.chmod(0o700)
     env=dict(os.environ,CARRYON_HOME=str(root/'default'),CARRYON_REGISTRY_DIR=str(root/'registry'),
              CODEX_HOME=str(root/'native-codex'),CARRYON_DESKTOP_CLI=str(cli))

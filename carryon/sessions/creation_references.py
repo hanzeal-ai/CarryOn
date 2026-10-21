@@ -16,9 +16,9 @@ def discover(bridge, project_id=None, authorize=None):
         cwd = str(private_dir(bridge.workspace_directory / 'tasks'))
         project = None
     else:
-        from carryon.sessions.creation import resolve_project
-        project = resolve_project(bridge.catalog, project_id)
-        cwd = project['cwd']
+        from carryon.sessions.creation import resolve_project, resolve_target
+        project = resolve_target(bridge.catalog, project_id)
+        cwd = project['cwd'] if project else str(private_dir(bridge.owners().directory / 'tasks'))
     def check():
         with bridge.lock:
             bridge.check_generation(ipc, generation)
@@ -48,5 +48,9 @@ def discover(bridge, project_id=None, authorize=None):
         runtime = service.runtime_factory(bridge.catalog.home, runtime_directory=Path(directory))
         try:
             runtime.connect()
+            if project is None:
+                with TemporaryDirectory(prefix='reference-discovery-', dir=cwd) as task_directory:
+                    cwd = task_directory
+                    return read(runtime)
             return read(runtime)
         finally: runtime.close()
