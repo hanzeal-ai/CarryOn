@@ -180,6 +180,8 @@ def serve(handler):
             message = ws.receive()
             if message.get('type') == 'ping':
                 ws.send({'type': 'pong'})
+            elif message.get('type') == 'voice-ack':
+                session.ack_voice(message)
             else:
                 session.subscribe(message)
     except (OSError, EOFError, ValueError):

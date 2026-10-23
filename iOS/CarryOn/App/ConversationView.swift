@@ -16,7 +16,8 @@ struct ConversationView: View {
     }
     @State private var commandPanel: CommandPanel?
     @State private var menu = false
-    @State private var renaming = false
+    private struct RenamePanel { let scope: String; let thread: Record }
+    @State private var renamePanel: RenamePanel?
     @State private var archiving = false
     @State private var grouping = false
     @State private var showingChanges = false
@@ -38,6 +39,8 @@ struct ConversationView: View {
     @State private var commentPanel: CommentPanel?
     @State private var newMessages = false
     @State private var lastTimelineItem: JSONValue?
+    @State private var selectionSourceID = ""
+    @State private var selectionAnnotationContext: (scope: String, epoch: UUID)?
     @State private var selectionText: String?
     private struct SideLaunch: Identifiable {
         let id = UUID()
@@ -53,6 +56,7 @@ struct ConversationView: View {
     @State private var bottomVisible = true
     @State private var photos: [PhotosPickerItem] = []
     @State private var showingPhotos = false
+    @State private var showingAttachments = false
     @State private var uploadPicker = UploadPickerState()
     private var uploadKey: String { model.scope + "\n" + thread.id }
     private var uploadTarget: UploadTarget { .thread(thread.id) }
@@ -247,6 +251,8 @@ struct ConversationView: View {
         case .selectText:
             let user = item["type"].text != "agentMessage"
             let text = user ? (item["displayText"].string ?? item["text"].text) : ConversationPresentation.attachmentDisplayText(item)
+            selectionAnnotationContext = (scope, epoch)
+            selectionSourceID = item.stableID
             selectionText = MessageTextSelectionView.plainText(text, resolveCreatedThreads: !user)
         }
     }
@@ -297,7 +303,7 @@ struct ConversationView: View {
         .environment(\.conversationDisclosureState, disclosureState)
         .environment(\.conversationContentContext, ConversationContentContext(isReadOnly: model.conversationReadOnly))
     }
-    private var conversationPresentation: some View {
+    private var conversationNavigationPresentation: some View {
         chatContent
         .navigationTitle(model.history["thread"]["title"].string ?? model.selectedThread?.title ?? thread.title).navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(!model.threadParents.isEmpty)
@@ -349,7 +355,7 @@ struct ConversationView: View {
                             .disabled(!model.canWrite(.edit) || model.writing)
                     }
                     if supportsOperation("rename", in: model.history) {
-                        Button { renaming = true } label: { Label("重命名", systemImage: "pencil") }
+                        Button { renamePanel = RenamePanel(scope: model.scope, thread: thread) } label: { Label("重命名", systemImage: "pencil") }
                             .disabled(!model.canInteract(.edit) || model.writing)
                     }
                     Button { UIPasteboard.general.string = thread.id } label: { Label("复制对话串 ID", systemImage: "square.on.square") }
@@ -372,7 +378,7 @@ struct ConversationView: View {
                 if launch.scope == model.scope, launch.parentID == model.selectedThread?.id, supportsOperation("side-create", in: model.history), model.canWrite(.create) { sideLaunch = launch }
             }
         }) {
-            if let selectionText { MessageTextSelectionView(text: selectionText, askInSide: selectionSideAction) }
+            if let selectionText { MessageTextSelectionView(text: selectionText, askInSide: selectionSideAction, addAnnotation: selectionAnnotationAction) }
         }
 
         .sheet(item: $sideLaunch) { launch in
@@ -387,7 +393,7 @@ struct ConversationView: View {
             catch { model.report(error, operation: "刷新其他会话角标", blocking: false) }
         }
         .sheet(isPresented: $menu) { ConversationMenu() }
-        .sheet(isPresented: $renaming) { RenameConversationView(thread: thread, scope: model.scope) }
+        .overlay { if let panel = renamePanel { RenameConversationView(thread: panel.thread, scope: panel.scope) { renamePanel = nil } } }
         .sheet(isPresented: $archiving) { ArchiveActionView(thread: thread, scope: model.scope, restoring: false) { archiving = false } }
         .sheet(isPresented: $grouping) { SectionConversationView(thread: thread, scope: model.scope) }
         .sheet(isPresented: $showingChanges) { ConversationChangesView(threadID: thread.id) }
@@ -421,6 +427,9 @@ struct ConversationView: View {
                 }
             }
         }
+    }
+    private var conversationPresentation: some View {
+        conversationNavigationPresentation
         .sheet(isPresented: $skillsPicker) { SkillsPickerView(target: .conversation(actionTarget)) }
         .sheet(item: $filesPicker) { panel in ProjectFilesPicker(threadID: panel.threadID, scope: panel.scope) }
         .sheet(isPresented: $mentionsPicker) { SkillsPickerView(target: .conversation(actionTarget), mentions: true) }
@@ -431,6 +440,10 @@ struct ConversationView: View {
     }
     var body: some View {
         conversationPresentation
+        .accessibilityHidden(showingAttachments)
+        .overlay { AttachmentPanel(isPresented: $showingAttachments) { attachmentItems } }
+        .onChange(of: model.canCompose) { _, allowed in if !allowed { showingAttachments = false } }
+        .onChange(of: model.scope) { _, _ in showingAttachments = false }
         .background(ConversationUploadPicker(state: uploadPicker))
         .photosPicker(isPresented: $showingPhotos, selection: $photos,
                       maxSelectionCount: max(1, 3 - images.count), matching: .images)
@@ -448,7 +461,7 @@ struct ConversationView: View {
         .onChange(of: model.conversationReadOnly) { _, _ in refreshMessages() }
         .onChange(of: supportsOperation("side-create", in: model.history) && model.canWrite(.create)) { _, _ in refreshMessages() }
         .onChange(of: model.canInteract(.edit)) { _, _ in refreshMessages() }
-        .onChange(of: photos) { _, selection in Task { await loadPhotos(selection) } }
+        .onChange(of: photos) { _, selection in if !selection.isEmpty { showingAttachments = false }; Task { await loadPhotos(selection) } }
         .onDisappear { navigationTracker.cancelReadingRestoration(); navigationTracker.onLayout = nil; displayGeneration = UUID(); selectionGeneration = UUID(); loadingImages = false }
         .onAppear {
             navigationTracker.onLayout = { navigationLayoutChanged() }
@@ -460,6 +473,20 @@ struct ConversationView: View {
             else if let anchor = state.anchorID { navigationAnchor = anchor; pendingNavigation = anchor; restoreScroll = ConversationListScroll(messageID: anchor, position: .middle) }
             else if state.offset > 20 { restoreScroll = ConversationListScroll(offset: state.offset) }
             refreshMessages()
+        }
+    }
+    private var selectionAnnotationAction: (@MainActor @Sendable (String) -> Void)? {
+        guard let context = selectionAnnotationContext else { return nil }
+        return annotationAction(sourceID: selectionSourceID, scope: context.scope, epoch: context.epoch)
+    }
+    private func annotationAction(sourceID: String, scope: String, epoch: UUID) -> (@MainActor @Sendable (String) -> Void)? {
+        guard model.canCompose, model.editingMessage == .null else { return nil }
+        let target = thread.id
+        return { text in
+            guard model.scope == scope, model.epoch == epoch, model.selectedThread?.id == target,
+                  model.canCompose, model.editingMessage == .null, !submitting,
+                  let annotation = MessageAnnotation(sourceID: sourceID, text: text) else { return }
+            model.draftAnnotations.append(annotation)
         }
     }
     private var askInSideAction: (@MainActor @Sendable (String) -> Void)? { sideAction(afterSelectionDismiss: false) }
@@ -486,6 +513,7 @@ struct ConversationView: View {
                         ConversationTimelineRow(item: item, threadID: thread.id)
                     }
                 }
+                    .environment(\.addMessageAnnotation, annotationAction(sourceID: item.stableID, scope: scope, epoch: epoch))
                     .environment(\.askInSideChat, askInSideAction)
                     .environment(\.conversationSelectionChanged, { navigationTracker.selectionChanged($0) })
                     .environment(\.preparedMessageMarkdown, message.presentation?.markdown)
@@ -645,7 +673,7 @@ struct ConversationView: View {
         }.accessibilityLabel("对话消息导航")
     }
     private var composerCommandAllowed: Bool {
-        guard model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty, let command = ComposerCommand(ComposerDocument(text: model.draft, skills: model.draftSkills).wireText),
+        guard model.draftComments.isEmpty, model.draftAnnotations.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty, let command = ComposerCommand(ComposerDocument(text: model.draft, skills: model.draftSkills).wireText),
               ConversationCommands.available(command.name, model: model, target: actionTarget) else { return false }
         return !["plan", "side"].contains(command.name) || command.argument.isEmpty || model.canWrite(.send)
     }
@@ -661,11 +689,12 @@ struct ConversationView: View {
             disabled: !(model.canCompose || composerCommandAllowed || (model.state == "running" && model.canInteract(.stop))) || loadingImages || submitting,
             draftEditable: !loadingImages && !submitting && !model.writing,
             sendAllowed: composerCommandAllowed || (model.allows(model.editingMessage == .null ? .send : .edit) && !queueUnavailable), sendingReady: uploadsReady, commandInputAllowed: commandInputAllowed, stopAllowed: model.canInteract(.stop),
-            hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftFiles.isEmpty || !model.draftUploads.isEmpty, stopping: model.state == "running", submitting: submitting,
+            hasImages: !images.isEmpty || !model.draftSkills.isEmpty || !model.draftComments.isEmpty || !model.draftAnnotations.isEmpty || !model.draftFiles.isEmpty || !model.draftUploads.isEmpty, stopping: model.state == "running", submitting: submitting,
             resuming: supportsOperation("resume", in: model.history) && model.state == "idle" && model.history["controls"]["lastTurnStatus"].text == "interrupted" && model.editingMessage == .null,
             sendLabel: model.state == "running" ? (queueFollowUp ? "排队发送" : "补充到当前任务") : nil,
             compactLeading: AnyView(attachmentMenu),
             voice: supportsOperation("voice-start", in: model.history) && model.canInteract(.send) ? { showingVoice = true } : nil,
+            draftHeader: model.draftAnnotations.isEmpty ? nil : AnyView(annotationChip),
             send: submitMessage,
             stop: interruptTurn,
             resume: { Task { _ = await model.operation("resume", fields: ["turnId": model.history["controls"]["lastTurnId"]]) } }) {
@@ -697,23 +726,24 @@ struct ConversationView: View {
         }
     }
     private var attachmentMenu: some View {
-                Menu {
-                    UploadMenuItems(picker: uploadPicker, key: uploadKey, target: uploadTarget, disabled: submitting || model.editingMessage != .null)
+        Button { showingAttachments.toggle() } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
+            .disabled(!model.canCompose || model.editingMessage != .null || loadingImages || submitting)
+            .accessibilityLabel("添加附件或技能")
+    }
+    @ViewBuilder private var attachmentItems: some View {
+                    UploadMenuItems(picker: uploadPicker, key: uploadKey, target: uploadTarget, disabled: submitting || model.editingMessage != .null, selected: { showingAttachments = false })
                     Button { showingPhotos = true } label: {
                         Label("照片", systemImage: "photo")
                     }.disabled(images.count >= 3)
                     if model.history["controls"]["supportsFileReferences"].bool == true && model.allows(.files) {
-                        Button { filesPicker = FilePanel(scope: model.scope, threadID: thread.id) } label: { Label("项目文件", systemImage: "doc") }
+                        Button { showingAttachments = false; filesPicker = FilePanel(scope: model.scope, threadID: thread.id) } label: { Label("项目文件", systemImage: "doc") }
                     }
                     if model.history["controls"]["supportsMentions"].bool == true {
-                        Button { mentionsPicker = true } label: { Label("应用与插件", systemImage: "at") }
+                        Button { showingAttachments = false; mentionsPicker = true } label: { Label("应用与插件", systemImage: "at") }
                     }
                     if model.history["controls"]["supportsSkills"].bool == true {
-                        Button { skillsPicker = true } label: { Label("技能", systemImage: "bolt") }
+                        Button { showingAttachments = false; skillsPicker = true } label: { Label("技能", systemImage: "bolt") }
                     }
-                } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
-                    .disabled(!model.canCompose || model.editingMessage != .null || loadingImages || submitting)
-                    .accessibilityLabel("添加附件或技能")
     }
     private func submitMessage() {
         Task { await send() }
@@ -772,9 +802,20 @@ struct ConversationView: View {
             }
         }
     }
+    @ViewBuilder private var annotationChip: some View {
+            if !model.draftAnnotations.isEmpty {
+                HStack(spacing: 8) {
+                    Label("\(model.draftAnnotations.count) 条批注", systemImage: "text.bubble")
+                    Button { model.draftAnnotations = [] } label: { Image(systemName: "xmark").frame(width: 28, height: 32) }
+                        .accessibilityLabel("移除正文批注")
+                        .disabled(submitting || model.writing || model.conversationReadOnly)
+                }.font(.subheadline).foregroundStyle(Design.secondary).padding(.leading, 10).padding(.trailing, 4)
+                    .background(Design.secondary.opacity(0.08), in: Capsule()).frame(maxWidth: .infinity, alignment: .leading)
+            }
+    }
     private var composerAccessories: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let query = ComposerCommand.query(model.draft), model.draftSkills.isEmpty, images.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty {
+            if let query = ComposerCommand.query(model.draft), model.draftSkills.isEmpty, images.isEmpty, model.draftComments.isEmpty, model.draftAnnotations.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty {
                 let matches = ComposerCommand.names.filter { $0.hasPrefix(query) && ConversationCommands.available($0, model: model, target: actionTarget) }
                 if !matches.isEmpty {
                     ScrollView {
@@ -857,7 +898,7 @@ struct ConversationView: View {
         guard !submitting, model.canWrite, !loadingImages, uploadsReady else { return }
         let command = ComposerDocument(text: model.draft, skills: model.draftSkills).wireText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = ComposerCommand(command) {
-            guard images.isEmpty, model.draftSkills.isEmpty, model.draftComments.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty else { model.report(APIError("此命令不接受图片、引用或评论，请先处理附件")); return }
+            guard images.isEmpty, model.draftSkills.isEmpty, model.draftComments.isEmpty, model.draftAnnotations.isEmpty, model.draftFiles.isEmpty, model.draftUploads.isEmpty else { model.report(APIError("此命令不接受图片、引用或评论，请先处理附件")); return }
             let source = model.draft, scope = model.scope, target = actionTarget
             submitting = true
             let effect = await ConversationCommands.execute(parsed, model: model, target: target)

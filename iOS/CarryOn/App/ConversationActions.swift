@@ -34,6 +34,7 @@ struct NewConversationView: View {
     }
     @State private var photos: [PhotosPickerItem] = []
     @State private var showingPhotos = false
+    @State private var showingAttachments = false
     @State private var uploadPicker = UploadPickerState()
     private var uploads: [ConversationUpload] { model.draftStore.uploads[draftKey] ?? [] }
     private var uploadTarget: UploadTarget { .creation(creationProject) }
@@ -80,19 +81,14 @@ struct NewConversationView: View {
     @State private var offset = 0
     @State private var hasMore = true
     @State private var loadVersion = UUID()
-    var body: some View {
-        NavigationStack {
+    var body: some View { NavigationStack { creationPresentation } }
+    private var creationContent: some View {
             ChatView(messages: [], didSendMessage: { _ in }, inputViewBuilder: { _ in
                 CarryOnChatComposer(text: draftBinding, skills: referenceBinding, selection: selectionBinding, disabled: !model.canWrite(.create) || !creationSettingsAllowed || !destinationAvailable || loading || loadingPhotos || !uploadsReady,
                                     draftEditable: !loading && !loadingPhotos, hasImages: !images.isEmpty || !uploads.isEmpty, submitting: loading, placeholder: "在 \(model.selectedWorkspace?.title ?? model.device?.title ?? "工作区") 上工作", autofocus: true,
                                     send: { Task { await create() } }) {
-                    Menu {
-                        UploadMenuItems(picker: uploadPicker, key: draftKey, target: uploadTarget, disabled: loading || !destinationAvailable)
-                        Button { showingPhotos = true } label: { Label("添加图片", systemImage: "photo") }.disabled(images.count >= 3)
-                        Button { choosingSkills = true } label: { Label("技能", systemImage: "bolt") }.disabled(!referencesAvailable)
-                        Button { choosingMentions = true } label: { Label("应用与插件", systemImage: "at") }.disabled(!referencesAvailable)
-                    } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
-                        .disabled(loading || loadingPhotos).accessibilityLabel("添加附件")
+                    Button { showingAttachments.toggle() } label: { Image(systemName: "plus").offset(x: 4).frame(width: 44, height: 44) }
+                        .disabled(loading || loadingPhotos || !model.canWrite(.create)).accessibilityLabel("添加附件")
                     if !model.status["supportedCreationSettings"].array.isEmpty {
                         Button { creationPanel = .configuration(model.scope) } label: {
                             Image(systemName: "checkmark.shield").frame(width: 44, height: 44)
@@ -156,9 +152,25 @@ struct NewConversationView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24)
             }
             .carryOnChatAppearance()
+    }
+    private var creationAttachments: some View {
+        creationContent
+            .accessibilityHidden(showingAttachments)
+            .overlay { AttachmentPanel(isPresented: $showingAttachments) {
+                UploadMenuItems(picker: uploadPicker, key: draftKey, target: uploadTarget, disabled: loading || !destinationAvailable, selected: { showingAttachments = false })
+                Button { showingPhotos = true } label: { Label("照片", systemImage: "photo") }.disabled(images.count >= 3)
+                Button { showingAttachments = false; choosingSkills = true } label: { Label("技能", systemImage: "bolt") }.disabled(!referencesAvailable)
+                Button { showingAttachments = false; choosingMentions = true } label: { Label("应用与插件", systemImage: "at") }.disabled(!referencesAvailable)
+            } }
+            .onChange(of: model.scope) { _, _ in showingAttachments = false }
+            .onChange(of: model.canWrite(.create)) { _, allowed in if !allowed { showingAttachments = false } }
+            .onChange(of: photos) { _, selection in if !selection.isEmpty { showingAttachments = false } }
             .background(ConversationUploadPicker(state: uploadPicker))
             .photosPicker(isPresented: $showingPhotos, selection: $photos,
                           maxSelectionCount: max(1, 3 - images.count), matching: .images)
+    }
+    private var creationNavigation: some View {
+        creationAttachments
             .disabled(loading)
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
                 .onAppear { presentationActive = true }.onDisappear { presentationActive = false }
@@ -186,6 +198,9 @@ struct NewConversationView: View {
                     case .configuration(let scope): CreationConfigurationView(selection: settingsBinding(scope: scope), scope: scope)
                     }
                 }
+    }
+    private var creationPresentation: some View {
+        creationNavigation
                 .overlay {
                     if let scope = quickModelScope, scope == model.scope {
                         ReasoningEffortOverlay(close: { quickModelScope = nil }) {
@@ -199,20 +214,25 @@ struct NewConversationView: View {
                         }
                     }
                 }
-                .sheet(isPresented: $selecting) {
+                .sheet(isPresented: $selecting) { projectPicker }
+    }
+    private var projectPicker: some View {
                     NavigationStack {
                         List {
                             if projectlessCreation {
                                 Button { project = ""; selecting = false } label: { HStack { Text("无项目"); Spacer(); if project.isEmpty { Image(systemName: "checkmark") } } }
                             }
-                            ForEach(projects) { item in Button { project = item.id; selecting = false } label: { HStack { Text(item.title); Spacer(); if project == item.id { Image(systemName: "checkmark") } } } }
+                            ForEach(projects) { item in projectChoice(item) }
                             if hasMore { Button("加载更多") { Task { await loadProjects(reset: false) } }.disabled(loading) }
                             if let failure { Text(failure).foregroundStyle(.red) }
                             if projects.isEmpty && !loading && failure == nil { Text("暂无可用项目").foregroundStyle(Design.secondary) }
                         }.navigationTitle("选择项目").navigationBarTitleDisplayMode(.inline)
                             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { selecting = false } } }
                     }
-                }
+    }
+    private func projectChoice(_ item: Record) -> some View {
+        Button { project = item.id; selecting = false } label: {
+            HStack { Text(item.title); Spacer(); if project == item.id { Image(systemName: "checkmark") } }
         }
     }
     private func loadCreationModels() async {
@@ -367,8 +387,8 @@ struct ConversationMenu: View {
             .sheet(item: $skillTarget) { target in SkillManagementView(thread: target.thread, scope: target.scope) }
             .sheet(item: $terminalTarget) { target in BackgroundTerminalsView(thread: target.thread, scope: target.scope) }
             .sheet(item: $sectionTarget) { target in SectionConversationView(thread: target.thread, scope: target.scope) }
-            .sheet(item: $renameTarget) { target in
-                RenameConversationView(thread: target.thread, scope: target.scope)
+            .overlay {
+                if let target = renameTarget { RenameConversationView(thread: target.thread, scope: target.scope) { renameTarget = nil } }
             }
             .sheet(item: $archiveTarget) { target in
                 ArchiveActionView(thread: target.thread, scope: target.scope, restoring: false) { dismiss() }

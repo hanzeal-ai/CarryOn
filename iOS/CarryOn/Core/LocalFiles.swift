@@ -32,9 +32,11 @@ public struct DraftSnapshot: Codable, Sendable {
     public var skills: [String: [ComposerReference]]?
     public var submissions: [String: DraftSubmission]?
     public var files: [String: [ProjectFileReference]]?
+    public var annotations: [String: [MessageAnnotation]]?
     public var comments: [String: [ReviewComment]]?
     public var uploads: [String: [ConversationUpload]]?
-    public init(texts: [String: String] = [:], images: [String: [String]] = [:], skills: [String: [ComposerReference]] = [:], settings: [String: JSONValue] = [:], comments: [String: [ReviewComment]] = [:], submissions: [String: DraftSubmission] = [:], files: [String: [ProjectFileReference]] = [:], uploads: [String: [ConversationUpload]] = [:]) {
+    public init(texts: [String: String] = [:], images: [String: [String]] = [:], skills: [String: [ComposerReference]] = [:], settings: [String: JSONValue] = [:], comments: [String: [ReviewComment]] = [:], submissions: [String: DraftSubmission] = [:], files: [String: [ProjectFileReference]] = [:], uploads: [String: [ConversationUpload]] = [:], annotations: [String: [MessageAnnotation]] = [:]) {
+        self.annotations = annotations.isEmpty ? nil : annotations.filter { !$0.value.isEmpty }
         self.files = files.isEmpty ? nil : files.filter { !$0.value.isEmpty }
         self.uploads = uploads.isEmpty ? nil : uploads.filter { !$0.value.isEmpty }
         self.settings = settings.isEmpty ? nil : settings.filter { $0.value != .null }
@@ -71,6 +73,7 @@ public final class DraftStore {
     public var submissions: [String: DraftSubmission] = [:] { didSet { scheduleSave() } }
     public var files: [String: [ProjectFileReference]] = [:] { didSet { scheduleSave() } }
     public var uploads: [String: [ConversationUpload]] = [:] { didSet { scheduleSave() } }
+    public var annotations: [String: [MessageAnnotation]] = [:] { didSet { scheduleSave() } }
     public var comments: [String: [ReviewComment]] = [:] { didSet { scheduleSave() } }
     private let file: URL
     private var activeFile: URL?
@@ -124,11 +127,13 @@ public final class DraftStore {
                 submissions = pending.complete ? (pending.snapshot.submissions ?? [:]) : (saved.submissions ?? [:]).merging(pending.snapshot.submissions ?? [:]) { _, new in new }
                 uploads = pending.complete ? (pending.snapshot.uploads ?? [:]) : (saved.uploads ?? [:]).merging(pending.snapshot.uploads ?? [:]) { _, new in new }
                 files = pending.complete ? (pending.snapshot.files ?? [:]) : (saved.files ?? [:]).merging(pending.snapshot.files ?? [:]) { _, new in new }
+                annotations = pending.complete ? (pending.snapshot.annotations ?? [:]) : (saved.annotations ?? [:]).merging(pending.snapshot.annotations ?? [:]) { _, new in new }
                 comments = pending.complete ? (pending.snapshot.comments ?? [:]) : (saved.comments ?? [:]).merging(pending.snapshot.comments ?? [:]) { _, new in new }
             } else {
                 texts = saved.texts; images = saved.images; skills = saved.skills ?? [:]; settings = saved.settings ?? [:]
                 submissions = saved.submissions ?? [:]
                 files = saved.files ?? [:]; uploads = saved.uploads ?? [:]
+                annotations = saved.annotations ?? [:]
                 comments = saved.comments ?? [:]
             }
             loaded = true
@@ -142,6 +147,7 @@ public final class DraftStore {
             settings = unsaved[file]?.snapshot.settings ?? [:]
             submissions = unsaved[file]?.snapshot.submissions ?? [:]
             files = unsaved[file]?.snapshot.files ?? [:]; uploads = unsaved[file]?.snapshot.uploads ?? [:]
+            annotations = unsaved[file]?.snapshot.annotations ?? [:]
             comments = unsaved[file]?.snapshot.comments ?? [:]
             report("草稿文件无法读取，原文件已保留；当前编辑暂不能持久保存", "读取草稿")
         }
@@ -156,11 +162,12 @@ public final class DraftStore {
         if ["accepted", "completed", "inProgress"].contains(state) {
             guard submission.creation != true || job["createdThreadId"].string?.isEmpty == false else { return false }
             let key = submission.draftKey ?? (submission.scope + "\n" + submission.threadID)
-            var current = ConversationDraft(text: texts[key] ?? "", images: images[key] ?? [], skills: skills[key] ?? [], comments: comments[key] ?? [], files: files[key] ?? [], uploads: uploads[key] ?? [])
+            var current = ConversationDraft(text: texts[key] ?? "", images: images[key] ?? [], skills: skills[key] ?? [], comments: comments[key] ?? [], files: files[key] ?? [], uploads: uploads[key] ?? [], annotations: annotations[key] ?? [])
             let previousUploads = current.uploads ?? []
             current.didSubmit(submission.draft)
             let discarded = previousUploads.filter { !(current.uploads ?? []).contains($0) }
             Task.detached(priority: .utility) { discarded.forEach(UploadStaging.remove) }
+            annotations[key] = current.annotations ?? []
             texts[key] = current.text; images[key] = current.images; skills[key] = current.skills; comments[key] = current.comments; files[key] = current.files ?? []; uploads[key] = current.uploads ?? []
         }
         submissions.removeValue(forKey: id); save()
@@ -181,14 +188,15 @@ public final class DraftStore {
         guard let activeFile else { return }
         var snapshot = DraftSnapshot()
         snapshot.texts = texts; snapshot.images = images; snapshot.skills = skills; snapshot.settings = settings
+        snapshot.annotations = annotations
         snapshot.comments = comments; snapshot.submissions = submissions; snapshot.files = files; snapshot.uploads = uploads
         guard loaded else {
-            if !texts.isEmpty || !images.isEmpty || !skills.isEmpty || !settings.isEmpty || !comments.isEmpty || !submissions.isEmpty || !files.isEmpty || !uploads.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
+            if !annotations.isEmpty || !texts.isEmpty || !images.isEmpty || !skills.isEmpty || !settings.isEmpty || !comments.isEmpty || !submissions.isEmpty || !files.isEmpty || !uploads.isEmpty { unsaved[activeFile] = Save(snapshot: snapshot, complete: unsaved[activeFile]?.complete ?? false) }
             return
         }
         guard dirty else { return }
         dirty = false
-        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images, skills: skills, settings: settings, comments: comments, submissions: submissions, files: files, uploads: uploads), complete: true)
+        let save = Save(snapshot: DraftSnapshot(texts: texts, images: images, skills: skills, settings: settings, comments: comments, submissions: submissions, files: files, uploads: uploads, annotations: annotations), complete: true)
         unsaved[activeFile] = save; queued[activeFile] = save
         guard writer == nil else { return }
         writer = Task {
@@ -211,6 +219,7 @@ public final class DraftStore {
     public func reset() {
         save(); loaded = false; dirty = false; activeFile = nil; generation = UUID()
         texts = [:]; images = [:]; skills = [:]; settings = [:]
+        annotations = [:]
         comments = [:]; submissions = [:]; files = [:]; uploads = [:]
     }
 }

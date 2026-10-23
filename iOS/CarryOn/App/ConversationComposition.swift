@@ -44,10 +44,11 @@ extension AppModel {
         guard uploads.isEmpty || (status["supportsUploads"].bool == true && allows(.files)) else {
             error = "当前工作区暂不支持文件上传，请恢复权限或移除附件"; return false
         }
+        let annotations = edit == .null ? draftAnnotations : []
         let comments = edit == .null ? draftComments : []
-        let sent = ConversationDraft(text: text, images: images.compactMap(\.string), skills: skills, comments: comments, files: files, uploads: uploads)
+        let sent = ConversationDraft(text: text, images: images.compactMap(\.string), skills: skills, comments: comments, files: files, uploads: uploads, annotations: annotations)
         guard !sent.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !skills.isEmpty || !files.isEmpty || !uploads.isEmpty else { return false }
-        let wireText = ConversationDraft(text: text.replacingOccurrences(of: ComposerDocument.marker, with: ""), comments: comments).prompt
+        let wireText = ConversationDraft(text: text.replacingOccurrences(of: ComposerDocument.marker, with: ""), comments: comments, annotations: annotations).prompt
         var body: JSONValue = .object(["prompt": .string(wireText)])
         if !images.isEmpty { body = body.setting("images", .array(images)) }
         if !skills.isEmpty { body = body.setting("skills", .array(skills.filter { !$0.isMention }.map(\.value))) }

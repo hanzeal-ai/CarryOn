@@ -403,7 +403,7 @@ SideTimeline.configureHistory(async()=>{sideHistoryLimit=Math.min(100000,sideHis
 async function loadHistory() {
   subscription = client.subscribe({historyLimit,sideHistoryLimit,threadId: enabled ? selected : null,
     threadIds: enabled ? threads.slice(0,100).map(t => t.id) : [],
-    includeSideChats: enabled && sideOpen, sideThreadId: enabled && sideOpen ? sideSelected : null});
+    includeSideChats: enabled && sideOpen, sideThreadId: enabled && sideOpen ? sideSelected : null,...VoiceControls.selection()});
 }
 let workspaceRefreshPending=false,workspaceRetryDelay=1000;
 function workspaceInteractionActive(){
@@ -431,7 +431,13 @@ async function flushWorkspaceRefresh(){
 for(const event of ['focusout','pointerout','selectionchange','close'])document.addEventListener(event,()=>{
   if(workspaceRefreshPending){clearTimeout(workspaceRefreshTimer);workspaceRefreshTimer=setTimeout(()=>flushWorkspaceRefresh().catch(e=>notice(e.message)),300);}
 },true);
+let lastPageProjection=null;
 async function receiveUpdate(data, current) {
+  const {voice,voiceError,...page}=data,projection=JSON.stringify(page);
+  if(streamReady&&data.subscription===subscription&&data.threadId===selected&&(voice||voiceError)&&projection===lastPageProjection){
+    VoiceControls.receive(data);return;
+  }
+  lastPageProjection=projection;
   const wasReady=streamReady;streamReady=true;
   const wasEnabled = enabled,previousScope=draftScope();
   if(!cloudMode&&data.status.workspaceSession!==undefined&&client.workspaceSession!==data.status.workspaceSession||!wasReady || enabled !== data.status.enabled || workspaceAccountReady !== (data.status.accountReady !== false) || supportsSessionLoading!==(data.status.supportsSessionLoading===true) || supportsUploads!==(data.status.supportsUploads===true) || supportsPluginManagement!==(data.status.supportsPluginManagement===true) || supportsThreadSections!==(data.status.supportsThreadSections===true) || supportsFullTextSearch!==(data.status.supportsFullTextSearch===true) || cloudMode&&client.control!==(data.status.remoteControl===true)) applyStatus(data.status);
@@ -471,6 +477,7 @@ async function receiveUpdate(data, current) {
     const job=data.jobs?.find(job=>job.id===sideJob);if(job)$('side-send-status').textContent=job.error||({accepted:'已接收',completed:'已完成',failed:'发送失败',uncertain:'结果待核对，请勿重复发送',preparing:'正在提交…',dispatching:'正在提交…'}[job.state]||job.state);
     updateSideComposer();
   }
+  VoiceControls.receive(data);
   if(data.error) { composeHistory={access:{...composeHistory?.access,nativeReady:false}};updateComposeButton();Operations.reset();lastHistory='';$('history-source').textContent='同步暂不可用';if(!$('messages').dataset.loaded||$('messages').querySelector('[data-state=loading]'))$('messages').replaceChildren(viewState('加载失败',{detail:data.error,retry:retryHistory,symbol:'offline'}));else notice(data.error);return; }
   if(data.history) {
     const previousHistory=historyCache.get(conversationKey(selected));
@@ -487,7 +494,7 @@ async function receiveUpdate(data, current) {
   }
 }
 function streamDisconnected(event) {
-  streamReady=false;feed.pause();
+  streamReady=false;lastPageProjection=null;feed.pause();VoiceControls.disconnected();
   sideComposeHistory=null;updateSideComposer();
   $('status').textContent='重连中';
   $('send').disabled=true;$('attach-images').disabled=true;$('create').disabled=true;
@@ -1028,7 +1035,7 @@ sidebar.addEventListener('touchstart',event=>{if(sidebar.scrollTop===0&&$('threa
 sidebar.addEventListener('touchend',event=>{if(refreshTouch!==null&&event.changedTouches[0]?.clientY-refreshTouch>80&&enabled)loadThreads().catch(e=>notice(e.message));refreshTouch=null;},{passive:true});
 sidebar.addEventListener('touchcancel',()=>{refreshTouch=null;},{passive:true});
 
-VoiceControls.configure({api,client,target:()=>selected?{thread:selected,scope:draftScope(),epoch:client.epoch}:null,current:t=>selected===t.thread&&draftScope()===t.scope&&client.epoch===t.epoch,supported:()=>composeHistory?.controls?.supportedOperations?.includes("voice-start")===true,allowed:cap=>sideCapability(cap)});
+VoiceControls.configure({api,client,resubscribe:()=>loadHistory(),target:()=>selected?{thread:selected,scope:draftScope(),epoch:client.epoch}:null,current:t=>enabled&&selected===t.thread&&draftScope()===t.scope&&client.epoch===t.epoch,supported:()=>composeHistory?.controls?.supportedOperations?.includes("voice-start")===true,allowed:cap=>sideCapability(cap)});
 
 let sessionControlBusy=false;
 function updateSessionActions(){

@@ -4,8 +4,8 @@ import CarryOnCore
 @main struct RenameRegressionApp: App {
     @State private var fixture = RenameFixture()
     var body: some Scene { WindowGroup {
-        Text("重命名回归").sheet(isPresented: $fixture.show) {
-            RenameConversationView(thread: fixture.thread, scope: fixture.scope).id(fixture.presentation)
+        Text("重命名回归").overlay {
+            if fixture.show { RenameConversationView(thread: fixture.thread, scope: fixture.scope).id(fixture.presentation) }
         }.environment(fixture.model).task { await fixture.run() }
     } }
 }
@@ -51,10 +51,16 @@ private final class RenameTransport: URLProtocol, @unchecked Sendable {
     let model = AppModel(); var show = false; var started = false; var presentation = 0; var scope = ""
     let thread = try! Record(.object(["id": .string("fixture"), "title": .string("旧名称")]))
     func wait() async { try? await Task.sleep(for: .milliseconds(650)) }
-    func capture() {
+    func capture(_ filename: String = "rename") {
         guard let window = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first else { return }
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
-        try? image.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("rename.png"))
+        try? image.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent(filename + ".png"))
+    }
+    private func alert(in controller: UIViewController?) -> UIAlertController? {
+        guard let controller else { return nil }
+        if let alert = controller as? UIAlertController { return alert }
+        if let alert = alert(in: controller.presentedViewController) { return alert }
+        return controller.children.lazy.compactMap { self.alert(in: $0) }.first
     }
     func run() async {
         guard !started else { return }; started = true
@@ -66,6 +72,10 @@ private final class RenameTransport: URLProtocol, @unchecked Sendable {
         model.status = .object(["enabled": .bool(true), "remoteControl": .bool(true)])
         model.history = .object(["thread": thread.value, "status": .object(["state": .string("idle")]), "runtime": .object(["type": .string("idle")]), "controls": .object(["supportedOperations": .array([.string("rename")])])])
         model.draft = "保留本地草稿"; scope = model.scope; show = true; await wait()
+        let window = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first
+        let initialAlert = alert(in: window?.rootViewController)
+        let nativeAlert = initialAlert?.title == "重命名任务" && initialAlert?.textFields?.first?.text == "旧名称" && Set(initialAlert?.actions.compactMap(\.title) ?? []) == Set(["取消", "保存"])
+        capture("rename-alert")
         NotificationCenter.default.post(name: .init("fixture.rename.name"), object: "新的中文名称 🧭")
         model.historySynchronized = false
         NotificationCenter.default.post(name: .init("fixture.rename.save"), object: nil); await wait()
@@ -88,7 +98,7 @@ private final class RenameTransport: URLProtocol, @unchecked Sendable {
         show = false; await wait(); presentation += 1; show = true; await wait(); model.selectedDevice = "other"
         NotificationCenter.default.post(name: .init("fixture.rename.save"), object: nil); await wait()
         let staleScope = RenameTransport.store.counts().0 == 1
-        let checks = ["unsynced": unsynced, "malformedFailure": malformedFailure, "reopenedQueryOnly": queryOnly, "wrongQueryPreserved": wrongQueryPreserved, "wrongNameSuccessPreserved": wrongNameSuccessPreserved, "confirmed": confirmed, "draftPreserved": draftPreserved, "staleScope": staleScope]
+        let checks = ["nativePrefilledAlert": nativeAlert, "unsynced": unsynced, "malformedFailure": malformedFailure, "reopenedQueryOnly": queryOnly, "wrongQueryPreserved": wrongQueryPreserved, "wrongNameSuccessPreserved": wrongNameSuccessPreserved, "confirmed": confirmed, "draftPreserved": draftPreserved, "staleScope": staleScope]
         try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks]).write(to: URL.documentsDirectory.appendingPathComponent("rename-result.json"))
     }
 }

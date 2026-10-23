@@ -23,20 +23,34 @@ public struct ReviewComment: Codable, Equatable, Identifiable, Sendable {
     public var prompt: String { "关于已加载改动 \(path)（\(location)）：\n\(lineText)\n\(text)" }
 }
 
+/// A captured selection from a conversation message, authored locally until send.
+public struct MessageAnnotation: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let sourceID: String
+    public let text: String
+    public init?(sourceID: String, text: String) {
+        guard !sourceID.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        self.id = UUID().uuidString; self.sourceID = sourceID; self.text = text
+    }
+    public var prompt: String { "关于以下会话内容：\n" + text }
+}
+
 public struct ConversationDraft: Codable, Equatable, Sendable {
     public var text: String
     public var images: [String]
     public var skills: [ComposerReference]
     public var comments: [ReviewComment]
     public var files: [ProjectFileReference]?
+    public var annotations: [MessageAnnotation]?
     public var uploads: [ConversationUpload]?
-    public init(text: String = "", images: [String] = [], skills: [ComposerReference] = [], comments: [ReviewComment] = [], files: [ProjectFileReference] = [], uploads: [ConversationUpload] = []) {
+    public init(text: String = "", images: [String] = [], skills: [ComposerReference] = [], comments: [ReviewComment] = [], files: [ProjectFileReference] = [], uploads: [ConversationUpload] = [], annotations: [MessageAnnotation] = []) {
+        self.annotations = annotations.isEmpty ? nil : annotations
         self.text = text; self.images = images; self.skills = skills; self.comments = comments
         self.files = files.isEmpty ? nil : files
         self.uploads = uploads.isEmpty ? nil : uploads
     }
     public var prompt: String {
-        ([text] + comments.map(\.prompt)).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        ([text] + comments.map(\.prompt) + (annotations ?? []).map(\.prompt)).filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
     /// Clear only the content submitted, preserving edits made while awaiting a reply.
     public mutating func didSubmit(_ sent: ConversationDraft) {
@@ -46,6 +60,8 @@ public struct ConversationDraft: Codable, Equatable, Sendable {
         if files == sent.files { files = nil }
         uploads?.removeAll { current in sent.uploads?.contains(current) == true }
         if uploads?.isEmpty == true { uploads = nil }
+        annotations?.removeAll { sent.annotations?.contains($0) == true }
+        if annotations?.isEmpty == true { annotations = nil }
         comments.removeAll { current in sent.comments.contains(current) }
     }
 }

@@ -53,6 +53,7 @@ def event(runtime, tid, method, params):
         channel['events'].append((row, size)); channel['bytes'] += size
         while len(channel['events']) > 256 or channel['bytes'] > MAX_BUFFER:
             _, removed = channel['events'].popleft(); channel['bytes'] -= removed
+        return True  # Wake subscribed consumers for audio/transcript as well as lifecycle.
     return changed
 
 

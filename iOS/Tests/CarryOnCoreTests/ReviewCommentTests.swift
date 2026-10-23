@@ -132,3 +132,58 @@ private func reviewNote(_ text: String = "请检查边界", source: String = "na
     #expect(store.comments[key] == [note] && store.submissions.isEmpty)
     #expect(!store.reconcileSubmission(scope: "scope", job: job))
 }
+
+@Test func bodyAnnotationsDecodeOldDraftsAndProjectWithoutDiffMetadata() throws {
+    let old = try JSONDecoder().decode(ConversationDraft.self, from: Data(#"{"text":"旧草稿","images":[],"skills":[],"comments":[]}"#.utf8))
+    #expect(old.annotations == nil && old.prompt == "旧草稿")
+    #expect(MessageAnnotation(sourceID: "", text: "引用") == nil)
+    #expect(MessageAnnotation(sourceID: "message", text: " \n") == nil)
+    let note = try #require(MessageAnnotation(sourceID: "message", text: "选中 **正文** 👋"))
+    let draft = ConversationDraft(text: "请解释", annotations: [note])
+    #expect(draft.prompt == "请解释\n\n关于以下会话内容：\n选中 **正文** 👋")
+    #expect(try JSONDecoder().decode(ConversationDraft.self, from: JSONEncoder().encode(draft)) == draft)
+}
+
+@Test @MainActor func bodyAnnotationsPersistAndReceiptKeepsLaterAdditions() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = DraftStore(file: directory.appendingPathComponent("draft.json")) { _, _ in Issue.record("Unexpected save failure") }
+    let note = try #require(MessageAnnotation(sourceID: "message", text: "正文批注"))
+    let added = try #require(MessageAnnotation(sourceID: "other-message", text: "稍后添加"))
+    await store.load(scope: "account")
+    let key = "account\nthread"
+    store.annotations[key] = [note]
+    store.submissions["request"] = DraftSubmission(scope: "account", threadID: "thread", draft: .init(annotations: [note]))
+    #expect(await store.flush())
+    await store.load(scope: "other"); #expect(store.annotations.isEmpty)
+    await store.load(scope: "account"); #expect(store.annotations[key] == [note])
+    store.annotations[key]?.append(added)
+    let job: JSONValue = .object(["id": .string("request"), "threadId": .string("thread"), "state": .string("uncertain")])
+    #expect(!store.reconcileSubmission(scope: "account", job: job))
+    #expect(store.annotations[key] == [note, added])
+    #expect(!store.reconcileSubmission(scope: "other", job: job.setting("state", .string("accepted"))))
+    #expect(store.reconcileSubmission(scope: "account", job: job.setting("state", .string("accepted"))))
+    #expect(store.annotations[key] == [added])
+    #expect(await store.flush())
+    await store.load(scope: "account"); #expect(store.annotations[key] == [added])
+}
+
+@Test @MainActor func bodyAnnotationSaveFailureKeepsPendingDraftRecoverable() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let parent = directory.appendingPathComponent("blocked")
+    let store = DraftStore(file: parent.appendingPathComponent("draft.json")) { _, _ in }
+    await store.load(scope: "account")
+    let note = try #require(MessageAnnotation(sourceID: "answer", text: "必须保留"))
+    store.annotations["account\nthread"] = [note]
+    store.submissions["request"] = .init(scope: "account", threadID: "thread", draft: .init(annotations: [note]))
+    try Data().write(to: parent)
+    #expect(!(await store.flush()))
+    await store.load(scope: "other"); #expect(store.annotations.isEmpty)
+    try FileManager.default.removeItem(at: parent)
+    await store.load(scope: "account")
+    #expect(store.annotations["account\nthread"] == [note])
+    #expect(store.submissions["request"]?.draft.annotations == [note])
+    #expect(await store.flush())
+}

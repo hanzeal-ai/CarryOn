@@ -11,6 +11,7 @@ import threading
 import unittest
 
 from carryon.app_server.app_server_bridge import AppServerBridge
+from carryon.app_server.app_server import AppServer
 from carryon.routes.api import dispatch
 from carryon.store import Journal
 from run_appserver_regression import wait_until
@@ -23,7 +24,8 @@ class RealtimeFixture:
         self.port = self.server.getsockname()[1]
         self.thread = threading.Thread(target=self.run, daemon=True); self.thread.start()
     def run(self):
-        connection, _ = self.server.accept()
+        try: connection, _ = self.server.accept()
+        except OSError: self.closed.set(); return
         connection.settimeout(10)
         def receive(size):
             data = b''
@@ -75,6 +77,8 @@ class NativeVoiceIntegration(unittest.TestCase):
             (home / 'auth.json').write_text('{"OPENAI_API_KEY":"fixture-not-real"}')
             (home / 'config.toml').write_text('model="gpt-5.5"\nmodel_provider="fixture"\nexperimental_realtime_ws_base_url="ws://127.0.0.1:' + str(fixture.port) + '"\ncli_auth_credentials_store="file"\n[model_providers.fixture]\nname="Fixture"\nbase_url="http://127.0.0.1:9/v1"\nwire_api="responses"\nrequires_openai_auth=false\n')
             journal = Journal(root / 'jobs.sqlite'); bridge = AppServerBridge(home, journal)
+            # This fixture owns its private API key and must never borrow the desktop account.
+            bridge.ipc_factory = AppServer
             try:
                 bridge.enable(); runtime = bridge.ipc
                 tid = runtime.create_thread({'cwd': str(root), 'historyMode': 'paginated'}, lambda write: write())['id']
@@ -90,6 +94,14 @@ class NativeVoiceIntegration(unittest.TestCase):
                     wait_until(lambda: len(runtime.voice_channels[tid]['events']) >= 3)
                     _, read = dispatch(bridge, 'GET', path + '/voice')
                     self.assertEqual({row['type'] for row in read['events']}, {'outputAudio/delta', 'transcript/delta', 'transcript/done'})
+                    stream=bridge.open_stream()
+                    try:
+                        stream.subscribe({'type':'subscribe','subscription':'native-voice','threadId':tid,'voiceId':identifier})
+                        packet=stream.update()[0]['voice']
+                        self.assertEqual(packet['events'],read['events'])
+                        stream.ack_voice({'subscription':'native-voice','voiceId':identifier,'after':packet['sequence']})
+                        self.assertEqual(stream.update()[0]['voice']['events'],[])
+                    finally: stream.close()
                     _, ack = dispatch(bridge, 'POST', path + '/voice/audio', {'voiceId': identifier, 'sequence': 1, 'audio': {'data': 'AAAAAA==', 'sampleRate': 24000, 'numChannels': 1, 'samplesPerChannel': 2}})
                     self.assertTrue(ack['accepted'])
                     wait_until(lambda: any(frame['type'] == 'input_audio_buffer.append' for frame in fixture.frames))

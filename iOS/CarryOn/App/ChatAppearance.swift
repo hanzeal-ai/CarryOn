@@ -85,6 +85,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     var autofocus = false
     var compactLeading: AnyView? = nil
     var voice: (() -> Void)? = nil
+    var draftHeader: AnyView? = nil
     @State private var editing = false
     @FocusState private var textFocused: Bool
     private var expanded: Bool { compactLeading == nil || editing || textFocused || !text.isEmpty || hasImages || !(skills?.wrappedValue.isEmpty ?? true) }
@@ -97,6 +98,7 @@ struct CarryOnChatComposer<Accessories: View>: View {
     private var buttonLabel: String { submitting ? "正在提交，请稍候" : action == .pause ? "停止执行" : action == .restart ? "继续执行" : sendLabel ?? (stopping ? "补充到当前任务" : "发送") }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let draftHeader { draftHeader.padding(.horizontal, 2).padding(.top, 6) }
             HStack(alignment: .center, spacing: 0) {
                 if !expanded, let compactLeading { compactLeading }
                 editor

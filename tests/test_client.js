@@ -600,3 +600,11 @@ test('session controls keep incomplete admission and mismatched action results p
   assert(f.client.operations.has('session:thread'));
  }
 });
+
+test('voice acknowledgements preserve subscription and reconnect from last processed cursor',()=>{
+ const f=fixture(),id=f.client.subscribe({threadId:'thread',voiceId:'voice',voiceAfter:0});f.sockets[0].open();
+ f.client.ackVoice('stale',9);assert.equal(f.client.selection.voiceAfter,0);
+ f.client.ackVoice('voice',3);assert.equal(f.client.selection.subscription,id);assert.equal(f.sockets[0].sent.at(-1).type,'voice-ack');
+ f.client.ackVoice('voice',2);assert.equal(f.client.selection.voiceAfter,3);
+ f.client.close();f.client.connect();f.sockets[1].open();assert.equal(f.sockets[1].sent.at(-1).voiceAfter,3);assert.equal(f.requests.length,0);f.client.close();
+});

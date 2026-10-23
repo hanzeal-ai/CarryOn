@@ -33,6 +33,7 @@ if mode == "uploads":
         original = view.read_text()
         if anchor not in original: raise SystemExit("Uploads fixture injection point is missing")
         hook = '        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("' + event + '"))) { note in if let kind = (note.object as? String).flatMap(UploadKind.init(rawValue:)) { uploadPicker.open(kind, model: model, key: ' + key + ', target: uploadTarget) } else { uploadPicker.showing = false } }\n'
+        hook += '        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.attachments"))) { showingAttachments = $0.object as? Bool ?? false }\n'
         view.write_text(original.replace(anchor, anchor + hook, 1))
 if mode == "photos":
     for filename, event, anchor in (
@@ -153,7 +154,7 @@ if mode == "sections":
     view.write_text(text)
 if mode == "rename":
     view = source / "CarryOn/App/RenameConversationView.swift"
-    text = view.read_text().replace('}.interactiveDismissDisabled(busy)', '}.interactiveDismissDisabled(busy)\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.name"))) { name = $0.object as! String }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.save"))) { _ in Task { await save() } }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.restore"))) { _ in Task { await restore() } }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.query"))) { _ in Task { await check() } }', 1)
+    text = view.read_text().replace('            .task { await restore() }', '            .task { await restore() }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.name"))) { name = $0.object as! String }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.save"))) { _ in Task { await save() } }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.restore"))) { _ in Task { await restore() } }\n            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("fixture.rename.query"))) { _ in Task { await check() } }', 1)
     view.write_text(text)
 if mode == "archives":
     view = source / "CarryOn/App/ArchivedThreadsView.swift"

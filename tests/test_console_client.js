@@ -208,3 +208,10 @@ test('directory session expiry stops both streams and rejects stale signals',asy
  directory.message({type:'error',status:401});assert.equal(client.token,'');assert.equal(client.directorySocket,null);
  directory.message({type:'directory-changed',revision:'late'});assert.equal(runs,0);assert.deepEqual(errors,['auth']);
 });
+
+test('cloud voice ack uses current stream and reconnect subscription retains cursor',()=>{
+ const {client,sockets}=fixture(async()=>{throw Error('unexpected HTTP');});client.token='session';client.device='one';
+ const id=client.subscribe({threadId:'thread',voiceId:'voice',voiceAfter:0});sockets[0].open();
+ client.ackVoice('voice',7);assert.equal(sockets[0].sent.at(-1).type,'voice-ack');assert.equal(sockets[0].sent.at(-1).subscription,id);
+ client.close();client.connect();sockets[1].open();assert.equal(sockets[1].sent[0].voiceAfter,7);client.close();
+});

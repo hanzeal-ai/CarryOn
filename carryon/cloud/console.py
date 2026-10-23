@@ -92,7 +92,8 @@ class ConsoleServer(Gateway):
             self.replace_auth(self.account_settings.effective())
             if action=='invite':
                 token = data.get('issuerToken')
-                expected = self.config.get('registrationInviteIssuerHash', '')
+                from carryon.accounts.inviter_authorization import issuer_hash
+                expected = issuer_hash(self)
                 if (not isinstance(token, str) or not 32 <= len(token) <= 128
                     or not isinstance(expected, str) or len(expected) != 64
                     or not secrets.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)):
@@ -316,6 +317,31 @@ class ConsoleHandler(Handler):
                 action = {'start':self.server.binding_invites.start, 'poll':self.server.binding_invites.poll, 'cancel':self.server.binding_invites.cancel}[path.rsplit('/',1)[-1]]
                 self.reply(200, action(self.body())); return
             self.check_origin(method)
+            if path == '/console/inviter/authorize' and method == 'POST':
+                from carryon.accounts.inviter_authorization import authorize
+                try:
+                    result = authorize(self.server, self.body())
+                except PermissionError:
+                    raise
+                except ValueError as exc:
+                    self.reply(400, {'error': str(exc)}); return
+                except OSError:
+                    self.reply(503, {'error': '无法确认授权结果，请回到原电脑尝试生成邀请码后再核对', 'uncertain': True}); return
+                self.reply(200, result); return
+            if path == '/console/confirmation/ws' and method == 'GET':
+                if self.headers.get('Origin') != self.server.origin:
+                    raise PermissionError('实时连接来源不匹配')
+                if urlsplit(self.path).query:raise ValueError('实时连接不接受查询参数')
+                if not self.server.slots.acquire(False):
+                    self.reply(503,{'error':'连接过多'});return
+                try:
+                    from carryon.routes.websocket import upgrade
+                    from carryon.cloud.confirmation_socket import serve
+                    key=self.session_key()
+                    upgrade(self)
+                    serve(self,key)
+                finally:self.server.slots.release()
+                return
             if path == '/console/register' and method == 'POST':
                 data = self.body()
                 with self.server.auth_lock:
@@ -337,11 +363,13 @@ class ConsoleHandler(Handler):
                 with self.server.auth_lock:
                     self.server.prune()
                     if path.endswith('/claim'):
-                        self.reply(200,self.server.auth.claim(data));return
+                        result=self.server.auth.claim(data);self.server.notify_directory()
+                        self.reply(200,result);return
                     entry=self.server.auth.poll(data)
                     if entry['state']=='approved':
                         entry['token']=self.issue_session(identity=self.server.auth.identity(entry['owner']))
                         entry['state']='redeemed'
+                        self.server.notify_directory()
                     if entry['state']=='redeemed':
                         if hashlib.sha256(entry['token'].encode()).hexdigest() not in self.server.sessions:
                             raise PermissionError('扫码登录已失效，请重新扫码')
@@ -383,6 +411,7 @@ class ConsoleHandler(Handler):
                         self.server.auth.owner_action(data,key,'status')
                         del self.server.auth.qrs[data['id']];result={'cancelled':True}
                     else:raise ValueError('扫码操作无效')
+                    if action!='status':self.server.notify_directory()
                 self.reply(200,result);return
             if path=='/console/push' and method in ('GET','POST','DELETE'):
                 if method=='GET':self.reply(200,{'enabled':self.server.push is not None});return
@@ -488,6 +517,7 @@ def main():
         metadata = args.config.stat()
         if os.geteuid() not in (0, metadata.st_uid):raise ValueError('请以配置文件所有者身份运行')
         config['registrationInviteIssuerHash'] = digest
+        config['registrationInviteIssuerGeneration'] = secrets.token_hex(16)
         save_json(args.config, config)
         if os.geteuid() == 0:os.chown(args.config, metadata.st_uid, metadata.st_gid)
         print('已指定唯一的邀请码生成电脑；重启云端控制台后生效。')

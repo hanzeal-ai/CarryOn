@@ -43,12 +43,13 @@ struct UploadMenuItems: View {
     let key: String
     let target: UploadTarget
     var disabled = false
+    var selected: () -> Void = {}
     var body: some View {
         if model.status["supportsUploads"].bool == true {
-            Button { picker.open(.file, model: model, key: key, target: target) } label: {
+            Button { selected(); picker.open(.file, model: model, key: key, target: target) } label: {
                 Label("上传文件", systemImage: "doc.badge.plus")
             }.disabled(disabled || !model.canUpload || model.importingUploadKeys.contains(key))
-            Button { picker.open(.directory, model: model, key: key, target: target) } label: {
+            Button { selected(); picker.open(.directory, model: model, key: key, target: target) } label: {
                 Label("上传文件夹", systemImage: "folder.badge.plus")
             }.disabled(disabled || !model.canUpload || model.importingUploadKeys.contains(key))
         }
@@ -172,5 +173,45 @@ extension AppModel {
         uploadTasks[upload.id]?.cancel()
         draftStore.uploads[key]?.removeAll { $0.id == upload.id }; draftStore.save()
         Task.detached(priority: .utility) { UploadStaging.remove(upload) }
+    }
+}
+
+/// A composer-anchored surface; remains behind the photo picker when it is cancelled.
+struct AttachmentPanel<Content: View>: View {
+    @Binding var isPresented: Bool
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        if isPresented {
+            GeometryReader { geometry in
+                ZStack(alignment: .bottomLeading) {
+                    Button { isPresented = false } label: { Color.black.opacity(0.001).contentShape(Rectangle()) }
+                        .buttonStyle(.plain).accessibilityLabel("关闭附件菜单")
+                    VStack(alignment: .leading, spacing: 2, content: content)
+                        .labelStyle(AttachmentLabelStyle()).buttonStyle(AttachmentButtonStyle())
+                        .padding(.horizontal, 28).padding(.vertical, 10)
+                        .frame(width: min(320, geometry.size.width - 32), alignment: .leading)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 34))
+                        .overlay(RoundedRectangle(cornerRadius: 34).stroke(.primary.opacity(0.04)))
+                        .shadow(color: .black.opacity(0.12), radius: 20, y: 8)
+                        .padding(.leading, 16).padding(.bottom, 14)
+                }.accessibilityAddTraits(.isModal)
+                    .accessibilityAction(.escape) { isPresented = false }
+            }
+        }
+    }
+}
+private struct AttachmentLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 16) {
+            configuration.icon.font(.system(size: 22)).frame(width: 42, height: 42)
+                .background(.primary.opacity(0.035), in: Circle())
+            configuration.title.font(.system(size: 18)).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(.vertical, 10).contentShape(Rectangle())
+    }
+}
+private struct AttachmentButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.foregroundStyle(Design.ink).opacity(enabled ? (configuration.isPressed ? 0.55 : 1) : 0.35)
     }
 }

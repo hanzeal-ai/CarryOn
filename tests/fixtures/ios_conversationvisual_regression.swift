@@ -79,6 +79,18 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
         {"thread":{"id":"11111111-1111-4111-8111-111111111111"},"status":{"state":"idle"},"runtime":{"type":"idle"},"access":{"canInteract":true,"nativeReady":true},"source":"desktop-snapshot","controls":{"supportedOperations":["settings","side-create","voice-start","voice-stop"],"supportedSettings":["model","effort","collaborationMode","approvalPolicy"],"settings":{"model":"gpt-5.5","effort":"high","approvalPolicy":"on-request"},"requests":[]},"metadata":{"latestTokenUsageInfo":{"last":{"totalTokens":16000},"modelContextWindow":64000}},"timeline":[{"id":"user","type":"userMessage","text":"检查移动端交互并说明修改结果"},{"id":"cmd","type":"commandExecution","status":"completed","data":{"command":"swift test","exitCode":0,"durationMs":1300,"aggregatedOutput":"All tests passed."}},{"id":"answer","type":"agentMessage","text":"已完成输入框和会话交互调整。 **粗体** *斜体* ~~删除~~ `代码` [链接](https://openai.com)。\\n\\n- 配置与模型选择分别提供入口\\n- 临时聊天保留独立草稿\\n- 原生上下文用量实时同步\\n\\n你可以选择这段文字，在临时聊天中继续讨论。"}]}
         """
         model.history = try! JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+        var entries = model.history["timeline"].array
+        for index in 1...6 {
+            entries.insert(.object([
+                "id": .string("tool-\(index)"), "type": .string("mcpToolCall"),
+                "status": .string(index == 6 ? "failed" : "completed"),
+                "data": .object(["server": .string("fixture"), "tool": .string("inspect_\(index)"),
+                    "arguments": .object(["index": .number(Double(index))]),
+                    "result": .object(["content": .array([.object(["type": .string("text"), "text": .string("工具 \(index) 输出：" + String(repeating: "可换行的长文本输出。", count: 12))])])])
+                ])
+            ]), at: entries.count - 1)
+        }
+        model.history = model.history.setting("timeline", .array(entries))
         model.historySynchronized = true; model.historyRevision += 1
         model.draft = "使用 \u{fffc} 检查交互，然后说明结果。"
         model.draftSkills = [ComposerReference(name: "Review", path: "/fixture/SKILL.md", offset: 3)]
@@ -95,19 +107,33 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
         func textViews(_ view: UIView) -> [UITextView] {
             (view as? UITextView).map { [$0] } ?? view.subviews.flatMap(textViews)
         }
+        // Measure a settled layout, not an interpolated animation frame.
+        func settledWidth(_ editor: UITextView?) async -> CGFloat? {
+            guard let editor else { return nil }
+            var previous: CGFloat = -1, stableSamples = 0
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(50))
+                let width = editor.bounds.width
+                stableSamples = width > 0 && abs(width - previous) < 0.01 ? stableSamples + 1 : 0
+                if stableSamples >= 4 { return width }
+                previous = width
+            }
+            return nil
+        }
 
         let savedDraft = model.draft, savedReferences = model.draftSkills
         model.draft = ""; model.draftSkills = []
         try? await Task.sleep(for: .milliseconds(350))
         let compactEditor = textViews(window).first { $0.accessibilityIdentifier == "carryon-composer-editor" && $0.isEditable }
-        let compactWidth = compactEditor?.bounds.width ?? 0
+        let compactWidth = await settledWidth(compactEditor) ?? 0
         let compactImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
         try? compactImage.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("phone-compact-composer.png"))
         compactEditor?.becomeFirstResponder()
         try? await Task.sleep(for: .milliseconds(350))
         let expandedEditor = textViews(window).first { $0.accessibilityIdentifier == "carryon-composer-editor" && $0.isEditable }
+        let expandedWidth = await settledWidth(expandedEditor) ?? 0
         results["compactExpansionKeepsEditorAndFocus"] = compactEditor != nil && expandedEditor === compactEditor && expandedEditor?.isFirstResponder == true
-        results["expandedEditorGainsHorizontalSpace"] = compactWidth > 0 && (expandedEditor?.bounds.width ?? 0) > compactWidth
+        results["expandedEditorGainsHorizontalSpace"] = compactWidth > 0 && expandedWidth > compactWidth
         expandedEditor?.insertText("验证输入不会丢失")
         try? await Task.sleep(for: .milliseconds(150))
         results["expandedInputUpdatesExistingDraft"] = model.draft == "验证输入不会丢失" && expandedEditor?.isFirstResponder == true
@@ -119,7 +145,7 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
             if compactEditor?.isFirstResponder == false && abs((compactEditor?.bounds.width ?? 0) - compactWidth) < 1 { break }
         }
         results["emptyBlurRestoresCompactLayout"] = compactEditor?.isFirstResponder == false && abs((compactEditor?.bounds.width ?? 0) - compactWidth) < 1
-        compactDiagnostics = ["beforeWidth": compactWidth, "afterWidth": compactEditor?.bounds.width ?? 0,
+        compactDiagnostics = ["beforeWidth": compactWidth, "expandedWidth": expandedWidth, "afterWidth": compactEditor?.bounds.width ?? 0,
                               "focusedAfterBlur": compactEditor?.isFirstResponder ?? false, "draftAfterBlur": model.draft,
                               "referenceCount": model.draftSkills.count]
         let blurredImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
@@ -215,7 +241,27 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
         }
         if let view = views.first(where: { $0.text.hasPrefix("你可以选择") }),
            let menu = view.delegate?.textView?(view, editMenuForTextIn: NSRange(location: 0, length: 5), suggestedActions: []),
-           let action = menu.children.first as? UIAction {
+           let add = menu.children.compactMap({ $0 as? UIAction }).first(where: { $0.title == "添加到聊天" }) {
+            let originalAnnotations = model.draftAnnotations, originalText = model.draft
+            let button = UIButton(); button.addAction(add, for: .touchUpInside)
+            button.sendActions(for: .touchUpInside)
+            results["bodySelectionCreatesAnnotationWithoutSending"] = model.draftAnnotations.count == originalAnnotations.count + 1 && model.draftAnnotations.last?.text == (view.text as NSString).substring(with: NSRange(location: 0, length: 5)) && model.draft == originalText && ConversationVisualTransport.state.counts == (0, 0)
+            let captured = model.draftAnnotations
+            try? await Task.sleep(for: .milliseconds(350))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            try? image.pngData()?.write(to: URL.documentsDirectory.appendingPathComponent("annotation-chip.png"))
+            model.selectedThread = try! Record(.object(["id": .string("other"), "title": .string("other")]))
+            button.sendActions(for: .touchUpInside)
+            results["staleAnnotationMenuCannotMutateOtherDraft"] = model.draftAnnotations.isEmpty
+            model.selectedThread = thread
+            model.devices = [try! Record(originalDevices[0].value.setting("permissions", .array([])))]
+            button.sendActions(for: .touchUpInside)
+            results["revokedAnnotationMenuCannotMutateDraft"] = model.draftAnnotations == captured
+            model.devices = originalDevices; model.draftAnnotations = originalAnnotations
+        } else { results["bodySelectionCreatesAnnotationWithoutSending"] = false }
+        if let view = views.first(where: { $0.text.hasPrefix("你可以选择") }),
+           let menu = view.delegate?.textView?(view, editMenuForTextIn: NSRange(location: 0, length: 5), suggestedActions: []),
+           let action = menu.children.compactMap({ $0 as? UIAction }).first(where: { $0.title == "在临时聊天中提问" }) {
             let button = UIButton(); button.addAction(action, for: .touchUpInside)
             let original = model.history
             model.history = original.setting("controls", original["controls"].setting("supportedOperations", .array([])))
@@ -232,7 +278,7 @@ private final class ConversationVisualTransport: URLProtocol, @unchecked Sendabl
             try? await Task.sleep(for: .milliseconds(200))
             if let fresh = textViews(window).first(where: { $0.text.hasPrefix("你可以选择") }),
                let freshMenu = fresh.delegate?.textView?(fresh, editMenuForTextIn: NSRange(location: 0, length: 5), suggestedActions: []),
-               let freshAction = freshMenu.children.first as? UIAction {
+               let freshAction = freshMenu.children.compactMap({ $0 as? UIAction }).first(where: { $0.title == "在临时聊天中提问" }) {
                 let freshButton = UIButton(); freshButton.addAction(freshAction, for: .touchUpInside); freshButton.sendActions(for: .touchUpInside)
             }
             for _ in 0..<30 {

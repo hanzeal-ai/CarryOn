@@ -101,6 +101,7 @@ class CloudConnector:
                 from carryon.routes.remote_scope import project_packet
                 body={**project_packet(packet,self.binding_id),
                       'status':{**packet.get('status',{}),'remoteControl':config.get('control',False)}}
+                if not config.get('control',False):body.pop('voice',None);body.pop('voiceError',None)
                 signature=packet_signature(body)
                 if signature != previous:
                     ws.send({'type':'event','streamId':stream_id,'body':wire.encode(body) if subscription.selection.get('historyProtocol') == 1 else body})
@@ -126,9 +127,17 @@ class CloudConnector:
                     else:
                         ws.send({'type':'response','id':mid,'status':503,'body':{'error':'设备正忙，此请求未执行，请稍后重试'}})
                     continue
-                if kind not in ('subscribe','unsubscribe'):raise ValueError('未知云端消息')
+                if kind not in ('subscribe','unsubscribe','voice-ack'):raise ValueError('未知云端消息')
                 sid=message.get('streamId')
                 if not isinstance(sid,str) or not ID.fullmatch(sid):raise ValueError('streamId 无效')
+                if kind=='voice-ack':
+                    entry=streams.get(sid)
+                    try:
+                        if entry and config.get('control',False):
+                            entry[0].ack_voice({**message,'subscription':sid})
+                    except (ValueError,TypeError):
+                        ws.send({'type':'response','id':mid,'status':400,'body':{'error':'Invalid voice cursor'}});continue
+                    ws.send({'type':'response','id':mid,'status':200,'body':{}});continue
                 if kind=='unsubscribe':
                     entry=streams.pop(sid,None)
                     if entry:entry[1].set();entry[0].close()
@@ -146,6 +155,7 @@ class CloudConnector:
                 try:
                     selection=message.get('selection',{})
                     if not isinstance(selection,dict):raise ValueError('Invalid selection')
+                    if selection.get('voiceId') and not config.get('control',False):raise ValueError('本机未授权云端访问语音')
                     sub.subscribe({**selection,'type':'subscribe','subscription':sid,
                                    'historyProtocol':1 if selection.get('historyWire') == 1 else 0})
                 except (ValueError,TypeError) as exc:

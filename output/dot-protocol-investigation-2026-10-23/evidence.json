@@ -1,0 +1,72 @@
+{
+  "appVersion": "26.1016.62342",
+  "evidenceType": "static shipped JavaScript plus locally generated experimental App Server schema; no runtime message dispatch",
+  "ipc": {
+    "appVersion": "26.1016.62342",
+    "versions": {
+      "ipc-connection-reset": 1,
+      "thread-archived": 2,
+      "thread-follower-clear-queued-messages": 1,
+      "thread-follower-command-approval-decision": 1,
+      "thread-follower-compact-thread": 1,
+      "thread-follower-edit-last-user-turn": 2,
+      "thread-follower-file-approval-decision": 1,
+      "thread-follower-interrupt-turn": 4,
+      "thread-follower-load-complete-history": 1,
+      "thread-follower-permissions-request-approval-response": 1,
+      "thread-follower-read-model-settings": 1,
+      "thread-follower-remove-queued-message": 1,
+      "thread-follower-set-queued-follow-ups-state": 1,
+      "thread-follower-start-turn": 2,
+      "thread-follower-steer-turn": 1,
+      "thread-follower-submit-mcp-server-elicitation-response": 1,
+      "thread-follower-submit-user-input": 1,
+      "thread-follower-update-daybreak": 1,
+      "thread-follower-update-thread-settings": 2,
+      "thread-owner-discovery": 1,
+      "thread-queued-followups-changed": 2,
+      "thread-read-state-changed": 3,
+      "thread-stream-following-changed": 1,
+      "thread-stream-following-status-requested": 1,
+      "thread-stream-state-changed": 11,
+      "thread-unarchived": 1
+    }
+  },
+  "snippets": [
+    {
+      "file": "webview__assets__app-initial-dddef47d6ef6.js",
+      "sha256": "1fc7b685efab4be2d9656e02086180dd9e43dcac0fae1e2b1ec233447ed03843",
+      "characterOffset": 10683763,
+      "marker": "app_attest_challenge:v",
+      "context": ";try{let t=e.get(i4c).get(c),n=k(r.roomId,n=>_g.safePost(`/messaging/rooms/{room_id}/messages`,{...n,additionalHeaders:{...n.additionalHeaders,...u,...l.headers,...t?{\"x-openai-thread-route\":t}:{}},onResponseHeadersReceived:l.responseHeaders,onResponseHeaders:t=>{r4c(e,c,t.get(`x-openai-thread-route`))},parameters:{path:{room_id:r.roomId}},requestBody:{task_id:F4(r.messageMetadata)==null?a:void 0,app_attest_challenge:v,content:{text:r.text,attachments:r.attachmentIds?.map(e=>({type:`file`,file_id:e}))},message_metadata:y,request_id:r.requestId,page_context:r.pageComment??r.pageContext,idempotency_token:r.requestId,timezone_offset_min:new Date().getTimezoneOffset(),reply_to:r.replyToMessageId==null?void 0:{message_id:r.replyToMessageId}}}));i!=null&&(pOn(i)||e.query.getData(Iw,i)?.is_paused===!0)&&vOn(i,async t=>{await n,E();let r=await gw(i,o);if(E(),!t()||!WMn(r,i)||r.is_paused!==!1)return null;let a=e.query.snapshot(Iw,i);if(await a.cancel(),E(),!t())return null;a.setData(r)}).catch(()=>{});let s=await n;return m?.(r).catch(()=>{}),l.accepted(s.id),j(r.roomId,s,!0)}catch(t){if(t instanceof f4c){A=x?`delivery_unknown`:`rejected`,x||await h?.(r);let n=new Sw(e.get(y_).formatMessage({id:`orbit.browserAnnotations.messageTooLarge`,defaultMessage:`This message is too large. Remove attachments or annotations, or shorten your message and try again`,description:`Error when the complete Orbit message exceeds the model delivery size limit before this attempt is admitted; the draft is preserved`}),t.status,{deliveryUnknown:x,retryWithSameRequest:x});throw l.failed(n),n}if(t instanceo"
+    },
+    {
+      "file": "webview__assets__app-initial-dddef47d6ef6.js",
+      "sha256": "1fc7b685efab4be2d9656e02086180dd9e43dcac0fae1e2b1ec233447ed03843",
+      "characterOffset": 9291592,
+      "marker": "/messaging/rooms/{room_id}/live",
+      "context": "eout(b,p),p=Math.min(p*2,3e4))},b=()=>{if(!h())return;let t=++s,n=()=>t===s&&h(),r,o=-1,d=new Map;u=setTimeout(()=>y(!0),3e4);let f=e=>{if(!(e.subscription_id!==r||e.revision<=o)){if(o=e.revision,e.type===`calpico-room-live-error`){y(e.code===`temporarily_unavailable`);return}clearTimeout(u),e.threads.some(e=>e.stream_state===`attached`)&&(p=1e3),v(e)}},m=()=>{if(n()&&c==null)try{c=_g.streamPost(`/messaging/rooms/{room_id}/live`,{parameters:{path:{room_id:e}},additionalHeaders:{[Oa]:i},chatgptSse:{expectedIdentity:{accountId:i,userId:a},assertRequestCurrent:()=>{if(!n())throw new DOMException(`Room watch is no longer active`,`AbortError`)}},onEvent:({data:t})=>{if(!n())return;let i=Nic.safeParse(t);if(!i.success||i.data.room_id!==e||r!=null&&i.data.subscription_id!==r){y(!1);return}r=i.data.subscription_id;let a=d.get(r);d.clear(),a!=null&&f(a)},onComplete:()=>{n()&&y(!0)},onError:({responseStatus:e})=>{n()&&y(Oic(e))}})}catch(e){n()&&y(!(e instanceof nc)||Oic(e.responseStatus))}},g=g_(`calpico-room-live:${e}`,()=>_g.safeGet(`/celsius/ws/user`,{additionalHeaders:{[Oa]:i},expectedIdentity:{accountId:i,userId:a}}).then(e=>e.websocket_url),JSON.stringify([i,a])),_=g.onMessage(t=>{if(!n())return;let i=Mic.safeParse(t);if(!i.success||i.data.payload.room_id!==e){y(!1);return}let a=i.data.payload;if(r!=null){f(a);return}let o=d.get(a.subscription_id);if(o!=null&&a.revision<=o.revision)return;if(a.type===`calpico-room-live-state`&&o?.type===`calpico-room-live-state`){let[e,...t]=a.threads,n=o.threads[0];e?.turn_id!=null&&e.turn_status===`in_progress`&&e.computer_status==null&&n?.co"
+    },
+    {
+      "file": "webview__assets__app-initial-dddef47d6ef6.js",
+      "sha256": "1fc7b685efab4be2d9656e02086180dd9e43dcac0fae1e2b1ec233447ed03843",
+      "characterOffset": 3749437,
+      "marker": "/tbo/{tbo_id}/messaging-room",
+      "context": "GO(){return(GO=t((()=>{nS(),Mb(),gu(),fE(),MC(),K6n()})))()}async function Aar(e,t,n){let{threadId:r,...i}=e,a=t==null?null:$Te({attributes:{\"http.route\":`/tbo/{tbo_id}/onboarding/initialize`},name:`turn.aeon_initialization_request`,trace:t}),o=!1;try{let s=await gw(r);if(s==null)throw new nc(`Your dot’s profile is unavailable`,404);if(s.messaging_room_id??(n!=null&&await n(),s=await _g.safePost(`/tbo/{tbo_id}/messaging-room`,{parameters:{path:{tbo_id:s.id}}})),s.messaging_room_id==null)throw new nc(`Your dot’s messaging room is unavailable`,409);let c={...e.turnOptions};delete c.personality,c.serviceTier=et(c.serviceTier),n!=null&&await n(),o=!0;let l=jar.parse(await _g.safePost(`/tbo/{tbo_id}/onboarding/initialize`,{parameters:{path:{tbo_id:s.id}},retry:!1,requestBody:{...i,turnOptions:c},...t==null?{}:{additionalHeaders:{traceparent:t.traceparent,...t.tracestate==null?{}:{tracestate:t.tracestate}}}}));if(l.threadId!==e.threadId||l.clientUserMessageId!==e.clientUserMessageId||(e.initPromptId==null?l.admissionOutcome!==`greeting_only`||l.turnId!==e.greetingMessageId||l.turnStatus!==`completed`:l.admissionOutcome===`greeting_only`))throw Error(`Initialization acknowledgement does not match the request`);return a?.finish(),l}catch(t){throw a?.finish(t),!o||t instanceof nc&&(t.errorCode===`aeon_initialization_not_received`||t.responseStatus!=null&&[400,401,403,404,409,422,429].includes(t.responseStatus))?t:new Fb({requestId:e.clientUserMessageId,method:`/onboarding/aeon-initialization`,stage:`outcome-unknown`},t)}}var jar;function Mar(){return(Mar=t((()=>{fl(),Ib(),Hr(),XC(),"
+    },
+    {
+      "file": ".vite__build__main-JI9qDiXp.js",
+      "sha256": "b8c5d07cc3c30fbf0abe729b05434e7d1ffa19ee6c4daa818ae8f855be66d1e1",
+      "characterOffset": 662947,
+      "marker": "expectedAccountId!=null",
+      "context": "rrorStatus:t,failureMessage:n,refreshToken:r,state:i}){if(!i.attachAuth)return i;if(!r){let t=e.getCachedAuthToken?.();if(t!==void 0)return{...i,tokenSource:`cached`,token:t}}try{let t=await e.getAuthToken({refreshToken:r});return{...i,tokenSource:r?`refreshed`:`loaded`,token:t}}catch(e){throw new my(n,t,e)}}function _y({desktopOriginator:e,headers:t,state:n}){if(n.attachAuth&&n.token!=null){if(n.expectedAccountId!=null&&_.gt(n.token)!==n.expectedAccountId)throw new my(`The authenticated account changed before the request could be sent.`,409,null,`account_changed`);_.dt(t,n.token,{desktopOriginator:e,includeSurfaceHeaders:!1})}}function vy(e,t){return e.attachAuth&&e.token!=null&&t.status===401}var yy=`X-OpenAI-Aeon-Messaging-Trace`,by=r.O({request_id:r.N().optional()}),xy=class{trace;rpcRequestId;clientRequestId;logger=p.a(`orbit-messaging`);constructor(e,t,n){this.trace=e,this.rpcRequestId=t,this.clientRequestId=n}getTraceContext(){return this.trace==null?null:l.Jt()??this.trace}responseReceived(e){let t=e.headers.get(`x-request-id`)??e.headers.get(`x-openai-request-id`);this.trace!=null&&l.en({\"http.response.status_code\":e.status}),this.emit(`host.response_headers`,e.ok?`success`:`failure`,{httpStatus:e.status,requestId:t})}run(e,t){let n=async()=>{let n=performance.now(),r=`success`;this.emit(e,`started`);try{return await t()}catch(e){throw r=e instanceof Error&&e.name===`AbortError`?`aborted`:`failure`,e}finally{this.emit(e,r,{durationMs:performance.now()-n})}};return this.trace==null?n():l.rn({name:`orbit.messaging.${e}`,op:`http.client`,trace:e===`host.request`?this."
+    },
+    {
+      "file": ".vite__build__main-JI9qDiXp.js",
+      "sha256": "b8c5d07cc3c30fbf0abe729b05434e7d1ffa19ee6c4daa818ae8f855be66d1e1",
+      "characterOffset": 3609988,
+      "marker": "httpFetch:x",
+      "context": "ctionInfo(),workspaceFiles:this.workspaceFiles,openIn:T,origin:e}),D=new sHe(this.options.globalState,e=>{t.sendMessageToAllWindows({type:`persisted-atom-updated`,key:Wg,value:e,deleted:!1})}),k=t.getRendererWindowLogFields(e).rendererWindowAppearance===`primary`;return new lue({getConnection:g,executionHosts:new i_(u.m),globalState:this.scopedState,appServerManagers:this.appServerManagersService,httpFetch:x,websitePreviews:S,...Aqe(e,g,this.cloudPortals),pluginIncentives:w,appServerLifecycle:new Cue(this.appServerConnectionRegistry,this.options.applicationNetwork),ambientSuggestions:new oue(this.appServerConnectionRegistry,this.options.settingsStore,this.publishedStatsig),automations:this.habitatAutomationsService,applicationMenu:new Fde(e),customRuntime:void 0,appActions:this.appActionHostService,clientCoordination:this.ipcClientsByWebContentsId.get(e.id)?.hostService,queryCache:new YGe(this),threadReadState:new hZe(this.threadReadState.owner),statsig:this.statsig,statsigEvaluations:this.publishedStatsig,modelReviewComments:this.modelReviewComments,diamond:void 0,settings:this.settings,configSettingsWriteConfirmations:this.settings.configWriteConfirmations,workModeAccess:this.settings,appInfo:new mue,commandKeybindings:this.fetchHandler.commandKeybindingsService,commentAttachments:this.commentAttachments,connectorOAuth:new y_e,mailProvider:new a_,queuedSendLocks:this.fetchHandler.queuedSendLocksService,threadConfiguration:this.fetchHandler.threadConfiguration,feedbackDiagnostics:this.fetchHandler.feedbackDiagnostics,externalAgentImport:this.fetchHandler.externalAgentImpor"
+    }
+  ]
+}

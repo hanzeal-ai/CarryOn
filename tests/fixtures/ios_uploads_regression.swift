@@ -61,26 +61,29 @@ import CarryOnCore
             let label = view.accessibilityLabel ?? ""
             return view is UIControl || !label.isEmpty ? "\(type(of: view)): \(label)" : nil
         }
-        // SwiftUI keeps the menu's accessibility label on its virtual element.
-        // Its public UIKit host is the leftmost button below the composer.
-        let control = views.compactMap { $0 as? UIButton }.filter {
-            let frame = $0.convert($0.bounds, to: window)
-            return frame.midY > window.bounds.height * 0.6 && frame.minX < window.bounds.width / 3
-        }.min { $0.convert($0.bounds, to: window).minX < $1.convert($1.bounds, to: window).minX }
-        if #available(iOS 17.4, *) { control?.performPrimaryAction() }
+        NotificationCenter.default.post(name: .init("fixture.attachments"), object: true)
         try? await Task.sleep(for: .milliseconds(500))
-        let visible = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).flatMap(allViews)
-        let labels = visible.compactMap { ($0 as? UILabel)?.text ?? $0.accessibilityLabel }
-        let menu = visible.compactMap { $0 as? UIButton }.compactMap(\.menu).contains {
-            let titles = menuActions($0)
-            return titles.contains("上传文件") && titles.contains("上传文件夹")
+        func labels(_ object: NSObject, depth: Int = 0) -> [String] {
+            guard depth < 16 else { return [] }
+            var result = [object.accessibilityLabel].compactMap { $0 }
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 1000 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject { result += labels(child, depth: depth + 1) }
+                }
+            }
+            if let view = object as? UIView { result += view.subviews.flatMap { labels($0, depth: depth + 1) } }
+            return result
         }
+        let visibleLabels = labels(window)
+        menuDiagnostics += visibleLabels
+        let menu = visibleLabels.contains("上传文件") && visibleLabels.contains("上传文件夹")
         if capture {
             await self.capture("uploads-menu")
         }
-        control?.interactions.compactMap { $0 as? UIContextMenuInteraction }.forEach { $0.dismissMenu() }
+        NotificationCenter.default.post(name: .init("fixture.attachments"), object: false)
         try? await Task.sleep(for: .milliseconds(500))
-        return menu || (labels.contains("上传文件") && labels.contains("上传文件夹"))
+        return menu
     }
     private func open(_ name: String, kind: UploadKind) async -> UIDocumentPickerViewController? {
         NotificationCenter.default.post(name: .init(name), object: kind.rawValue)

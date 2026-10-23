@@ -6,6 +6,7 @@ import CarryOnCore
 struct MessageMarkdown: View {
     @Environment(AppModel.self) private var model
     @Environment(\.preparedMessageMarkdown) private var prepared
+    @Environment(\.addMessageAnnotation) private var addAnnotation
     @Environment(\.askInSideChat) private var askInSide
     @Environment(\.editConversationMessage) private var editMessage
     let text: String
@@ -37,8 +38,8 @@ struct MessageMarkdown: View {
             .markdownTextStyle { FontSize(bodySize); ForegroundColor(Design.ink) }
             .markdownTextStyle(\.link) { ForegroundColor(Design.link) }
             .markdownBlockStyle(\.paragraph) { configuration in
-                if (askInSide != nil || editMessage != nil), !configuration.content.renderMarkdown().contains("![") {
-                    SelectableMarkdownParagraph(markdown: configuration.content.renderMarkdown(), fontSize: bodySize, askInSide: askInSide, editMessage: editMessage)
+                if (addAnnotation != nil || askInSide != nil || editMessage != nil), !configuration.content.renderMarkdown().contains("![") {
+                    SelectableMarkdownParagraph(markdown: configuration.content.renderMarkdown(), fontSize: bodySize, addAnnotation: addAnnotation, askInSide: askInSide, editMessage: editMessage)
                         .markdownMargin(top: 0, bottom: 8)
                 } else { configuration.label.relativeLineSpacing(.em(0.20)).markdownMargin(top: 0, bottom: 8) }
             }
@@ -101,6 +102,16 @@ extension EnvironmentValues {
     }
 }
 
+private struct AddMessageAnnotationKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable (String) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var addMessageAnnotation: (@MainActor @Sendable (String) -> Void)? {
+        get { self[AddMessageAnnotationKey.self] }
+        set { self[AddMessageAnnotationKey.self] = newValue }
+    }
+}
+
 private struct AskInSideChatKey: EnvironmentKey {
     static let defaultValue: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -115,6 +126,7 @@ extension EnvironmentValues {
 private struct SelectableMarkdownParagraph: UIViewRepresentable {
     let markdown: String
     let fontSize: CGFloat
+    let addAnnotation: (@MainActor @Sendable (String) -> Void)?
     let askInSide: (@MainActor @Sendable (String) -> Void)?
     let editMessage: (@MainActor @Sendable () -> Void)?
     @Environment(\.conversationSelectionChanged) private var selectionChanged
@@ -143,6 +155,11 @@ private struct SelectableMarkdownParagraph: UIViewRepresentable {
             guard range.length > 0, range.location >= 0, NSMaxRange(range) <= (textView.text as NSString).length else { return UIMenu(children: suggestedActions) }
             let selected = (textView.text as NSString).substring(with: range)
             var actions: [UIMenuElement] = []
+            if parent.addAnnotation != nil { actions.append(UIAction(title: "添加到聊天", image: UIImage(systemName: "bubble.left")) { [weak self, weak textView] _ in
+                self?.parent.addAnnotation?(selected)
+                textView?.selectedRange = NSRange(location: 0, length: 0)
+                textView?.resignFirstResponder()
+            }) }
             if parent.askInSide != nil { actions.append(UIAction(title: "在临时聊天中提问", image: UIImage(systemName: "bubble.left.and.bubble.right")) { [weak self] _ in self?.parent.askInSide?(selected) }) }
             if parent.editMessage != nil { actions.append(UIAction(title: "编辑消息", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.parent.editMessage?() }) }
             return UIMenu(children: actions + suggestedActions)
@@ -253,24 +270,37 @@ struct CodeBlockView: View {
     @Environment(\.colorScheme) private var colorScheme
     let code: String
     let language: String?
+    var allowsWrapping = false
+    @State private var wraps = true
     @State private var highlighted: AttributedString?
     private var label: String { CodeDocument.normalizedLanguage(language) }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(label).font(.caption.monospaced()).foregroundStyle(Design.secondary)
+                Text(label == "plaintext" ? "纯文本" : label).font(.caption.monospaced()).foregroundStyle(Design.secondary)
                 Spacer()
-                Button { UIPasteboard.general.string = code } label: { Image(systemName: "doc.on.doc") }
+                if allowsWrapping {
+                    Button { wraps.toggle() } label: { Image(systemName: "arrow.turn.down.left") }
+                        .foregroundStyle(Design.secondary).accessibilityLabel(wraps ? "关闭自动换行" : "开启自动换行").frame(minWidth: 44, minHeight: 44)
+                }
+                if !allowsWrapping { Button { UIPasteboard.general.string = code } label: { Image(systemName: "doc.on.doc") }
                     .accessibilityLabel("复制代码").frame(minWidth: 44, minHeight: 44)
+                }
             }.padding(.horizontal, 12)
-            Divider()
-            ScrollView(.horizontal) {
+            if !allowsWrapping { Divider() }
+            if allowsWrapping && wraps {
+                Text(code)
+                    .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            } else { ScrollView(.horizontal) {
                 Text(highlighted ?? AttributedString(code))
                     .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true).padding(12)
-            }
+            } }
         }.background(Design.background, in: RoundedRectangle(cornerRadius: Design.controlCorner))
             .clipShape(RoundedRectangle(cornerRadius: Design.controlCorner))
+            .overlay(RoundedRectangle(cornerRadius: Design.controlCorner).stroke(allowsWrapping ? Design.border : .clear))
+            .contextMenu { Button("复制代码") { UIPasteboard.general.string = code } }
             .task(id: label + "\n" + code + String(colorScheme == .dark)) {
                 highlighted = nil
                 let result = await CodeHighlight.shared.render(code, language: label, dark: colorScheme == .dark)
@@ -383,6 +413,7 @@ struct CodeFilePreview: View {
 struct MessageTextSelectionView: View {
     let text: String
     var askInSide: ((String) -> Void)? = nil
+    var addAnnotation: ((String) -> Void)? = nil
     @State private var selectedText = ""
     @Environment(\.dismiss) private var dismiss
 
@@ -393,7 +424,7 @@ struct MessageTextSelectionView: View {
 
     var body: some View {
         NavigationStack {
-            SourceTextView(text: AttributedString(text), font: .preferredFont(forTextStyle: .body), selection: $selectedText, askInSide: askInSide)
+            SourceTextView(text: AttributedString(text), font: .preferredFont(forTextStyle: .body), selection: $selectedText, askInSide: askInSide, addAnnotation: addAnnotation.map { action in { text in action(text); dismiss() } })
                 .navigationTitle("选择文字").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
@@ -414,14 +445,19 @@ private struct SourceTextView: UIViewRepresentable {
     var font: UIFont? = nil
     var selection: Binding<String>? = nil
     var askInSide: ((String) -> Void)? = nil
+    var addAnnotation: ((String) -> Void)? = nil
     final class Coordinator: NSObject, UITextViewDelegate {
         var selection: Binding<String>?
         var askInSide: ((String) -> Void)?
+        var addAnnotation: ((String) -> Void)?
         init(selection: Binding<String>?, askInSide: ((String) -> Void)?) { self.selection = selection; self.askInSide = askInSide }
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard let askInSide, range.length > 0, NSMaxRange(range) <= (textView.text as NSString).length else { return UIMenu(children: suggestedActions) }
+            guard range.location >= 0, range.length > 0, NSMaxRange(range) <= (textView.text as NSString).length else { return UIMenu(children: suggestedActions) }
             let selected = (textView.text as NSString).substring(with: range)
-            return UIMenu(children: [UIAction(title: "在临时聊天中提问", image: UIImage(systemName: "bubble.left.and.bubble.right")) { _ in askInSide(selected) }] + suggestedActions)
+            var actions: [UIMenuElement] = []
+            if let addAnnotation { actions.append(UIAction(title: "添加到聊天", image: UIImage(systemName: "bubble.left")) { _ in addAnnotation(selected) }) }
+            if let askInSide { actions.append(UIAction(title: "在临时聊天中提问", image: UIImage(systemName: "bubble.left.and.bubble.right")) { _ in askInSide(selected) }) }
+            return UIMenu(children: actions + suggestedActions)
         }
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard let range = textView.selectedTextRange else { selection?.wrappedValue = ""; return }
@@ -443,6 +479,7 @@ private struct SourceTextView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.selection = selection
         context.coordinator.askInSide = askInSide
+        context.coordinator.addAnnotation = addAnnotation
         let result = NSMutableAttributedString(text)
         let fullRange = NSRange(location: 0, length: result.length)
         let scaledFont = font ?? UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .monospacedSystemFont(ofSize: 13, weight: .regular))

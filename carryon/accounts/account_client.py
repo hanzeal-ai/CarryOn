@@ -25,7 +25,7 @@ def request(url, action, data=None, *, dev_local=False):
         # Do not echo a remote response that could contain submitted secrets.
         if status==404 or action=='status' and status==401:raise ValueError('云端尚未支持账号设置，请先升级云端服务') from None
         if status in (301,302,303,307,308):raise ValueError('云端地址发生重定向，请核对准确地址；凭证未转发') from None
-        if status==403 and action=='invite':raise ValueError('此电脑未获授权生成邀请码；请先在云端配置本机授权指纹') from None
+        if status==403 and action=='invite':raise ValueError('此电脑未获授权生成邀请码；请点击“授权本机”或运行 carryon invate --authorize，由云端管理员打开链接确认') from None
         if status==403:raise ValueError('凭证无效、已过期或尝试过于频繁；请核对后重试') from None
         if status==400:raise ValueError('账号参数无效：账号 1–100 字符，密码 12–256 字符') from None
         raise ValueError('云端未能确认设置结果，请核对登录状态后再操作') from None

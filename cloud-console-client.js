@@ -104,7 +104,7 @@ class CloudConsoleClient extends CarryOnClient {
   }
   subscribe(selection) {
     const key=JSON.stringify([this.epoch,this.device,selection.threadId??null,
-      [...new Set(selection.threadIds||[])].sort(),selection.includeSideChats===true,selection.sideThreadId??null,selection.historyLimit??40,selection.sideHistoryLimit??selection.historyLimit??40,selection.historyProtocol??1]);
+      [...new Set(selection.threadIds||[])].sort(),selection.includeSideChats===true,selection.sideThreadId??null,selection.historyLimit??40,selection.sideHistoryLimit??selection.historyLimit??40,selection.historyProtocol??1,selection.voiceId??null,selection.voiceAfter??0]);
     if(this.selection && this.selectionKey===key){
       this.connect();return this.selection.subscription;
     }

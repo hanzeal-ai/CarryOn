@@ -465,6 +465,12 @@ class CarryOnClient {
       body, key, this.operations, 'carryon-operations');
   }
 
+  ackVoice(voiceId,after) {
+    if(this.selection?.voiceId!==voiceId)return;
+    this.selection.voiceAfter=Math.max(this.selection.voiceAfter||0,after);
+    if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify({type:'voice-ack',subscription:this.selection.subscription,voiceId,after:this.selection.voiceAfter}));
+  }
+
   subscribe(selection) {
     const normalized={historyProtocol:1,historyLimit:40,...selection};
     const previous=this.selection&&Object.fromEntries(Object.entries(this.selection).filter(([key])=>!['type','subscription'].includes(key)));

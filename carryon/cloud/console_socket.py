@@ -21,10 +21,10 @@ def serve(handler, session_key, device_id):
     active = None  # (device stream ID, client subscription ID)
     selection_lock = threading.Lock()
 
-    def send(payload):
+    def send(payload, voice=False):
         with server.auth_lock, server.lock:
             from carryon.workspaces.workspace_access import require
-            require(server, session_key, device_id)
+            require(server, session_key, device_id, ('view','send') if voice else ('view',))
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
             if device_id not in server.config['devices'] or server.devices.get(device_id) is not device:
@@ -58,7 +58,7 @@ def serve(handler, session_key, device_id):
         sid = uuid.uuid4().hex
         with server.auth_lock, server.lock:
             from carryon.workspaces.workspace_access import require
-            require(server, session_key, device_id)
+            require(server, session_key, device_id, ('view','send') if selection.get('voiceId') else ('view',))
             if server.sessions.get(session_key, 0) <= time.monotonic():
                 raise PermissionError('登录已过期，请重新登录')
             if device_id not in server.config['devices'] or server.devices.get(device_id) is not device or device.closed:
@@ -68,7 +68,7 @@ def serve(handler, session_key, device_id):
                     raise ValueError('最多 8 个订阅，请关闭不再使用的会话')
                 device.streams[sid] = {'revision': 0, 'body': None}
             server.console_streams[sid] = {'device': device_id, 'session': session_key, 'last': time.monotonic()}
-        context = (sid, selection['subscription'], selection.get('historyProtocol') == 1)
+        context = (sid, selection['subscription'], selection.get('historyProtocol') == 1, selection.get('voiceId'))
         try:
             response = device.call({'type': 'subscribe', 'streamId': sid, 'selection': {**selection, 'historyWire': 1}})
             if response['status'] != 200:
@@ -120,7 +120,7 @@ def serve(handler, session_key, device_id):
                         body = {**packet['body'], 'subscription': context[1]}
                         send({'type': 'update', 'revision': delivery_revision, 'subscription': context[1],
                               'resubscribe': True,
-                              'body': wire.encode(body) if context[2] else body})
+                              'body': wire.encode(body) if context[2] else body}, voice=bool(context[3]))
                         revision = packet['revision']
                 else:
                     closed.wait(min(.1, HEARTBEAT_INTERVAL))
@@ -155,6 +155,22 @@ def serve(handler, session_key, device_id):
             message = ws.receive()
             if message.get('type') == 'subscribe':
                 subscribe(message)
+            elif message.get('type') == 'voice-ack':
+                with selection_lock:
+                    context = active
+                after=message.get('after')
+                if type(after) is not int or not 0 <= after <= 9007199254740991:
+                    raise ValueError('Invalid voice cursor')
+                if context and context[3] and message.get('subscription') == context[1] and message.get('voiceId') == context[3]:
+                    with server.auth_lock, server.lock:
+                        from carryon.workspaces.workspace_access import require
+                        require(server, session_key, device_id, ('view','send'))
+                        if (server.sessions.get(session_key, 0) <= time.monotonic()
+                                or server.devices.get(device_id) is not device or device.closed):
+                            raise PermissionError('订阅已失效')
+                        device.ws.send({'type':'voice-ack','id':uuid.uuid4().hex,
+                                        'streamId':context[0], 'voiceId':message.get('voiceId'),
+                                        'after':message.get('after')})
             elif message.get('type') != 'pong':
                 raise ValueError('此连接仅用于订阅实时更新，提交操作请使用 HTTP')
     except (ValueError, PermissionError, Offline, Uncertain) as exc:

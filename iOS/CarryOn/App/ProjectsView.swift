@@ -22,6 +22,7 @@ struct ProjectsView: View {
     @AppStorage("carryon.showInactiveConversations") private var showInactiveConversations = false
     @State private var projectSearch = RecordListState()
     @State private var threadSearch = RecordListState()
+    @State private var collapsedProjects: Set<String> = []
     @FocusState private var homeSearchFocused: Bool
     var body: some View {
         @Bindable var model = model
@@ -35,13 +36,19 @@ struct ProjectsView: View {
                     ForEach(listState.records) { project in
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 12) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "folder").font(.system(size: 20)).accessibilityHidden(true)
+                                Button {
+                                    if !collapsedProjects.insert(project.id).inserted { collapsedProjects.remove(project.id) }
+                                } label: { HStack(spacing: 12) {
+                                    Group {
+                                        if collapsedProjects.contains(project.id) { Image(systemName: "folder").font(.system(size: 20)) }
+                                        else { OpenProjectFolder().stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)) }
+                                    }.frame(width: 24, height: 22).accessibilityHidden(true)
                                     Text(project.title).font(.body).lineLimit(1)
                                     Spacer(minLength: 0)
-                                }.frame(minHeight: 44)
-                                    .accessibilityElement(children: .combine)
-                                    .accessibilityAddTraits(.isHeader)
+                                }.frame(minHeight: 44).contentShape(Rectangle()) }
+                                    .buttonStyle(.plain)
+                                    .accessibilityValue(collapsedProjects.contains(project.id) ? "已收起" : "已展开")
+                                    .accessibilityHint("原位展开或收起项目会话")
                                 Button {
                                     navigation.creationProject = project.id
                                     navigation.creating = true
@@ -49,12 +56,14 @@ struct ProjectsView: View {
                                     .foregroundStyle(Design.secondary).disabled(!model.canWrite(.create) || project.value["canCreate"].bool == false)
                                     .accessibilityLabel("在 " + project.title + " 新建会话")
                             }
+                            if !collapsedProjects.contains(project.id) {
                             let threads = threadListState.records.filter { $0.value["projectId"].string == project.id }
                             ForEach(threads) { record in homeThread(record).padding(.leading, 32) }
                             if (project.value["total"].int ?? 0) > threads.count {
                                 Button("查看全部") { model.selectedProject = project }
                                     .font(.subheadline).foregroundStyle(Design.secondary)
                                     .frame(minHeight: 44).padding(.leading, 32)
+                            }
                             }
                         }.id(project.id)
                     }
@@ -113,6 +122,7 @@ struct ProjectsView: View {
             .toolbar(navigation.searchingHome ? .hidden : .visible, for: .navigationBar)
             .refreshable { await loadHome(refresh: true, fullSync: true) }
             .task(id: model.scope) { projectSearch.reset(); threadSearch.reset(); await loadHome(refresh: false) }
+            .onChange(of: model.scope) { _, _ in collapsedProjects = [] }
             .onChange(of: showInactiveConversations) { _, _ in Task { await loadHome(refresh: true) } }
             .onChange(of: model.workspaceRevision) { _, _ in Task { await loadHome(refresh: true) } }
             .onChange(of: model.connected) { _, connected in if connected { Task { await loadHome(refresh: true) } } }
@@ -318,7 +328,7 @@ struct RecordListView: View {
                         else if state.loadKind == .initial { BlankState(text: "正在加载…", loading: true) }
                         else if let failure = state.failure { BlankState(text: "加载失败", symbol: "wifi.exclamationmark", detail: failure, retry: { Task { await load(reset: true) } }) }
                         else if state.loadKind != .refresh {
-                            BlankState(text: state.search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "没有搜索结果", symbol: state.search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass")
+                            BlankState(text: state.search.isEmpty ? (path == "/api/activity" ? "暂无动态" : "暂无\(isProjectList ? "项目" : "会话")") : "未找到“\(state.search)”的结果", symbol: state.search.isEmpty ? (isProjectList ? "folder" : "bubble.left.and.bubble.right") : "magnifyingglass", detail: state.search.isEmpty ? nil : "请检查拼写或尝试其他关键词。")
                         }
                     } else if let failure = state.failure {
                         HStack { Text(failure).font(.caption).foregroundStyle(Design.secondary); Spacer(); Button("重试") { Task { await load(reset: true, kind: .background) } } }.padding(.vertical, 8)
@@ -508,5 +518,24 @@ struct ActivityView: View {
             }
             RecordListView(path: "/api/activity", key: "threads", retainReadActivity: true, state: listState) { model.open($0) }
         }.sheet(isPresented: $links) { NavigationStack { ScrollView { WorkspaceBindingRequests().padding(20) }.navigationTitle("连接申请") } }
+    }
+}
+
+private struct OpenProjectFolder: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: 2, y: 19))
+            path.addLine(to: CGPoint(x: 2, y: 6))
+            path.addQuadCurve(to: CGPoint(x: 4, y: 4), control: CGPoint(x: 2, y: 4))
+            path.addLine(to: CGPoint(x: 9, y: 4))
+            path.addLine(to: CGPoint(x: 12, y: 7))
+            path.addLine(to: CGPoint(x: 20, y: 7))
+            path.addQuadCurve(to: CGPoint(x: 22, y: 9), control: CGPoint(x: 22, y: 7))
+            path.move(to: CGPoint(x: 2, y: 19))
+            path.addLine(to: CGPoint(x: 6, y: 10))
+            path.addLine(to: CGPoint(x: 23, y: 10))
+            path.addLine(to: CGPoint(x: 19, y: 19))
+            path.closeSubpath()
+        }.applying(CGAffineTransform(scaleX: rect.width / 24, y: rect.height / 22))
     }
 }

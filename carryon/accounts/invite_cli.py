@@ -33,6 +33,14 @@ def command(args):
     if not url:
         from carryon.accounts.members_cli import binding
         url, _ = binding(args.state_dir, args.binding_id)
+    if args.authorize:
+        from carryon.cloud.console import public_url
+        url = public_url(url)
+        if not url.startswith('https://'):
+            raise ValueError('授权链接必须使用 HTTPS 地址')
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        print(json.dumps({'issuerHash': digest, 'authorizationUrl': url + '/#carryon-inviter=' + digest}))
+        return 0
     result = request(url, 'invite', {'issuerToken': token})
     print(json.dumps(result, ensure_ascii=False))
     return 0

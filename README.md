@@ -51,6 +51,14 @@ carryon services create --backend codex-cli --name "Codex CLI" --codex-home "$HO
 首页可以切换。首次扫码绑定一次；添加连接时在电脑端确认沿用已有账号和工作区权限。
 只有展示分组相同不会自动授权，消息和审批仍路由到所选连接。
 
+注册普通账号需要一次性邀请码。在桌面「注册邀请码」中点击「授权本机」，
+将链接交给云端管理员；管理员打开链接、核对本机指纹并输入管理员账号密码确认后，
+授权立即生效，返回电脑点击「生成邀请码」即可。该操作会替换原有的邀请码生成电脑。
+CLI 可运行 `carryon invate --authorize` 生成同一授权链接；尚未绑定工作区时使用
+`carryon invate --authorize --url https://你的云端地址`。确认后运行 `carryon invate`
+（未绑定时同样带 `--url`）生成邀请码。云端和桌面/CLI 均需升级到支持此流程的版本；
+首次升级完成后，日常授权不需要登录服务器或重启服务。
+
 CLI 连接默认连接该 home 下的 `app-server-control/app-server-control.sock`。
 已有显式 Unix WebSocket 服务时，可在创建工作区时指定 `--cli-socket /绝对路径/server.sock`，
 并让 Codex CLI 连接同一端点。服务运行期间不要切换其 CODEX_HOME。

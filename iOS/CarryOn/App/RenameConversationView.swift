@@ -3,9 +3,12 @@ import CarryOnCore
 
 struct RenameConversationView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @State private var finished = false
+    @State private var prompting = false
+    @State private var recovering = false
     let thread: Record
     let scope: String
+    var onClose: () -> Void = {}
     @State private var name = ""
     @State private var requestID: String?
     @State private var loaded = false
@@ -16,26 +19,43 @@ struct RenameConversationView: View {
     private var normalized: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var allowed: Bool { current && model.canInteract(.edit) && supportsOperation("rename", in: model.history) }
     var body: some View {
-        NavigationStack {
-            Form {
-                TextField("会话名称", text: $name).disabled(busy || requestID != nil || !loaded)
-                    .accessibilityLabel("会话名称")
-                if let failure { Text(failure).foregroundStyle(.red) }
-                if !loaded, failure != nil { Button("重新读取待处理请求") { Task { await restore() } }.disabled(busy || !current) }
-                if requestID != nil { Button("核对重命名结果") { Task { await check() } }.disabled(busy || !current) }
-            }.navigationTitle("重命名").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(busy) }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("保存") { Task { await save() } }
-                            .disabled(!loaded || busy || requestID != nil || !allowed || normalized.isEmpty || normalized.unicodeScalars.count > 200)
-                    }
-                }
-        }.interactiveDismissDisabled(busy).task { await restore() }
+        Color.clear.frame(width: 0, height: 0)
+            .alert("重命名任务", isPresented: $prompting) {
+                TextField("会话名称", text: $name)
+                Button("取消", role: .cancel) { onClose() }
+                Button("保存") { Task { await save() } }
+                    .disabled(!loaded || busy || requestID != nil || !allowed || normalized.isEmpty || normalized.unicodeScalars.count > 200)
+            }
+            .sheet(isPresented: $recovering, onDismiss: onClose) {
+                NavigationStack {
+                    Form {
+                        TextField("会话名称", text: $name).disabled(busy || requestID != nil || !loaded)
+                            .accessibilityLabel("会话名称")
+                        if let failure { Text(failure).foregroundStyle(.red) }
+                        if !loaded, failure != nil { Button("重新读取待处理请求") { Task { await restore() } }.disabled(busy || !current) }
+                        if requestID != nil { Button("核对重命名结果") { Task { await check() } }.disabled(busy || !current) }
+                    }.navigationTitle("重命名").navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) { Button("关闭") { recovering = false }.disabled(busy) }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("保存") { Task { await save() } }
+                                    .disabled(!loaded || busy || requestID != nil || !allowed || normalized.isEmpty || normalized.unicodeScalars.count > 200)
+                            }
+                        }
+                }.interactiveDismissDisabled(busy)
+            }
+            .task { await restore() }
+            .onChange(of: current) { _, value in if !value { prompting = false; recovering = false; onClose() } }
     }
     private func restore() async {
         guard current, !busy else { return }
-        busy = true; failure = nil; defer { busy = false }
+        busy = true; failure = nil; defer {
+            busy = false
+            if current && !finished {
+                if failure != nil || requestID != nil { recovering = true }
+                else if !recovering { prompting = true }
+            }
+        }
             name = model.history["thread"]["title"].string ?? thread.title
             do {
                 let ids = try model.pending.requestIDs(scope: scope, target: thread.id)
@@ -55,8 +75,9 @@ struct RenameConversationView: View {
     }
     private func finish() {
         guard current else { return }
+        finished = true
         model.selectedThread = try? Record(thread.value.setting("title", .string(normalized)))
-        model.workspaceRevision += 1; model.retryHistory(); dismiss()
+        model.workspaceRevision += 1; model.retryHistory(); prompting = false; recovering = false; onClose()
     }
     private func reconcile(_ job: JSONValue, id: String) throws {
         guard current else { return }
@@ -69,7 +90,8 @@ struct RenameConversationView: View {
     }
     private func save() async {
         guard loaded, !busy, requestID == nil, allowed, !normalized.isEmpty, normalized.unicodeScalars.count <= 200 else { return }
-        busy = true; failure = nil; defer { busy = false }
+        prompting = false
+        busy = true; failure = nil; defer { busy = false; if current && !finished && (failure != nil || requestID != nil) { recovering = true } }
         let body = JSONValue.object(["name": .string(normalized)])
         do {
             requestID = try model.pending.requestID(scope: scope, target: thread.id, path: path, body: body)

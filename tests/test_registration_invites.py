@@ -84,7 +84,10 @@ class InvitePersistenceTests(unittest.TestCase):
             for digest in ('a' * 64, 'b' * 64):
                 with patch('sys.argv', ['carryon-console', 'authorize-inviter', '--config', str(path), '--issuer-hash', digest]), patch('sys.stdout', new_callable=io.StringIO):
                     main()
-                self.assertEqual(json.loads(path.read_text()), {**original, 'registrationInviteIssuerHash':digest})
+                saved = json.loads(path.read_text())
+                generation = saved.pop('registrationInviteIssuerGeneration')
+                self.assertEqual(len(generation), 32)
+                self.assertEqual(saved, {**original, 'registrationInviteIssuerHash':digest})
 
     def test_directory_sync_failure_after_commit_cannot_reuse_code(self):
         from carryon.paths import save_json

@@ -3,10 +3,10 @@ window.WorkspaceBinding=(()=>{
   if(!cloudMode)return {open(){},offerPending(){}};
   const dialog=node('dialog','login-qr-dialog'),title=node('h2','','绑定工作区'),content=node('div'),actions=node('div','login-qr-actions');
   dialog.append(title,content,actions);document.body.append(dialog);
-  let generation=0,stream=null,pending=location.hash.startsWith('#carryon-bind=')?location.href:null;
+  let generation=0,stream=null,confirmation=null,pending=location.hash.startsWith('#carryon-bind=')?location.href:null;
   if(pending)history.replaceState(null,'',location.pathname+location.search);
   const button=(label,run)=>{const b=node('button','quiet',label);b.type='button';b.onclick=run;return b;};
-  function stop(){generation++;stream?.getTracks().forEach(t=>t.stop());stream=null;}
+  function stop(){generation++;confirmation?.close();confirmation=null;stream?.getTracks().forEach(t=>t.stop());stream=null;}
   dialog.addEventListener('close',stop);
   const close=button('关闭',()=>dialog.close());
   function open(){stop();content.replaceChildren();actions.replaceChildren(close);if(!dialog.open)dialog.showModal();const input=node('input');input.type='url';input.placeholder='粘贴工作区二维码链接';input.setAttribute('aria-label','工作区二维码链接');content.append(input);actions.prepend(button('读取链接',()=>inspect(input.value)),button('扫码绑定工作区',scan));}
@@ -22,12 +22,17 @@ window.WorkspaceBinding=(()=>{
         if(!current())return;
         accept.disabled=true;
         try{let result=await client.consoleRequest('binding/accept',code);if(!current())return;
-          while(result.state==='accepted'){
-            accept.textContent='等待电脑确认';await new Promise(resolve=>setTimeout(resolve,1500));if(!current())return;
-            result=await client.consoleRequest('binding/inspect',code);if(!current())return;
-          }
-          if(result.state!=='bound')throw Error('绑定尚未完成，请重新读取状态');
-          dialog.close();notice('工作区已绑定');await refreshConsoleDevices();
+          const complete=async state=>{
+            if(!current())return;
+            if(state.state==='accepted'){accept.textContent='等待电脑确认';return;}
+            if(state.state!=='bound'){confirmation?.close();content.append(node('p','error','绑定尚未完成，请重新读取状态'));return;}
+            dialog.close();notice('工作区已绑定');await refreshConsoleDevices();
+          };
+          if(result.state==='accepted'){
+            accept.textContent='等待电脑确认';
+            confirmation?.close();confirmation=new ConfirmationStream({base:client.base,kind:'binding',invitation:code,onState:complete,
+              onError:error=>{if(current()){content.append(node('p','error',error.message));accept.disabled=false;accept.textContent='确认绑定';}}});
+          }else await complete(result);
         }catch(e){if(current()){content.append(node('p','error',e.message));accept.disabled=false;accept.textContent='确认绑定';}}
       });actions.prepend(accept);
     }catch(e){if(current()){content.replaceChildren(node('p','error',e.message));actions.prepend(button('重新读取',open));}}
@@ -40,7 +45,7 @@ window.WorkspaceBinding=(()=>{
       if(gen!==generation){camera.getTracks().forEach(t=>t.stop());return;}stream=camera;
       const video=node('video');video.playsInline=true;video.muted=true;video.srcObject=stream;content.append(video);await video.play();
       const detector=new BarcodeDetector({formats:['qr_code']});
-      while(gen===generation){const codes=await detector.detect(video);if(gen!==generation)return;if(codes.length){await inspect(codes[0].rawValue);return;}await new Promise(resolve=>setTimeout(resolve,250));}
+      while(gen===generation){const codes=await detector.detect(video);if(gen!==generation)return;if(codes.length){await inspect(codes[0].rawValue);return;}await new Promise(resolve=>video.requestVideoFrameCallback?video.requestVideoFrameCallback(resolve):requestAnimationFrame(resolve));}
     }catch(e){if(gen===generation){stop();content.replaceChildren(node('p','error',e.name==='NotAllowedError'?'无法使用相机，请用系统相机打开二维码链接，或粘贴链接。':e.message));actions.replaceChildren(button('粘贴链接',open),close);}}
   }
   $('account-menu').querySelector('.account-panel').prepend(button('连接工作区',open));

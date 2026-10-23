@@ -234,19 +234,36 @@ class Subscription:
         side_limit = message.get('sideHistoryLimit', limit)
         if side_limit is not None and (type(side_limit) is not int or not 1 <= side_limit <= 100000):
             raise ValueError('Invalid side history limit')
+        voice_id = message.get('voiceId')
+        voice_after = message.get('voiceAfter', 0)
+        if voice_id is not None:
+            valid_id(voice_id)
+            if target is None:raise ValueError('Voice requires a thread')
+        if type(voice_after) is not int or not 0 <= voice_after <= 9007199254740991:
+            raise ValueError('Invalid voice cursor')
         protocol = message.get('historyProtocol') == 1
         with self.bridge.lock:
             if self.closed:
                 return
             self.selection = {'subscription': subscription, 'threadId': target, 'threadIds': ids,
                               'includeSideChats': include_sides, 'sideThreadId': side_id,
-                              'historyLimit': limit, 'sideHistoryLimit': side_limit, 'historyProtocol': int(protocol)}
+                              'historyLimit': limit, 'sideHistoryLimit': side_limit, 'historyProtocol': int(protocol),
+                              'voiceId':voice_id,'voiceAfter':voice_after}
             self.side_ids.clear()
             self.persisted_history = False
             self.version += 1
             self.owner.sync_watches()
             self.owner.load_event.set()
         self.bridge.notify()
+
+    def ack_voice(self, message):
+        after = message.get('after')
+        if type(after) is not int or not 0 <= after <= 9007199254740991:
+            raise ValueError('Invalid voice cursor')
+        with self.bridge.lock:
+            if (not self.closed and message.get('subscription') == self.selection['subscription']
+                    and message.get('voiceId') == self.selection.get('voiceId')):
+                self.selection['voiceAfter'] = max(self.selection.get('voiceAfter', 0), after)
 
     def wait(self, revision):
         with self.bridge.events:
@@ -303,6 +320,15 @@ class Subscription:
                             self.persisted_history = history.get('source') in ('local-rollout', 'native-persisted')
                 except (ValueError, OSError, IPCError) as exc:
                     packet['error'] = str(exc)
+            if target and selection.get('voiceId'):
+                try:
+                    from carryon.codex_protocol.realtime_voice import read
+                    voice = read(self.bridge,target,selection['voiceAfter'])
+                    if voice['voice'].get('id') != selection['voiceId']:
+                        raise ValueError('语音会话已改变，请重新查看状态')
+                    packet['voice'] = voice
+                except (ValueError,OSError,IPCError) as exc:
+                    packet['voiceError'] = str(exc)
             if target and selection['includeSideChats'] and selection['sideThreadId']:
                 packet['sideThreadId'] = selection['sideThreadId']
                 try:

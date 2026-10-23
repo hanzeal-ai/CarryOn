@@ -49,7 +49,11 @@ checks = '''            let sideBase = model.sideHistory
             results["sideSelectionSheetActuallyMounted"] = textViews(window).contains { $0.accessibilityIdentifier == "fixture-selection-text-view" && !$0.isEditable && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == "最新菜单正文" && $0.window != nil }
             results["sideSelectDoesNotCopy"] = UIPasteboard.general.string == "**最新**菜单正文"
             model.devices = [try! Record(originalDevices[0].value.setting("permissions", .array([])))]
-            try? await Task.sleep(for: .milliseconds(650))
+            // Native sheet dismissal is asynchronous; keep the mounted-view assertion.
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(50))
+                if !textViews(window).contains(where: { $0.accessibilityIdentifier == "fixture-selection-text-view" && $0.window != nil }) { break }
+            }
             results["sideOpenSelectionDismissesAfterViewRevocation"] = !textViews(window).contains { $0.accessibilityIdentifier == "fixture-selection-text-view" && $0.window != nil }
             UIPasteboard.general.string = "未授权菜单不应修改"
             sideMenuReceipt = [:]

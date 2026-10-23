@@ -1,0 +1,6 @@
+.inviter-authorization-dialog { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; max-height: 90dvh; overflow: auto; }
+.inviter-authorization-dialog .inviter-fingerprint { font-family: monospace; overflow-wrap: anywhere; user-select: text; }
+.inviter-authorization-dialog label { display: block; margin: 16px 0 6px; }
+.inviter-authorization-dialog input { display: block; width: 100%; box-sizing: border-box; }
+.inviter-authorization-dialog .login-qr-actions { display: flex; gap: 12px; margin-top: 24px; }
+.inviter-authorization-dialog button { min-height: 44px; padding: 10px 16px; border-radius: 12px; }

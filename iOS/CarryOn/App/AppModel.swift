@@ -210,6 +210,10 @@ import CarryOnCore
         get { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
         set { draftStore.files[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
     }
+    var draftAnnotations: [MessageAnnotation] {
+        get { draftStore.annotations[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
+        set { draftStore.annotations[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
+    }
     var draftComments: [ReviewComment] {
         get { draftStore.comments[scope + "\n" + (selectedThread?.id ?? "new")] ?? [] }
         set { draftStore.comments[scope + "\n" + (selectedThread?.id ?? "new")] = newValue }
